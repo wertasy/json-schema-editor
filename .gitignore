@@ -26,3 +26,6 @@ bin/
 
 # OS
 .DS_Store
+
+# Local secret-bearing config (sing-box credentials) — never commit
+config.json
