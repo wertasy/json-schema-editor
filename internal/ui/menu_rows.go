@@ -732,45 +732,56 @@ func rebuildStack(root *smodel.FormNode, doc *jsondoc.Node, path []any) []*menuS
 	return stack
 }
 
-// searchIndex walks the schema tree (object children, array item subtrees
-// and oneOf variant subtrees included) collecting searchable rows whose
-// label is "Title chain / Title  signature".
-func searchIndex(root *smodel.FormNode) []row {
+// searchIndex walks the schema subtree below st — the menu the breadcrumb
+// points at — collecting object children, the actual array items and oneOf
+// variant subtrees. Labels are "<docPath>  <overview>" using the same value
+// column the menus show, so hits read as jump targets; variant rows carry
+// their structural signature instead of fallback titles like "variant 2",
+// which carry no meaning for the user.
+func searchIndex(lm *listModel, st *menuState) []row {
 	var out []row
-	var walk func(fn *smodel.FormNode, path []any, chain string)
-	walk = func(fn *smodel.FormNode, path []any, chain string) {
+	var walk func(fn *smodel.FormNode, path []any)
+	walk = func(fn *smodel.FormNode, path []any) {
 		switch fn.Kind {
 		case smodel.KObject:
 			for _, c := range fn.Children {
 				cpath := pathFor(path, c.Key)
 				out = append(out, row{kind: rowField, fn: c, path: cpath, idx: -1,
-					label: chain + c.Title + "  " + VariantSignature(c)})
-				walk(c, cpath, chain+c.Title+" / ")
+					label: docPath(cpath) + "  " + summary(lm, c, cpath)})
+				walk(c, cpath)
 			}
 		case smodel.KOneOf:
 			for _, v := range fn.Variants {
 				out = append(out, row{kind: rowVariant, fn: v, variant: v,
 					path: clonePath(path), idx: -1,
-					label: chain + v.Title + "  " + VariantSignature(v)})
-				walk(v, clonePath(path), chain+v.Title+" / ")
+					label: docPath(path) + "  " + VariantSignature(v)})
+				walk(v, clonePath(path))
 			}
 		case smodel.KArray:
 			if fn.Items == nil || fn.Items.Kind == smodel.KEnum {
 				return
 			}
-			ipath := pathIdx(path, 0)
-			out = append(out, row{kind: rowDrill, fn: fn.Items, path: ipath, idx: -1,
-				label: chain + fn.Items.Title + "  " + VariantSignature(fn.Items)})
-			walk(fn.Items, ipath, chain+fn.Items.Title+" / ")
+			// index every existing item so values are searchable; an
+			// unset/empty array still indexes the item schema once
+			n := max(docArrayLen(lm.doc, path), 1)
+			for i := range n {
+				ipath := pathIdx(path, i)
+				out = append(out, row{kind: rowDrill, fn: fn.Items, path: ipath, idx: -1,
+					label: docPath(ipath) + "  " + summary(lm, fn.Items, ipath)})
+				walk(fn.Items, ipath)
+			}
 		}
 	}
-	walk(root, nil, "")
+	if st != nil {
+		walk(st.node, st.path)
+	}
 	return out
 }
 
-// filterSearch narrows the index to rows whose Title or Key contains q
-// (case-insensitive); an empty query keeps everything.
-func filterSearch(all []row, q string) []row {
+// filterSearch narrows the index to rows whose Title, Key or value overview
+// contains q (case-insensitive); an empty query keeps everything. Variant
+// rows match schema identity only: their jump target is the picker row.
+func filterSearch(lm *listModel, all []row, q string) []row {
 	q = strings.ToLower(q)
 	if q == "" {
 		return all
@@ -780,7 +791,13 @@ func filterSearch(all []row, q string) []row {
 		if r.fn == nil {
 			continue
 		}
-		if strings.Contains(strings.ToLower(r.fn.Title+" "+r.fn.Key), q) {
+		text := strings.ToLower(r.fn.Title + " " + r.fn.Key)
+		if r.kind != rowVariant {
+			if s := summary(lm, r.fn, r.path); s != "—" {
+				text += " " + strings.ToLower(s)
+			}
+		}
+		if strings.Contains(text, q) {
 			out = append(out, r)
 		}
 	}
@@ -857,4 +874,21 @@ func docArrayLen(doc *jsondoc.Node, path []any) int {
 		return 0
 	}
 	return len(*n.Array)
+}
+
+// docPath renders a document path as the jq-like breadcrumb string
+// ("$/a/b[0]", "$" for the root).
+func docPath(path []any) string {
+	var b strings.Builder
+	b.WriteByte('$')
+	for _, seg := range path {
+		switch s := seg.(type) {
+		case string:
+			b.WriteByte('/')
+			b.WriteString(s)
+		case int:
+			fmt.Fprintf(&b, "[%d]", s)
+		}
+	}
+	return b.String()
 }

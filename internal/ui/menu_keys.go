@@ -829,9 +829,7 @@ func (m *listModel) suggestionHint() string {
 
 func (m *listModel) openSearch() {
 	m.search.active = true
-	if m.search.all == nil {
-		m.search.all = searchIndex(m.model)
-	}
+	m.search.all = searchIndex(m, m.top())
 	ti := textinput.New()
 	ti.Prompt = ""
 	ti.Focus()
@@ -855,6 +853,7 @@ func (m *listModel) keySearch(msg tea.KeyMsg) tea.Cmd {
 		res := m.search.results[m.search.cursor]
 		m.search.active = false
 		m.search.results = nil
+		m.search.all = nil
 		m.issuesBack = nil // a fresh jump replaces any parked issue list
 		m.stack = rebuildStack(m.model, m.doc, res.path)
 		rows := menuRows(m)
@@ -865,11 +864,12 @@ func (m *listModel) keySearch(msg tea.KeyMsg) tea.Cmd {
 	case "esc":
 		m.search.active = false
 		m.search.results = nil
+		m.search.all = nil
 		return nil
 	}
 	var cmd tea.Cmd
 	m.search.ti, cmd = m.search.ti.Update(msg)
-	m.search.results = filterSearch(m.search.all, m.search.ti.Value())
+	m.search.results = filterSearch(m, m.search.all, m.search.ti.Value())
 	m.search.cursor = 0
 	return cmd
 }

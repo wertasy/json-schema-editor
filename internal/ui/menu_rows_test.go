@@ -2,6 +2,7 @@ package ui
 
 import (
 	"encoding/json"
+	"strings"
 	"testing"
 
 	"json-schema-editor/internal/jsondoc"
@@ -377,7 +378,8 @@ func TestRebuildStack(t *testing.T) {
 }
 
 func TestSearchIndexAndFilter(t *testing.T) {
-	all := searchIndex(testModel())
+	lm := lmAt(testDoc())
+	all := searchIndex(lm, lm.top())
 	find := func(want string) string {
 		for _, r := range all {
 			if r.fn != nil && r.fn.Title == want {
@@ -386,23 +388,48 @@ func TestSearchIndexAndFilter(t *testing.T) {
 		}
 		return ""
 	}
-	if l := find("Source"); l != "Mounts / Mount / Source  string" {
+	// labels are breadcrumb-style paths plus the menu value overview
+	if l := find("Source"); l != "$/mounts[0]/src  /data" {
 		t.Errorf("Source label = %q", l)
 	}
-	if l := find("Server"); l != "Server  {port*, host, debug, ratio}" {
+	if l := find("Server"); l != "$/server  port=8080 host=0.0.0.0 +1" {
 		t.Errorf("Server label = %q", l)
 	}
-	if l := find("Token"); l != "Auth / Token  {token*}" {
+	// variants show their structural overview, never fallback titles
+	if l := find("Token"); l != "$/auth  {token*}" {
 		t.Errorf("Token label = %q", l)
 	}
+	for _, r := range all {
+		if strings.Contains(r.label, "variant ") {
+			t.Errorf("label leaks a fallback variant title: %q", r.label)
+		}
+	}
 	// filter by title and key, case-insensitive
-	if got := filterSearch(all, "token"); len(got) != 2 { // variant + field
+	if got := filterSearch(lm, all, "token"); len(got) != 2 { // variant + field
 		t.Errorf("filter token = %d rows, want 2", len(got))
 	}
-	if got := filterSearch(all, "SRC"); len(got) != 1 {
-		t.Errorf("filter SRC by key = %d rows, want 1", len(got))
+	if got := filterSearch(lm, all, "SRC"); len(got) != 2 { // Source + $/mounts[0] overview
+		t.Errorf("filter SRC by key = %d rows, want 2", len(got))
 	}
-	if got := filterSearch(all, ""); len(got) != len(all) {
+	if got := filterSearch(lm, all, ""); len(got) != len(all) {
 		t.Errorf("empty query must keep all rows")
+	}
+	// values match: leaf values and container overviews alike
+	if got := filterSearch(lm, all, "8080"); len(got) != 2 { // $/server overview + $/server/port
+		t.Errorf("filter 8080 by value = %d rows, want 2", len(got))
+	}
+	if got := filterSearch(lm, all, "/mnt"); len(got) != 2 { // $/mounts[0] overview + $/mounts[0]/dst
+		t.Errorf("filter /mnt by value = %d rows, want 2", len(got))
+	}
+
+	// scope: searching from inside Server stays below the breadcrumb
+	inner := lmAt(testDoc(), &menuState{kind: menuObject,
+		node: childOf(t, testModel(), "server"), path: []any{"server"}})
+	innerAll := searchIndex(inner, inner.top())
+	if len(innerAll) != 4 { // port, host, debug, ratio
+		t.Fatalf("scoped index = %d rows, want 4", len(innerAll))
+	}
+	if got := filterSearch(inner, innerAll, "name"); len(got) != 0 {
+		t.Errorf("scoped search must not leave the current menu, got %d", len(got))
 	}
 }

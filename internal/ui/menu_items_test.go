@@ -375,8 +375,8 @@ func TestMenuSearchJump(t *testing.T) {
 		t.Fatalf("search mode should open:\n%s", m.View())
 	}
 	press(m, "p", "o", "r", "t")
-	if len(m.search.results) != 1 {
-		t.Fatalf("results = %d, want 1 (Port)", len(m.search.results))
+	if len(m.search.results) != 2 { // $/server overview + $/server/port value
+		t.Fatalf("results = %d, want 2", len(m.search.results))
 	}
 	press(m, "enter")
 	if m.search.active {
@@ -388,13 +388,30 @@ func TestMenuSearchJump(t *testing.T) {
 	if !contains(m.View(), "> Port") {
 		t.Fatalf("cursor should sit on Port:\n%s", m.View())
 	}
-
 	// esc clears search without moving
 	m2 := newListModel(testModel(), testDoc(), Options{})
 	press(m2, "/", "t", "o", "k", "esc")
 	if m2.search.active || len(m2.stack) != 1 {
 		t.Fatal("esc should clear search and stay put")
 	}
+
+	// search is scoped to the path the breadcrumb shows
+	m3 := newListModel(testModel(), testDoc(), Options{})
+	m3.Update(tea.WindowSizeMsg{Width: 100, Height: 30})
+	press(m3, "down", "down", "enter") // root → Server menu ($/server)
+	press(m3, "/", "n", "a", "m", "e")
+	if len(m3.search.results) != 0 {
+		t.Fatalf("scoped search must exclude rows outside $/server, got %d", len(m3.search.results))
+	}
+	press(m3, "esc")
+	press(m3, "/", "0", ".", "0")
+	if len(m3.search.results) != 1 { // $/server/host = 0.0.0.0
+		t.Fatalf("scoped value search = %d results, want 1", len(m3.search.results))
+	}
+	if v := m3.View(); !contains(v, "$/server/host") {
+		t.Fatalf("scoped results should show breadcrumb-style paths:\n%s", v)
+	}
+	press(m3, "esc")
 }
 
 func TestEditCompletion(t *testing.T) {

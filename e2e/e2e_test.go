@@ -472,3 +472,101 @@ func TestPtyMenuFlow(t *testing.T) {
 		t.Fatalf("output mismatch:\ngot  %#v\nwant %#v\nscreen:\n%s", got, want, all.String())
 	}
 }
+
+// TestPtySearch drives the "/" search end to end: value hits labeled with
+// breadcrumb-style paths, and scoping to the menu the breadcrumb shows.
+// Keys are only sent after the previous frame rendered: input written before
+// the TUI switches the pty to raw mode is line-buffered and garbled.
+func TestPtySearch(t *testing.T) {
+	dir := t.TempDir()
+	cfg := filepath.Join(dir, "server.config.json")
+	src, err := os.ReadFile("../examples/server.config.json")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(cfg, src, 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	cmd := exec.Command(jseBin, "-s", "examples/server.schema.json", cfg)
+	cmd.Dir = ".."
+	cmd.Env = append(os.Environ(), "TERM=xterm-256color")
+	tty, err := pty.StartWithSize(cmd, &pty.Winsize{Rows: 30, Cols: 120})
+	if err != nil {
+		t.Skipf("no pty available: %v", err)
+	}
+	defer tty.Close()
+
+	frames := make(chan string, 64)
+	go func() {
+		buf := make([]byte, 4096)
+		var acc bytes.Buffer
+		for {
+			n, err := tty.Read(buf)
+			if n > 0 {
+				acc.Write(buf[:n])
+				frames <- acc.String()
+			}
+			if err != nil {
+				close(frames)
+				return
+			}
+		}
+	}()
+	// waitFrame blocks until every want appears in output written after
+	// offset and returns the frame plus its length, so negative checks can
+	// stay scoped to what came later.
+	waitFrame := func(what string, offset int, want ...string) (string, int) {
+		t.Helper()
+		deadline := time.After(15 * time.Second)
+		for {
+			select {
+			case frame, ok := <-frames:
+				if !ok {
+					t.Fatalf("pty closed while waiting for %s", what)
+				}
+				ready := true
+				for _, w := range want {
+					if !strings.Contains(frame[offset:], w) {
+						ready = false
+						break
+					}
+				}
+				if ready {
+					return frame, len(frame)
+				}
+			case <-deadline:
+				t.Fatalf("timed out waiting for %s", what)
+			}
+		}
+	}
+	frame, off := waitFrame("root menu", 0, "Save and exit")
+	tty.Write([]byte("/")) // open search (single key: chunked runes won't match)
+	_, off = waitFrame("search view", off, "search:")
+	tty.Write([]byte("8080")) // root search: value hits
+	frame, off = waitFrame("value hits", off,
+		"$/server  port=8080 host=localhost +1", // container overview hit
+		"$/server/port  8080")                   // leaf value hit
+	tty.Write([]byte("\x1b")) // close search
+	time.Sleep(200 * time.Millisecond)
+	tty.Write([]byte("\x1b[B\x1b[B\x1b[B\r")) // ↓↓↓ enter → Server ($/server); row 0 is the issues row
+	_, off = waitFrame("server menu", off, "$/server")
+	tty.Write([]byte("/")) // scoped search: nothing below $/server
+	_, off = waitFrame("scoped search view", off, "search:")
+	tty.Write([]byte("name"))
+	frame, _ = waitFrame("scoped search settles", off, "search: name")
+	if strings.Contains(frame[off:], "$/name") {
+		t.Errorf("scoped search leaked $/name:\n%s", frame[off:])
+	}
+	tty.Write([]byte("\x1b"))
+	time.Sleep(200 * time.Millisecond)
+	tty.Write([]byte("\x03")) // ctrl+c abort
+
+	waitErr := cmd.Wait()
+	if ee, ok := waitErr.(*exec.ExitError); !ok || ee.ExitCode() != 130 {
+		t.Fatalf("exit after ctrl+c = %v, want 130", waitErr)
+	}
+	if now, err := os.ReadFile(cfg); err != nil || !bytes.Equal(now, src) {
+		t.Errorf("abort must not rewrite the config: %v", err)
+	}
+}

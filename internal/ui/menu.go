@@ -100,7 +100,8 @@ type confirmState struct {
 	onYes func(m *listModel) tea.Cmd
 }
 
-// searchState is the "/" full-tree filter mode.
+// searchState is the "/" filter mode, scoped to the subtree below the
+// current breadcrumb path.
 type searchState struct {
 	active  bool
 	ti      textinput.Model
@@ -390,21 +391,10 @@ func (m *listModel) View() string {
 // paths keep their tail, which is the informative end.
 func (m *listModel) breadcrumb() string {
 	st := m.top()
-	if st == nil || len(st.path) == 0 {
+	if st == nil {
 		return "$"
 	}
-	var b strings.Builder
-	b.WriteByte('$')
-	for _, seg := range st.path {
-		switch s := seg.(type) {
-		case string:
-			b.WriteByte('/')
-			b.WriteString(s)
-		case int:
-			fmt.Fprintf(&b, "[%d]", s)
-		}
-	}
-	return clipLeft(b.String(), m.width)
+	return clipLeft(docPath(st.path), m.width)
 }
 
 // clipLeft keeps the tail of s within max runes, marking the cut with "…".
