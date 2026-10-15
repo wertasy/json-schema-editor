@@ -1,0 +1,28 @@
+# Binaries
+json-schema-editor
+*.exe
+*.exe~
+*.dll
+*.so
+*.dylib
+
+# Test
+*.test
+*.out
+coverage.*
+
+# Go workspace
+go.work
+go.work.sum
+
+# Build
+dist/
+bin/
+
+# Editor
+.idea/
+.vscode/
+*.swp
+
+# OS
+.DS_Store
