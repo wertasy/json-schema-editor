@@ -433,3 +433,79 @@ func TestJumpKeys(t *testing.T) {
 		t.Fatalf("last row must render after a jump:\n%s", v)
 	}
 }
+
+func TestJumpKeysOverlays(t *testing.T) {
+	// issues overlay
+	msgs := []string{
+		"at '/server/port': minimum value is 1024",
+		"at '/name': got number, want string",
+	}
+	m := newListModel(testModel(), testDoc(), Options{LoadErrors: msgs})
+	m.Update(tea.WindowSizeMsg{Width: 100, Height: 30})
+	press(m, "enter") // status row → issues
+	if m.issues == nil {
+		t.Fatal("issues overlay should open")
+	}
+	press(m, "G")
+	if m.issues.cursor != 1 {
+		t.Fatalf("issues G: cursor = %d, want 1", m.issues.cursor)
+	}
+	press(m, "end")
+	if m.issues.cursor != 1 {
+		t.Fatalf("issues End: cursor = %d, want 1", m.issues.cursor)
+	}
+	press(m, "g", "g")
+	if m.issues.cursor != 0 {
+		t.Fatalf("issues gg: cursor = %d, want 0", m.issues.cursor)
+	}
+	press(m, "home")
+	if m.issues.cursor != 0 {
+		t.Fatalf("issues Home: cursor = %d, want 0", m.issues.cursor)
+	}
+	press(m, "esc")
+
+	// enum select overlay: Mode row → options
+	press(m, "down", "down") // ⚠ row, Name row, Mode row
+	press(m, "enter")
+	if m.sel == nil {
+		t.Fatal("enum select overlay should open")
+	}
+	press(m, "G")
+	if m.sel.cursor != len(m.sel.opts)-1 {
+		t.Fatalf("sel G: cursor = %d, want %d", m.sel.cursor, len(m.sel.opts)-1)
+	}
+	press(m, "g", "g")
+	if m.sel.cursor != 0 {
+		t.Fatalf("sel gg: cursor = %d, want 0", m.sel.cursor)
+	}
+	press(m, "esc")
+
+	// save-error overlay
+	validate := func(*jsondoc.Node) []string {
+		return []string{"at '/name': got number, want string", "at '/server/port': minimum value is 1024", "at '/mode': bad mode"}
+	}
+	m2 := newListModel(testModel(), testDoc(), Options{
+		Validate: validate, Force: true, Save: func(*jsondoc.Node) error { return nil },
+	})
+	m2.Update(tea.WindowSizeMsg{Width: 100, Height: 30})
+	press(m2, "ctrl+s")
+	if m2.errs == nil {
+		t.Fatal("error overlay should open")
+	}
+	press(m2, "G")
+	if m2.errs.cursor != 2 {
+		t.Fatalf("errs G: cursor = %d, want 2", m2.errs.cursor)
+	}
+	press(m2, "g", "g")
+	if m2.errs.cursor != 0 {
+		t.Fatalf("errs gg: cursor = %d, want 0", m2.errs.cursor)
+	}
+	press(m2, "home")
+	if m2.errs.cursor != 0 {
+		t.Fatalf("errs Home: cursor = %d, want 0", m2.errs.cursor)
+	}
+	press(m2, "end")
+	if m2.errs.cursor != 2 {
+		t.Fatalf("errs End: cursor = %d, want 2", m2.errs.cursor)
+	}
+}

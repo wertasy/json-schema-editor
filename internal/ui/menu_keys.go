@@ -27,22 +27,10 @@ func (m *listModel) keyList(msg tea.KeyMsg) tea.Cmd {
 		return nil
 	}
 	r := rows[st.cursor]
-	armed := !m.gArm.IsZero() && time.Since(m.gArm) < ggTimeout
-	m.gArm = time.Time{}
-	switch msg.String() {
-	case "g":
-		// gg (two g's within a beat) jumps to the first row; a lone g
-		// arms the combo and is otherwise inert
-		if armed {
-			st.cursor = 0
-			return nil
-		}
-		m.gArm = time.Now()
+	if m.jumpKeys(msg, &st.cursor, len(rows)) {
 		return nil
-	case "G", "end":
-		st.cursor = max(len(rows)-1, 0)
-	case "home":
-		st.cursor = 0
+	}
+	switch msg.String() {
 	case "up", "k":
 		st.cursor = wrapCursor(st.cursor, -1, len(rows))
 	case "down", "j":
@@ -172,6 +160,32 @@ func wrapCursor(cur, delta, n int) int {
 		c += n
 	}
 	return c
+}
+
+// jumpKeys applies the gg/G/Home/End list jumps shared by the menu list and
+// the pure-list overlays (issues, save errors, enum select): G/End go to
+// the last row, gg/Home to the first. A lone g arms the combo for ggTimeout
+// and is otherwise inert; any other key disarms it. handled reports whether
+// the key was consumed.
+func (m *listModel) jumpKeys(msg tea.KeyMsg, cursor *int, n int) bool {
+	armed := !m.gArm.IsZero() && time.Since(m.gArm) < ggTimeout
+	m.gArm = time.Time{}
+	switch msg.String() {
+	case "g":
+		if armed {
+			*cursor = 0
+			return true
+		}
+		m.gArm = time.Now()
+		return true
+	case "G", "end":
+		*cursor = max(n-1, 0)
+		return true
+	case "home":
+		*cursor = 0
+		return true
+	}
+	return false
 }
 
 // --- macro recording / playback -------------------------------------------
@@ -558,6 +572,9 @@ func (m *listModel) keyConfirm(msg tea.KeyMsg) tea.Cmd {
 }
 
 func (m *listModel) keyErrs(msg tea.KeyMsg) tea.Cmd {
+	if m.jumpKeys(msg, &m.errs.cursor, len(m.errs.lines)) {
+		return nil
+	}
 	switch msg.String() {
 	case "up", "k":
 		m.errs.cursor = wrapCursor(m.errs.cursor, -1, len(m.errs.lines))
@@ -585,6 +602,9 @@ func (m *listModel) keyErrs(msg tea.KeyMsg) tea.Cmd {
 // keyIssues drives the load-time issues overlay: enter jumps to the field the
 // highlighted issue refers to.
 func (m *listModel) keyIssues(msg tea.KeyMsg) tea.Cmd {
+	if m.jumpKeys(msg, &m.issues.cursor, len(m.issues.items)) {
+		return nil
+	}
 	switch msg.String() {
 	case "up", "k":
 		m.issues.cursor = wrapCursor(m.issues.cursor, -1, len(m.issues.items))
@@ -654,6 +674,9 @@ func (m *listModel) applyText() tea.Cmd {
 }
 
 func (m *listModel) keySel(msg tea.KeyMsg) tea.Cmd {
+	if m.jumpKeys(msg, &m.sel.cursor, len(m.sel.opts)) {
+		return nil
+	}
 	switch msg.String() {
 	case "up", "k":
 		m.sel.cursor = wrapCursor(m.sel.cursor, -1, len(m.sel.opts))
