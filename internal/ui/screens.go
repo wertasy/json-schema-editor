@@ -150,6 +150,9 @@ func (a *app) arrayManager(node *smodel.FormNode, path []any, root bool) result 
 			for i, it := range *cur.Array {
 				opts = append(opts, navOpt{key: "i:" + itoa(i), label: fmt.Sprintf("%d: %s", i, it.Summary())})
 			}
+			opts = append(opts,
+				navOpt{key: "move-up", label: "Move item up…"},
+				navOpt{key: "move-down", label: "Move item down…"})
 			opts = append(opts, navOpt{key: "remove", label: "Remove item…"})
 		}
 		if root {
@@ -171,6 +174,10 @@ func (a *app) arrayManager(node *smodel.FormNode, path []any, root bool) result 
 			a.editItem(node.Items, path, -1)
 		case choice == "remove":
 			a.removeItem(path, n)
+		case choice == "move-up":
+			a.moveItem(path, n, -1)
+		case choice == "move-down":
+			a.moveItem(path, n, +1)
 		case choice == "save":
 			if a.saveFlow() == resSaved {
 				return resSaved
@@ -206,6 +213,28 @@ func (a *app) removeItem(path []any, n int) {
 		return
 	}
 	a.doc.Remove(pathIdx(path, idx))
+}
+
+// moveItem relocates one array element up (-1) or down (+1): pick the
+// item, then shift it. The first item moved up (or last moved down) is a
+// silent no-op: the manager simply re-renders unchanged.
+func (a *app) moveItem(path []any, n int, delta int) {
+	opts := make([]navOpt, 0, n)
+	cur, _ := a.doc.Get(path)
+	for i, it := range *cur.Array {
+		opts = append(opts, navOpt{key: itoa(i), label: fmt.Sprintf("%d: %s", i, it.Summary())})
+	}
+	dir := "up"
+	if delta > 0 {
+		dir = "down"
+	}
+	choice, ok := a.choose("Move item "+dir, "pick an item to move", opts, opts[0].key)
+	if !ok {
+		return
+	}
+	idx := 0
+	fmt.Sscanf(choice, "%d", &idx)
+	a.doc.Move(path, idx, idx+delta)
 }
 
 // editItem edits array element idx (idx < 0 appends a new one).

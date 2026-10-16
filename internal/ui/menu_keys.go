@@ -54,6 +54,10 @@ func (m *listModel) keyList(msg tea.KeyMsg) tea.Cmd {
 		return m.space(r)
 	case "d":
 		m.deletePair(r)
+	case "J":
+		m.moveItem(r, 1)
+	case "K":
+		m.moveItem(r, -1)
 	case "ctrl+t":
 		if st.oneOf != nil { // classic variant editor: offer the type switch
 			oneOf, path := st.oneOf, clonePath(st.path)
@@ -502,6 +506,26 @@ func (m *listModel) deleteItem(r row) {
 		return
 	}
 	m.doc.Remove(r.path)
+}
+
+// moveItem shifts the array item under the cursor by delta (-1 up, +1
+// down), keeping the cursor on the moved row. Boundary moves (first item
+// up, last item down, single-item arrays) no-op with a notice.
+func (m *listModel) moveItem(r row, delta int) {
+	st := m.top()
+	if st.kind != menuItems || r.idx < 0 || (r.kind != rowField && r.kind != rowDrill) {
+		return
+	}
+	from, to := r.idx, r.idx+delta
+	if !m.doc.Move(st.path, from, to) {
+		if delta < 0 {
+			m.notice = "already first item"
+		} else {
+			m.notice = "already last item"
+		}
+		return
+	}
+	st.cursor += delta
 }
 
 // addKey opens the key-name input for a schema-less member under the

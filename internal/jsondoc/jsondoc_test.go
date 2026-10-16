@@ -178,6 +178,54 @@ func TestInsertAndInsertMember(t *testing.T) {
 	}
 }
 
+func TestMove(t *testing.T) {
+	n, err := Parse(strings.NewReader(`{"list": ["a", "b", "c", "d"], "obj": {}}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	list := func() string {
+		arr, _ := n.Get([]any{"list"})
+		return summaryArr(arr)
+	}
+	if !n.Move([]any{"list"}, 1, 2) || list() != "a c b d" {
+		t.Fatalf("move 1→2 = %q, want a c b d", list())
+	}
+	if !n.Move([]any{"list"}, 3, 0) || list() != "d a c b" {
+		t.Fatalf("move 3→0 = %q, want d a c b", list())
+	}
+	if !n.Move([]any{"list"}, 0, 3) || list() != "a c b d" {
+		t.Fatalf("move 0→3 = %q, want a c b d", list())
+	}
+	if !n.Move([]any{"list"}, 2, 2) || list() != "a c b d" {
+		t.Fatalf("from == to must be a no-op success, got %q", list())
+	}
+	for _, tc := range [][2]int{{-1, 0}, {4, 0}, {0, -1}, {0, 4}} {
+		if n.Move([]any{"list"}, tc[0], tc[1]) {
+			t.Fatalf("move %d→%d must fail", tc[0], tc[1])
+		}
+		if list() != "a c b d" {
+			t.Fatalf("failed move %d→%d changed the list: %q", tc[0], tc[1], list())
+		}
+	}
+	// empty object and missing path: false, no panic
+	if n.Move([]any{"obj"}, 0, 0) || n.Move([]any{"nope"}, 0, 0) {
+		t.Fatal("move on non-array / missing path must fail")
+	}
+
+	// nested array paths
+	n2, err := Parse(strings.NewReader(`{"outer": {"list": ["x", "y", "z"]}}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !n2.Move([]any{"outer", "list"}, 0, 2) {
+		t.Fatal("nested move failed")
+	}
+	inner, _ := n2.Get([]any{"outer", "list"})
+	if got := summaryArr(inner); got != "y z x" {
+		t.Fatalf("nested move = %q, want y z x", got)
+	}
+}
+
 func memberKeyList(n *Node) string {
 	keys := make([]string, 0, len(*n.Object))
 	for i := range *n.Object {

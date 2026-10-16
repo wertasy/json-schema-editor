@@ -414,6 +414,33 @@ func (n *Node) Insert(path []any, idx int, v *Node) {
 	*arr.Array = a
 }
 
+// Move relocates the array element at index from so that it ends up at
+// index to, keeping the other elements' relative order; from == to is a
+// no-op success. It reports false when the path is missing, does not
+// resolve to an array, or either index is out of range. In-place shift,
+// no allocation.
+func (n *Node) Move(path []any, from, to int) bool {
+	parent, ok := n.Get(path)
+	if !ok || parent.Array == nil {
+		return false
+	}
+	a := *parent.Array
+	if from < 0 || from >= len(a) || to < 0 || to >= len(a) {
+		return false
+	}
+	if from == to {
+		return true
+	}
+	el := a[from]
+	if to > from {
+		copy(a[from:to], a[from+1:to+1])
+	} else {
+		copy(a[to+1:from+1], a[to:from])
+	}
+	a[to] = el
+	return true
+}
+
 // InsertMember adds key=v to the object at path at member index idx,
 // shifting the members from idx on by one; idx clamps to [0, len]. An
 // existing key keeps its position and only gets its value replaced.

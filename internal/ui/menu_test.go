@@ -77,14 +77,14 @@ func numAt(t *testing.T, doc *jsondoc.Node, path ...any) string {
 
 func TestMenuRootView(t *testing.T) {
 	m := newListModel(testModel(), testDoc(), Options{})
-	m.Update(tea.WindowSizeMsg{Width: 150, Height: 30}) // full help bar fits
+	m.Update(tea.WindowSizeMsg{Width: 170, Height: 30}) // full help bar fits
 	v := m.View()
 	for _, want := range []string{
 		"Server Configuration", "$", "Name", "webapp", "Mode", "http",
 		"Server", "port=8080 host=0.0.0.0 +1", "—",
 		"Name*", "Server*", // required star shows regardless of a set value
 		"Mounts", "1 item", "Auth", "Save and exit", "Edit raw JSON",
-		"↑/↓ · gg/G · enter edit/open · space · del delete · a/A add · u undo · ctrl+r redo · esc · ctrl+s save · / search · r replace · ? help · ctrl+c quit",
+		"↑/↓ · gg/G · enter edit/open · space · del delete · J/K move item · a/A add · u undo · ctrl+r redo · esc · ctrl+s save · / search · r replace · ? help · ctrl+c quit",
 	} {
 		if !contains(v, want) {
 			t.Errorf("root view missing %q:\n%s", want, v)

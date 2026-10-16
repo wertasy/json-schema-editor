@@ -20,7 +20,7 @@ import (
 	"json-schema-editor/internal/smodel"
 )
 
-const menuHelp = "↑/↓ · gg/G · enter edit/open · space · del delete · a/A add · u undo · ctrl+r redo · esc · ctrl+s save · / search · r replace · ? help · ctrl+c quit"
+const menuHelp = "↑/↓ · gg/G · enter edit/open · space · del delete · J/K move item · a/A add · u undo · ctrl+r redo · esc · ctrl+s save · / search · r replace · ? help · ctrl+c quit"
 
 // helpLines is the full key reference shown by the "?" overlay.
 var helpLines = []string{
@@ -32,6 +32,7 @@ var helpLines = []string{
 	"space        toggle boolean / enum member",
 	"d / delete   delete the selected pair (required keys refused)",
 	"a / A        add a schema-less key before / after the cursor",
+	"J / K        move the item under the cursor down / up",
 	"ctrl+t       switch the variant type of a oneOf value",
 	"u / ctrl+r   undo / redo",
 	"ctrl+s       save (stay in the session)",

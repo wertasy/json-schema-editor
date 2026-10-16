@@ -119,10 +119,10 @@ const createScript = "demo\n" + // Name
 	"demo\n\n2\n" + // root rerun: Name, Mode=http, Navigate → Logging
 	"2\n0\n" + // Levels: toggle info, confirm
 	"2\n" + // Logging navigate → tags items
-	"1\nprod\n4\n" + // mgr: add item, value, done
+	"1\nprod\n6\n" + // mgr: add item, value, done
 	"0\n1\n" + // Logging rerun: confirm levels, Done
 	"demo\n\n3\n" + // root: → Mounts
-	"1\ndemos/ROOT\n/var/www\n\n4\n" + // mgr: add mount {src,dst}, done
+	"1\ndemos/ROOT\n/var/www\n\n6\n" + // mgr: add mount {src,dst}, done
 	"demo\n\n4\n" + // root: → Auth
 	"2\nsecret123\n\n" + // variant Token, token, done
 	"demo\n\n5\n" // root: save
@@ -194,6 +194,28 @@ func TestPrefillAccessible(t *testing.T) {
 	if keys := topLevelKeys(t, cfg); strings.Join(keys, ",") !=
 		"$schema,name,mode,server,logging,mounts,extra_unknown_key" {
 		t.Fatalf("key order not preserved: %v", keys)
+	}
+}
+
+func TestMoveAccessible(t *testing.T) {
+	dir := t.TempDir()
+	cfg := filepath.Join(dir, "move.json")
+	writeFile(t, cfg, `{"$schema": "server.schema.json", "name": "demo", "server": {"port": 8080}, "logging": {"tags": ["alpha", "beta", "gamma"]}}`)
+	script := "demo\n" + // Name re-typed (required)
+		"2\n2\n" + // Mode → http, Navigate → Logging
+		"2\n0\n" + // Levels: toggle info, confirm
+		"2\n" + // Navigate → Tags items (n=3)
+		"5\n2\n" + // "Move item up…" → pick 1: beta
+		"8\n0\n1\n" + // items manager Done, levels confirm, Logging Done
+		"demo\n\n5\n" // Name, Mode default, Save and exit
+	stdout, _, code := runJSE(t, 60*time.Second, script, "-s", "examples/server.schema.json", cfg, "--accessible")
+	if code != 0 || !strings.Contains(stdout, "Saved to") {
+		t.Fatalf("exit=%d stdout:\n%s", code, stdout)
+	}
+	got := readJSON(t, cfg).(map[string]any)
+	tags := got["logging"].(map[string]any)["tags"].([]any)
+	if !reflect.DeepEqual(tags, []any{"beta", "alpha", "gamma"}) {
+		t.Fatalf("tags after move = %#v", tags)
 	}
 }
 
@@ -497,6 +519,100 @@ func TestPtyMenuFlow(t *testing.T) {
 	}
 	if got := readJSON(t, outFile); !reflect.DeepEqual(got, want) {
 		t.Fatalf("output mismatch:\ngot  %#v\nwant %#v\nscreen:\n%s", got, want, all.String())
+	}
+}
+
+// TestPtyMoveItem proves the J binding reaches the app through a real
+// terminal: drill into a scalar array, move the first item down, save.
+func TestPtyMoveItem(t *testing.T) {
+	dir := t.TempDir()
+	schema := filepath.Join(dir, "tags.schema.json")
+	outFile := filepath.Join(dir, "o.json")
+	writeFile(t, schema, `{"type":"object","properties":{"tags":{"type":"array","title":"Tags","items":{"type":"string"}}}}`)
+	writeFile(t, outFile, fmt.Sprintf(`{"$schema": %q, "tags": ["alpha", "beta"]}`, schema))
+
+	cmd := exec.Command(jseBin, "-s", schema, outFile)
+	cmd.Dir = ".."
+	cmd.Env = append(os.Environ(), "TERM=xterm-256color")
+	tty, err := pty.StartWithSize(cmd, &pty.Winsize{Rows: 30, Cols: 120})
+	if err != nil {
+		t.Skipf("no pty available: %v", err)
+	}
+	defer tty.Close()
+
+	frames := make(chan string, 64)
+	go func() {
+		buf := make([]byte, 4096)
+		var acc bytes.Buffer
+		for {
+			n, err := tty.Read(buf)
+			if n > 0 {
+				acc.Write(buf[:n])
+				frames <- acc.String()
+			}
+			if err != nil {
+				close(frames)
+				return
+			}
+		}
+	}()
+	waitFrame := func(what string, offset int, want ...string) (string, int) {
+		t.Helper()
+		deadline := time.After(15 * time.Second)
+		for {
+			select {
+			case frame, ok := <-frames:
+				if !ok {
+					t.Fatalf("pty closed while waiting for %s", what)
+				}
+				ready := true
+				for _, w := range want {
+					if !strings.Contains(frame[offset:], w) {
+						ready = false
+						break
+					}
+				}
+				if ready {
+					return frame, len(frame)
+				}
+			case <-deadline:
+				t.Fatalf("timed out waiting for %s", what)
+			}
+		}
+	}
+
+	_, off := waitFrame("root menu", 0, "Save and exit")
+	tty.Write([]byte("\r")) // enter → Tags items
+	_, off = waitFrame("items menu", off, "alpha")
+	tty.Write([]byte("\x1b[BJ")) // ↓ to item 0 (alpha), J moves it down
+	// the swap is visible once the rows render beta above alpha
+	moved := false
+	deadline := time.After(15 * time.Second)
+	for !moved {
+		select {
+		case frame, ok := <-frames:
+			if !ok {
+				t.Fatalf("pty closed before the moved rows rendered")
+			}
+			seg := frame[off:]
+			if iB, iA := strings.Index(seg, "beta"), strings.Index(seg, "alpha"); iB >= 0 && (iA < 0 || iB < iA) {
+				moved = true
+			}
+		case <-deadline:
+			t.Fatalf("timed out waiting for the moved rows")
+		}
+	}
+	tty.Write([]byte("\x13")) // ctrl+s save
+	_, _ = waitFrame("saved notice", off, "Saved")
+	tty.Write([]byte("\x03")) // ctrl+c abort
+
+	waitErr := cmd.Wait()
+	if ee, ok := waitErr.(*exec.ExitError); !ok || ee.ExitCode() != 130 {
+		t.Fatalf("exit after ctrl+c = %v, want 130", waitErr)
+	}
+	tags := readJSON(t, outFile).(map[string]any)["tags"]
+	if !reflect.DeepEqual(tags, []any{"beta", "alpha"}) {
+		t.Fatalf("tags after move = %#v, want [beta alpha]", tags)
 	}
 }
 

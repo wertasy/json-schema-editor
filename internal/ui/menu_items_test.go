@@ -103,6 +103,79 @@ func TestMenuDeleteItem(t *testing.T) {
 	}
 }
 
+func TestMenuMoveItem(t *testing.T) {
+	doc := tobj(tmem("logging", tobj(tmem("tags", tarr(tstr("prod"), tstr("dev"), tstr("stage"))))))
+	m := newListModel(testModel(), doc, Options{})
+	press(m, "down", "down", "down", "enter", "down", "enter", "down") // Logging → Tags → item 0
+	if got := strArrAt(t, doc, "logging", "tags"); !eqStrs(got, "prod", "dev", "stage") {
+		t.Fatalf("setup tags = %v", got)
+	}
+
+	press(m, "J") // move prod down, cursor follows the row
+	if got := strArrAt(t, doc, "logging", "tags"); !eqStrs(got, "dev", "prod", "stage") {
+		t.Fatalf("after J tags = %v, want [dev prod stage]", got)
+	}
+	if m.top().cursor != 2 {
+		t.Fatalf("cursor = %d, want 2 (on the moved row)", m.top().cursor)
+	}
+	press(m, "K") // and back up
+	if got := strArrAt(t, doc, "logging", "tags"); !eqStrs(got, "prod", "dev", "stage") {
+		t.Fatalf("after K tags = %v, want [prod dev stage]", got)
+	}
+	if m.top().cursor != 1 {
+		t.Fatalf("cursor = %d, want 1", m.top().cursor)
+	}
+	press(m, "K") // already first: notice, doc untouched
+	if m.notice != "already first item" || !eqStrs(strArrAt(t, doc, "logging", "tags"), "prod", "dev", "stage") {
+		t.Fatalf("first-item K: notice=%q tags=%v", m.notice, strArrAt(t, doc, "logging", "tags"))
+	}
+	press(m, "down", "down") // stage (last)
+	press(m, "J")
+	if m.notice != "already last item" || !eqStrs(strArrAt(t, doc, "logging", "tags"), "prod", "dev", "stage") {
+		t.Fatalf("last-item J: notice=%q tags=%v", m.notice, strArrAt(t, doc, "logging", "tags"))
+	}
+
+	// one key = one undo step
+	press(m, "up", "up") // back to prod
+	press(m, "J")
+	if got := strArrAt(t, doc, "logging", "tags"); !eqStrs(got, "dev", "prod", "stage") {
+		t.Fatalf("after J tags = %v", got)
+	}
+	press(m, "u")
+	if got := strArrAt(t, doc, "logging", "tags"); !eqStrs(got, "prod", "dev", "stage") {
+		t.Fatalf("after u tags = %v, want [prod dev stage]", got)
+	}
+
+	// single-item array: both directions refuse
+	doc2 := tobj(tmem("logging", tobj(tmem("tags", tarr(tstr("solo"))))))
+	m2 := newListModel(testModel(), doc2, Options{})
+	press(m2, "down", "down", "down", "enter", "down", "enter", "down")
+	press(m2, "J")
+	if m2.notice != "already last item" || !eqStrs(strArrAt(t, doc2, "logging", "tags"), "solo") {
+		t.Fatalf("solo J: notice=%q tags=%v", m2.notice, strArrAt(t, doc2, "logging", "tags"))
+	}
+	press(m2, "K")
+	if m2.notice != "already first item" || !eqStrs(strArrAt(t, doc2, "logging", "tags"), "solo") {
+		t.Fatalf("solo K: notice=%q tags=%v", m2.notice, strArrAt(t, doc2, "logging", "tags"))
+	}
+
+	// object item rows (drill rows) move the same way; undo restores
+	doc3 := tobj(tmem("mounts", tarr(tobj(tmem("src", tstr("/a"))), tobj(tmem("src", tstr("/b"))))))
+	m3 := newListModel(testModel(), doc3, Options{})
+	press(m3, "down", "down", "down", "down", "enter", "down") // Mounts → item 0
+	press(m3, "J")
+	if s := strAt(t, doc3, "mounts", 0, "src"); s != "/b" {
+		t.Fatalf("mounts[0].src = %q, want /b", s)
+	}
+	if m3.top().cursor != 2 {
+		t.Fatalf("cursor = %d, want 2 (on the moved mount row)", m3.top().cursor)
+	}
+	press(m3, "u")
+	if s := strAt(t, doc3, "mounts", 0, "src"); s != "/a" {
+		t.Fatalf("after undo mounts[0].src = %q, want /a", s)
+	}
+}
+
 func TestMenuScalarArrayAdd(t *testing.T) {
 	doc := tobj()
 	m := newListModel(testModel(), doc, Options{})
