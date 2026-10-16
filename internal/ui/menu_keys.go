@@ -991,11 +991,15 @@ func (m *listModel) completions(fn *smodel.FormNode, path []any) []string {
 	return out
 }
 
-// tagRefCompletions collects the "tag" values of the document structures the
-// reference domain names (its array form, e.g. http_client → http_clients,
-// and the plain form), anywhere in the document, in document order.
+// tagRefCompletions collects the "tag" values of the document structures a
+// reference domain names, anywhere in the document, in document order. The
+// domain is the structure's singular name, so its members are keyed ref (or
+// its plural); a compound domain also matches its trailing word (plural
+// included) below members named after the leading words — sing-box nests DNS
+// servers under dns, so dns_server → dns.servers[].tag.
 func (m *listModel) tagRefCompletions(ref string) []string {
-	names := map[string]bool{ref: true, ref + "s": true}
+	words := strings.Split(ref, "_")
+	leads, tail := words[:len(words)-1], words[len(words)-1]
 	var out []string
 	seen := map[string]bool{}
 	var collect func(n *jsondoc.Node)
@@ -1014,26 +1018,41 @@ func (m *listModel) tagRefCompletions(ref string) []string {
 			out = append(out, tag)
 		}
 	}
-	var walk func(n *jsondoc.Node)
-	walk = func(n *jsondoc.Node) {
+	// ancestors holds the NUL-wrapped member keys above the current node, so
+	// a leading word can match whole path segments only.
+	var walk func(n *jsondoc.Node, ancestors string)
+	walk = func(n *jsondoc.Node, ancestors string) {
 		switch {
 		case n == nil:
 			return
 		case n.Object != nil:
 			for _, mem := range *n.Object {
-				if names[mem.Key] {
+				if mem.Key == ref || mem.Key == ref+"s" ||
+					(len(leads) > 0 && (mem.Key == tail || mem.Key == tail+"s") &&
+						refWordsAbove(leads, ancestors)) {
 					collect(mem.Val)
 				}
-				walk(mem.Val)
+				walk(mem.Val, ancestors+"\x00"+mem.Key+"\x00")
 			}
 		case n.Array != nil:
 			for _, it := range *n.Array {
-				walk(it)
+				walk(it, ancestors)
 			}
 		}
 	}
-	walk(m.doc)
+	walk(m.doc, "\x00")
 	return out
+}
+
+// refWordsAbove reports whether every word appears as a whole member key in
+// the NUL-wrapped ancestor path.
+func refWordsAbove(words []string, ancestors string) bool {
+	for _, w := range words {
+		if !strings.Contains(ancestors, "\x00"+w+"\x00") {
+			return false
+		}
+	}
+	return true
 }
 
 // tagOfNode returns an object's "tag" string value.

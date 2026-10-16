@@ -202,13 +202,7 @@ func (p *parser) schema(n *jsondoc.Node, ctx *refCtx, key string, required bool,
 		return &FormNode{Key: key, Title: titleFallback(key), Kind: KRaw, Desc: icons.Warn + " recursive $ref, edit as JSON"}
 	}
 	if fn, ok := p.memo[n]; ok {
-		cp := *fn
-		cp.Key = key
-		cp.Required = required
-		if cp.Title == "" {
-			cp.Title = titleFallback(key)
-		}
-		return &cp
+		return forkNode(fn, key, required)
 	}
 	p.onPath[n] = true
 	defer delete(p.onPath, n)
@@ -220,13 +214,54 @@ func (p *parser) schema(n *jsondoc.Node, ctx *refCtx, key string, required bool,
 	// reachable under several property keys; storing the first key's
 	// fallback would leak it as the title of every other referencing key.
 	p.memo[n] = fn
+	return forkNode(fn, key, required)
+}
+
+// forkNode returns a memoized node as one referencing property sees it: its
+// key, fallback title and required flag are that property's, and a combo also
+// re-keys its variants (nested combos and array items included) — a variant
+// is a value of the referencing member, so it must not keep the key of the
+// first property that happened to build the shared node.
+func forkNode(fn *FormNode, key string, required bool) *FormNode {
 	cp := *fn
 	cp.Key = key
 	cp.Required = required
 	if cp.Title == "" {
 		cp.Title = titleFallback(key)
 	}
+	cp.Variants = rekeyVariants(cp.Variants, key)
 	return &cp
+}
+
+// rekeyVariants copies the variants of a shared combo for the referencing
+// property; the slice is reused when every key already matches.
+func rekeyVariants(vs []*FormNode, key string) []*FormNode {
+	if !variantsNeedKey(vs, key) {
+		return vs
+	}
+	out := make([]*FormNode, len(vs))
+	for i, v := range vs {
+		c := *v
+		c.Key = key
+		c.Variants = rekeyVariants(v.Variants, key)
+		if c.Items != nil && c.Items.Key != key {
+			it := *c.Items
+			it.Key = key
+			c.Items = &it
+		}
+		out[i] = &c
+	}
+	return out
+}
+
+// variantsNeedKey reports whether rekeyVariants would change anything.
+func variantsNeedKey(vs []*FormNode, key string) bool {
+	for _, v := range vs {
+		if v.Key != key || (v.Items != nil && v.Items.Key != key) || variantsNeedKey(v.Variants, key) {
+			return true
+		}
+	}
+	return false
 }
 
 func titleFallback(key string) string {

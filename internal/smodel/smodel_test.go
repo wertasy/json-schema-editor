@@ -501,6 +501,34 @@ func TestSharedRefTargetKeepsOwnTitle(t *testing.T) {
 	}
 }
 
+func TestSharedComboVariantsKeepReferencingKey(t *testing.T) {
+	// Combo variants are values of the referencing property: a $ref'd anyOf
+	// definition reached from several properties must hand each one its own
+	// key, or value completion would look under the first property's member.
+	fn := mustLoad(t, `{
+	  "type": "object",
+	  "$defs": {"duration": {"anyOf": [{"type": "integer"}, {"type": "string"}]}},
+	  "properties": {
+	    "connect_timeout": {"$ref": "#/$defs/duration"},
+	    "udp_timeout":     {"$ref": "#/$defs/duration"}
+	  }
+	}`)
+	for _, key := range []string{"connect_timeout", "udp_timeout"} {
+		c := child(t, fn, key)
+		if c.Key != key {
+			t.Fatalf("%s: node key = %q", key, c.Key)
+		}
+		if len(c.Variants) != 2 {
+			t.Fatalf("%s: %d variants, want 2", key, len(c.Variants))
+		}
+		for i, v := range c.Variants {
+			if v.Key != key {
+				t.Errorf("%s variant %d: key = %q, want %q", key, i, v.Key, key)
+			}
+		}
+	}
+}
+
 func TestLoadErrors(t *testing.T) {
 	if _, _, err := Load(filepath.Join(t.TempDir(), "nope.json")); err == nil {
 		t.Fatal("missing file should error")
