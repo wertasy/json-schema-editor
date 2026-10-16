@@ -129,6 +129,84 @@ func TestGetSetRemoveAppend(t *testing.T) {
 	}
 }
 
+func TestInsertAndInsertMember(t *testing.T) {
+	n, err := Parse(strings.NewReader(`{"list": ["a", "b", "c"]}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	// splice mid-array shifts the tail
+	n.Insert([]any{"list"}, 1, FromAny("x"))
+	arr, _ := n.Get([]any{"list"})
+	if got := summaryArr(arr); got != "a x b c" {
+		t.Fatalf("insert mid = %q, want a x b c", got)
+	}
+	// idx == len appends; out-of-range clamps
+	n.Insert([]any{"list"}, 4, FromAny("end"))
+	n.Insert([]any{"list"}, 99, FromAny("clamped"))
+	arr, _ = n.Get([]any{"list"})
+	if got := summaryArr(arr); got != "a x b c end clamped" {
+		t.Fatalf("insert tail/clamp = %q", got)
+	}
+	// auto-creates the array, like Append
+	n.Insert([]any{"fresh"}, 0, FromAny(1))
+	arr, _ = n.Get([]any{"fresh"})
+	if len(*arr.Array) != 1 || (*arr.Array)[0].Num == nil {
+		t.Fatalf("insert auto-create: %+v", arr)
+	}
+
+	// member splice at idx; existing key keeps position, value replaced
+	n.InsertMember(nil, "top", 0, FromAny("root")) // doc root itself
+	if got, _ := n.Get([]any{"top"}); got == nil || got.Str == nil || *got.Str != "root" {
+		t.Fatal("InsertMember at root failed")
+	}
+	n.InsertMember([]any{}, "zz", 99, FromAny(1)) // clamps to append
+	n.InsertMember([]any{}, "mm", 0, FromAny(2))
+	obj, _ := n.Get([]any{})
+	// doc so far: top, list, fresh — zz appends, mm splices in at 0
+	if keys := memberKeyList(obj); keys != "mm top list fresh zz" {
+		t.Fatalf("member order = %q, want mm top list fresh zz", keys)
+	}
+	n.InsertMember([]any{}, "top", 0, FromAny(9)) // existing key: replace in place
+	if got, _ := n.Get([]any{"top"}); got.Num == nil || got.Num.String() != "9" {
+		t.Fatal("existing key replace failed")
+	}
+	if keys := memberKeyList(obj); keys != "mm top list fresh zz" {
+		t.Fatalf("existing key must not move: %q", keys)
+	}
+	if err := wrapPanic(func() { n.InsertMember([]any{"list"}, "k", 0, FromAny(1)) }); err == nil {
+		t.Fatal("InsertMember into array should panic")
+	}
+}
+
+func memberKeyList(n *Node) string {
+	keys := make([]string, 0, len(*n.Object))
+	for i := range *n.Object {
+		keys = append(keys, (*n.Object)[i].Key)
+	}
+	return strings.Join(keys, " ")
+}
+
+func summaryArr(n *Node) string {
+	parts := make([]string, 0, len(*n.Array))
+	for _, v := range *n.Array {
+		switch {
+		case v.Str != nil:
+			parts = append(parts, *v.Str)
+		case v.Num != nil:
+			parts = append(parts, v.Num.String())
+		default:
+			parts = append(parts, "?")
+		}
+	}
+	return strings.Join(parts, " ")
+}
+
+func wrapPanic(f func()) (err any) {
+	defer func() { err = recover() }()
+	f()
+	return nil
+}
+
 func TestSetPanics(t *testing.T) {
 	defer func() {
 		if recover() == nil {

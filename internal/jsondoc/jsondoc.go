@@ -386,6 +386,65 @@ func (n *Node) Append(path []any, v *Node) {
 	*arr.Array = append(*arr.Array, v)
 }
 
+// Insert splices v into the array at path at index idx, shifting the
+// elements from idx on by one; idx clamps to [0, len]. Auto-creates
+// intermediates and the array itself, like Append. It panics if the path
+// resolves to a non-array.
+func (n *Node) Insert(path []any, idx int, v *Node) {
+	arr, ok := n.Get(path)
+	if !ok {
+		n.Set(path, &Node{Array: &[]*Node{}})
+		arr, _ = n.Get(path)
+	} else if arr.Array == nil {
+		if !empty(arr) {
+			panic("jsondoc: Insert into non-array")
+		}
+		arr.Array = &[]*Node{}
+	}
+	a := *arr.Array
+	if idx < 0 {
+		idx = 0
+	}
+	if idx > len(a) {
+		idx = len(a)
+	}
+	a = append(a, nil)
+	copy(a[idx+1:], a[idx:])
+	a[idx] = v
+	*arr.Array = a
+}
+
+// InsertMember adds key=v to the object at path at member index idx,
+// shifting the members from idx on by one; idx clamps to [0, len]. An
+// existing key keeps its position and only gets its value replaced.
+func (n *Node) InsertMember(path []any, key string, idx int, v *Node) {
+	obj, ok := n.Get(path)
+	if !ok || obj.Object == nil {
+		if ok && empty(obj) {
+			obj.Object = &[]Member{}
+		} else {
+			panic("jsondoc: InsertMember into non-object")
+		}
+	}
+	for i := range *obj.Object {
+		if (*obj.Object)[i].Key == key {
+			(*obj.Object)[i].Val = v
+			return
+		}
+	}
+	mem := *obj.Object
+	if idx < 0 {
+		idx = 0
+	}
+	if idx > len(mem) {
+		idx = len(mem)
+	}
+	mem = append(mem, Member{})
+	copy(mem[idx+1:], mem[idx:])
+	mem[idx] = Member{Key: key, Val: v}
+	*obj.Object = mem
+}
+
 // ToAny converts the node tree to plain Go values (map[string]any, []any,
 // string, int64/float64, bool, nil) for use by the jsonschema validator.
 func (n *Node) ToAny() any {
