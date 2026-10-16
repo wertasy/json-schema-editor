@@ -7,7 +7,7 @@
 ## 用法
 
 ```
-jse [-s <schema路径|http(s)://URL>] [--force] [--accessible] <config.json>
+jse [-s <schema路径|http(s)://URL>] [--pick] [--force] [--accessible] <config.json>
 ```
 
 示例：
@@ -27,7 +27,10 @@ jse -s https://example.com/schemas/server.schema.json server.json
 
 1. 显式 `-s`：`http://`/`https://` 开头 → 远端抓取；否则视为本地路径。
 2. 无 `-s` → 读配置顶层 `$schema` 字符串：URL 直接用；无 scheme 的相对路径相对**配置文件所在目录**解析。
-3. 两者皆无 → 报错 `no schema found: provide -s or set "$schema" in config`，exit 2。
+3. 两者皆无 → 查 SchemaStore 公共目录（schemastore.org）：按文件名做 `fileMatch` 匹配，**唯一命中直接采用**；歧义或未命中都打开检索选择器（`--pick` 强制打开）。选中即用，中止 → 报错 `no schema found: …`，exit 2。
+4. 目录里也没有 → 报错 `no schema found: provide -s or set "$schema" in config`，exit 2。
+
+选择器（TUI 全屏：输入过滤、↑/↓ 移动、enter 选定、esc 取消；`--accessible` 为行协议：输入搜索词 → 编号列表 → 数字选择，`0` 重搜、空行中止）。自动匹配或选定的 URL 按 `-s` 同样规则写回配置顶层 `$schema`，下次启动直接走第 2 优先级；`-pick` 则强制重选并覆盖既有 `$schema`。
 
 schema 抓取失败（路径不存在 / HTTP 非 2xx / 超时）→ exit 1（远端 schema 有可用缓存时改为回退到缓存，见下节）。远端 `$ref`（包括相对 base URI、`$id`）同样支持；不可达的 ref 降级为原始 JSON 编辑（见下文）。
 
@@ -39,6 +42,7 @@ schema 抓取失败（路径不存在 / HTTP 非 2xx / 超时）→ exit 1（远
 - **有效期 24 小时**（`internal/fetch.CacheTTL`）：期内直接用缓存、**不发起任何请求**；过期后带 `If-None-Match`/`If-Modified-Since` 条件请求，`304` 继续用缓存并续期，内容变了才重新下载。
 - **离线回退**：网络错误或 5xx 时用缓存启动，界面顶部提示 `⚠ using the cached schema: …`（无缓存则照旧报错 exit 1）；404 等客户端错误仍按失败处理，不会被缓存掩盖。
 - **同一次运行只抓一次**：表单模型与校验器共用同一份字节；本地路径/`file://` 不缓存。
+- **SchemaStore 目录同一套机制**：目录文档（catalog.json）与 schema 共用上述缓存/TTL/离线回退；环境变量 `JSE_CATALOG_URL` 覆盖目录地址（测试或内网镜像用）。
 - 想强制取最新：删除缓存目录（`rm -rf ~/.cache/jse`）或换一个 `JSE_CACHE_DIR`。
 
 ## 界面与键位
@@ -117,4 +121,4 @@ go build ./... && go vet ./... && go test ./...   # 单测 + e2e（accessible �
 go run ./cmd/jse -s examples/server.schema.json examples/server.config.json
 ```
 
-包结构：`internal/jsondoc`（保序 JSON 文档）、`internal/fetch`（本地/远端统一加载）、`internal/smodel`（schema→表单模型）、`internal/validate`（保存期校验）、`internal/ui`（menuconfig 菜单与 --accessible huh 流程）、`cmd/jse`（CLI）。
+包结构：`internal/jsondoc`（保序 JSON 文档）、`internal/fetch`（本地/远端统一加载）、`internal/catalog`（SchemaStore 目录加载与 fileMatch 匹配）、`internal/smodel`（schema→表单模型）、`internal/validate`（保存期校验）、`internal/ui`（menuconfig 菜单、schema 检索选择器与 --accessible huh 流程）、`cmd/jse`（CLI）。

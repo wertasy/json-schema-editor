@@ -521,7 +521,7 @@ func (m *listModel) writeSearchRows(b *strings.Builder, height int) {
 		off = 0
 	}
 	for i := off; i < len(m.search.results) && i < off+height; i++ {
-		line := m.cursorPrefix(i == m.search.cursor) + m.search.results[i].label
+		line := cursorPrefix(i == m.search.cursor) + m.search.results[i].label
 		if i == m.search.cursor {
 			line = mSel.Render(line)
 		}
@@ -529,7 +529,8 @@ func (m *listModel) writeSearchRows(b *strings.Builder, height int) {
 	}
 }
 
-func (m *listModel) cursorPrefix(on bool) string {
+// cursorPrefix marks the focused row, two cells wide.
+func cursorPrefix(on bool) string {
 	if on {
 		return "> "
 	}
@@ -675,7 +676,7 @@ func (m *listModel) rowLine(r row, cursor bool) string {
 		right = m.valueStyle(r.fn, r.path).Render(summary(m, r.fn, r.path))
 	}
 	content := m.titleCol(left) + right
-	line := m.cursorPrefix(cursor) + content
+	line := cursorPrefix(cursor) + content
 	if r.kind == rowUnknown {
 		line += " " + mDim.Render("(not in schema)")
 	}
@@ -1074,7 +1075,7 @@ func (m *listModel) selView() string {
 		if o.Encoded == curEnc {
 			mark, markStyle = "●", mAccent
 		}
-		line := m.cursorPrefix(i == m.sel.cursor) + markStyle.Render(mark) + " " + o.Display
+		line := cursorPrefix(i == m.sel.cursor) + markStyle.Render(mark) + " " + o.Display
 		if i == m.sel.cursor {
 			line = mSel.Render(line)
 		}

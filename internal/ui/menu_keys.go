@@ -780,7 +780,7 @@ func filterCompletions(cands []string, prefix string) []string {
 // editLines renders the in-place input line plus its completion hint and
 // validation error, sharing the layout with the plain field row.
 func (m *listModel) editLines(left string) string {
-	line := m.cursorPrefix(true) + left + m.edit.ti.View()
+	line := cursorPrefix(true) + left + m.edit.ti.View()
 	if hint := m.suggestionHint(); hint != "" {
 		line += "\n" + hint
 	}

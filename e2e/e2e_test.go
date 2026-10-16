@@ -267,12 +267,17 @@ func TestSchemaResolution(t *testing.T) {
 		dir := t.TempDir()
 		cfg := filepath.Join(dir, "cfg.json")
 		writeFile(t, cfg, `{"name": "z"}`)
+		// closed port: the catalog lookup fails instantly, no network
+		t.Setenv("JSE_CATALOG_URL", "http://127.0.0.1:1/catalog.json")
 		_, stderr, code := runJSE(t, 10*time.Second, "", cfg, "--accessible")
 		if code != 2 {
 			t.Fatalf("exit = %d, want 2\nstderr:\n%s", code, stderr)
 		}
 		if !strings.Contains(stderr, "no schema found") {
 			t.Fatalf("stderr missing message:\n%s", stderr)
+		}
+		if !strings.Contains(stderr, "schema catalog unavailable") {
+			t.Fatalf("stderr missing catalog note:\n%s", stderr)
 		}
 	})
 }

@@ -12,6 +12,7 @@ import (
 
 	"github.com/charmbracelet/x/term"
 
+	"json-schema-editor/internal/catalog"
 	"json-schema-editor/internal/fetch"
 	"json-schema-editor/internal/jsondoc"
 	"json-schema-editor/internal/smodel"
@@ -21,7 +22,7 @@ import (
 
 var errNoSchema = errors.New(`no schema found: provide -s or set "$schema" in config`)
 
-const usageText = `Usage: jse [-s <schema path|http(s)://URL>] [--force] [--accessible] <config.json>
+const usageText = `Usage: jse [-s <schema path|http(s)://URL>] [--pick] [--force] [--accessible] <config.json>
 
 Edit a JSON configuration file guided by a JSON Schema.
 
@@ -29,11 +30,16 @@ Schema source (checked in order):
   1. -s <local path or http(s)://URL>
   2. the "$schema" key at the top level of the config file;
      relative paths resolve against the config file's directory
-  3. error if neither is present
+  3. the SchemaStore catalog: a unique fileMatch hit for the file name is
+     used directly; an ambiguous or missing match opens an interactive
+     search over the catalog (--pick forces the search)
+  4. error if none of the above applies
 
 Remote schemas are cached under $XDG_CACHE_HOME/jse (JSE_CACHE_DIR overrides
 the location): a copy from the last 24 hours is reused without a request, and
-an unreachable origin falls back to the cached copy instead of failing.
+an unreachable origin falls back to the cached copy instead of failing. The
+schema catalog shares that cache; JSE_CATALOG_URL overrides the catalog
+endpoint.
 
 Arguments:
   config.json   the configuration file to edit (local path); a missing
@@ -41,6 +47,8 @@ Arguments:
 
 Flags:
   -s string     JSON Schema: local path or http(s):// URL
+  -pick         choose the schema from the SchemaStore catalog (overrides
+                -s and "$schema")
   -force        save even when schema validation fails
   -accessible   line-based prompts instead of the full-screen TUI
   -h, --help    show this help
@@ -60,6 +68,7 @@ func run() int {
 	schemaFlag := flag.String("s", "", "schema: local path or http(s):// URL")
 	force := flag.Bool("force", false, "save even when validation fails")
 	accessible := flag.Bool("accessible", false, "line-based prompts")
+	pick := flag.Bool("pick", false, "choose the schema from the SchemaStore catalog")
 	flag.Usage = func() { fmt.Fprintln(os.Stderr, usageText) }
 	flagArgs, positional := splitArgs(os.Args[1:])
 	_ = flag.CommandLine.Parse(flagArgs)
@@ -97,16 +106,71 @@ func run() int {
 		cfg = &jsondoc.Node{Object: &members}
 	}
 
+	var status []string
+
 	// A -s location also lands in the document's top-level "$schema" field
 	// (when the file has none), keeping the saved config self-describing.
 	if *schemaFlag != "" {
 		fillSchemaField(cfg, *schemaFlag)
 	}
+	// A catalog pick must overwrite an existing "$schema", so drop it first.
+	if *pick {
+		clearSchemaField(cfg)
+	}
 
-	schemaLoc, err := resolveSchemaLoc(*schemaFlag, config, cfg)
-	if err != nil {
-		fmt.Fprintln(os.Stderr, err.Error())
+	schemaLoc := ""
+	var resolveErr error
+	if !*pick {
+		schemaLoc, resolveErr = resolveSchemaLoc(*schemaFlag, config, cfg)
+	}
+	if resolveErr != nil && !errors.Is(resolveErr, errNoSchema) {
+		fmt.Fprintln(os.Stderr, resolveErr.Error())
 		return 2
+	}
+	if *pick || resolveErr != nil {
+		loc := catalog.Loc()
+		entries, cerr := catalog.Load(loc)
+		if cerr != nil {
+			if *pick {
+				fmt.Fprintf(os.Stderr, "load schema catalog: %v\n", cerr)
+				return 1
+			}
+			fmt.Fprintln(os.Stderr, errNoSchema.Error())
+			fmt.Fprintf(os.Stderr, "schema catalog unavailable: %v\n", cerr)
+			return 2
+		}
+		if n := fetch.Note(loc); n != "" {
+			status = append(status, strings.Replace(n, "cached schema", "cached catalog", 1))
+		}
+		chosen := catalog.Entry{}
+		if !*pick {
+			abs, _ := filepath.Abs(config) // Match needs the absolute path
+			if m := catalog.Match(entries, abs); len(m) == 1 {
+				chosen = m[0]
+			}
+		}
+		if chosen.URL == "" {
+			if !*accessible && !term.IsTerminal(os.Stdin.Fd()) {
+				if resolveErr != nil {
+					fmt.Fprintln(os.Stderr, errNoSchema.Error())
+				}
+				fmt.Fprintln(os.Stderr, "schema selection needs a terminal; rerun with --accessible or provide -s")
+				return 2
+			}
+			c, ok := ui.PickSchema(entries, ui.PickOptions{
+				Accessible: *accessible,
+				Filename:   filepath.Base(config),
+				Query:      searchStem(filepath.Base(config)),
+			})
+			if !ok {
+				fmt.Fprintln(os.Stderr, errNoSchema.Error())
+				return 2
+			}
+			chosen = c
+		}
+		schemaLoc = chosen.URL
+		fillSchemaField(cfg, schemaLoc)
+		status = append(status, "schema from SchemaStore: "+chosen.Name)
 	}
 
 	model, _, err := smodel.Load(schemaLoc)
@@ -122,7 +186,6 @@ func run() int {
 		}
 	}
 
-	var status []string
 	var check func(*jsondoc.Node) []string
 	var loadErrors []string
 	if note := fetch.Note(schemaLoc); note != "" {
@@ -244,6 +307,33 @@ func fillSchemaField(doc *jsondoc.Node, loc string) {
 	members = append(members, jsondoc.Member{Key: "$schema", Val: &jsondoc.Node{Str: &loc}})
 	members = append(members, *doc.Object...)
 	*doc.Object = members
+}
+
+// clearSchemaField removes the top-level "$schema" member; a freshly chosen
+// schema (-pick) must overwrite an existing value, which fillSchemaField
+// never does.
+func clearSchemaField(doc *jsondoc.Node) {
+	if doc == nil || doc.Object == nil {
+		return
+	}
+	members := (*doc.Object)[:0]
+	for _, m := range *doc.Object {
+		if m.Key == "$schema" {
+			continue
+		}
+		members = append(members, m)
+	}
+	*doc.Object = members
+}
+
+// searchStem is the file name without its extension, the initial catalog
+// search term. A name with no extension stays whole (".cshrc").
+func searchStem(base string) string {
+	stem := strings.TrimSuffix(base, filepath.Ext(base))
+	if stem == "" {
+		return base
+	}
+	return stem
 }
 
 // splitArgs separates flag tokens (with their values) from positional
