@@ -11,6 +11,7 @@ import (
 	"github.com/charmbracelet/lipgloss"
 	"github.com/muesli/termenv"
 
+	"json-schema-editor/internal/icons"
 	"json-schema-editor/internal/jsondoc"
 	"json-schema-editor/internal/smodel"
 )
@@ -56,6 +57,23 @@ func renderPath(path []any) string {
 		}
 	}
 	return s
+}
+
+func TestWorstIssueIcon(t *testing.T) {
+	cases := []struct {
+		items []issue
+		want  string
+	}{
+		{nil, icons.Warn},
+		{[]issue{{msg: "unknown key", warn: true}}, icons.Warn},
+		{[]issue{{msg: "unknown key", warn: true}, {msg: "bad value"}}, icons.Err}, // errors outrank warnings
+		{[]issue{{msg: "bad value"}}, icons.Err},
+	}
+	for _, c := range cases {
+		if got := worstIssueIcon(c.items); got != c.want {
+			t.Errorf("worstIssueIcon(%+v) = %q, want %q", c.items, got, c.want)
+		}
+	}
 }
 
 func TestUnknownKeyRows(t *testing.T) {
@@ -140,14 +158,14 @@ func TestLoadIssuesRowAndJump(t *testing.T) {
 		t.Fatalf("status label = %q", rows[0].label)
 	}
 	v := m.View()
-	if !contains(v, "⚠ 2 validation errors") {
+	if !contains(v, icons.Err+" 2 validation errors") {
 		t.Fatalf("status row not rendered:\n%s", v)
 	}
 	if !strings.Contains(issueLine(v), "--->") {
 		t.Fatalf("status row should offer the drill arrow:\n%s", v)
 	}
-	if !contains(v, "⚠") {
-		t.Fatalf("affected rows should carry the warning mark:\n%s", v)
+	if !contains(v, icons.Err) {
+		t.Fatalf("affected rows should carry the error mark:\n%s", v)
 	}
 
 	// open the list and jump to the offending field
@@ -225,7 +243,7 @@ func TestUnknownKeyIssuesListed(t *testing.T) {
 		!pathEq(m.issuesNow[1].path, []any{"extra_key"}) {
 		t.Fatalf("warning paths = %v %v", m.issuesNow[0].path, m.issuesNow[1].path)
 	}
-	if v := m.View(); !contains(v, "⚠ 2 warnings") {
+	if v := m.View(); !contains(v, icons.Warn+" 2 warnings") {
 		t.Fatalf("status row missing:\n%s", v)
 	}
 	if !m.hasWarn([]any{"server", "legacy"}) || !m.hasIssue([]any{"extra_key"}) {
@@ -247,7 +265,7 @@ func TestUnknownKeyIssuesListed(t *testing.T) {
 	if m.issuesNow[0].warn || !m.issuesNow[1].warn {
 		t.Fatalf("severity mixed up: %+v", m.issuesNow)
 	}
-	if v := m.View(); !contains(v, "⚠ 1 validation error · 1 warning") {
+	if v := m.View(); !contains(v, icons.Err+" 1 validation error · "+icons.Warn+" 1 warning") {
 		t.Fatalf("mixed status label missing:\n%s", v)
 	}
 	if !m.hasErr([]any{"extra_key"}) || !m.hasWarn([]any{"server", "legacy"}) {

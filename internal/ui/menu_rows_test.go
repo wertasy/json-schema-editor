@@ -2,6 +2,7 @@ package ui
 
 import (
 	"encoding/json"
+	"regexp"
 	"strings"
 	"testing"
 
@@ -466,32 +467,37 @@ func TestSearchIndexAndFilter(t *testing.T) {
 		}
 	}
 	// filter by title and key, case-insensitive
-	if got := filterSearch(lm, all, "token", true); len(got) != 2 { // variant + field
+	if got := filterSearch(lm, all, "token", true, nil); len(got) != 2 { // variant + field
 		t.Errorf("filter token = %d rows, want 2", len(got))
 	}
-	if got := filterSearch(lm, all, "SRC", true); len(got) != 2 { // Source + $/mounts/0 overview
-		t.Errorf("filter SRC by key = %d rows, want 2", len(got))
+	if got := filterSearch(lm, all, "SRC", true, nil); len(got) != 1 { // Source row only
+		t.Errorf("filter SRC by key = %d rows, want 1", len(got))
 	}
 	// fold=false demands the exact case
-	if got := filterSearch(lm, all, "SRC", false); len(got) != 0 {
+	if got := filterSearch(lm, all, "SRC", false, nil); len(got) != 0 {
 		t.Errorf("exact-case SRC = %d rows, want 0", len(got))
 	}
-	if got := filterSearch(lm, all, "src", false); len(got) != 2 { // $/mounts/0 overview + $/mounts/0/src
-		t.Errorf("exact-case src = %d rows, want 2", len(got))
+	if got := filterSearch(lm, all, "src", false, nil); len(got) != 1 { // $/mounts/0/src
+		t.Errorf("exact-case src = %d rows, want 1", len(got))
 	}
-	if got := filterSearch(lm, all, "", true); len(got) != len(all) {
+	if got := filterSearch(lm, all, "", true, nil); len(got) != len(all) {
 		t.Errorf("empty query must keep all rows")
 	}
-	// values match: leaf values and container overviews alike
-	if got := filterSearch(lm, all, "8080", true); len(got) != 2 { // $/server overview + $/server/port
-		t.Errorf("filter 8080 by value = %d rows, want 2", len(got))
+	// a row matches with its own value: the container above it only rolls its
+	// child values up, so the roll-up is no match target and the hit is not
+	// listed twice
+	if got := filterSearch(lm, all, "8080", true, nil); len(got) != 1 { // $/server/port
+		t.Errorf("filter 8080 by value = %d rows, want 1", len(got))
+	}
+	if got := filterSearch(lm, all, "port=8080", true, nil); len(got) != 0 {
+		t.Errorf("container roll-up query = %d rows, want 0", len(got))
 	}
 	// "/mnt" is now a path query (contains "/") and matches no path; values
 	// with a slash are found via the slash-free keyword "mnt"
-	if got := filterSearch(lm, all, "mnt", true); len(got) != 2 { // $/mounts/0 overview + $/mounts/0/dst
-		t.Errorf("filter mnt by value = %d rows, want 2", len(got))
+	if got := filterSearch(lm, all, "mnt", true, nil); len(got) != 1 { // $/mounts/0/dst
+		t.Errorf("filter mnt by value = %d rows, want 1", len(got))
 	}
-	if got := filterSearch(lm, all, "/mnt", true); len(got) != 0 {
+	if got := filterSearch(lm, all, "/mnt", true, nil); len(got) != 0 {
 		t.Errorf("path query /mnt = %d rows, want 0", len(got))
 	}
 
@@ -502,7 +508,7 @@ func TestSearchIndexAndFilter(t *testing.T) {
 	if len(innerAll) != 4 { // port, host, debug, ratio
 		t.Fatalf("scoped index = %d rows, want 4", len(innerAll))
 	}
-	if got := filterSearch(inner, innerAll, "name", true); len(got) != 0 {
+	if got := filterSearch(inner, innerAll, "name", true, nil); len(got) != 0 {
 		t.Errorf("scoped search must not leave the current menu, got %d", len(got))
 	}
 }
@@ -525,43 +531,83 @@ func TestSearchRankAndPathQueries(t *testing.T) {
 
 	// exact-key priority: the row whose key IS the query outranks rows that
 	// merely mention it (parent overviews, values containing the word)
-	if got := filterSearch(lm, all, "port", true); len(got) == 0 || paths(got)[0] != "$/server/port" {
+	if got := filterSearch(lm, all, "port", true, nil); len(got) == 0 || paths(got)[0] != "$/server/port" {
 		t.Errorf("port first hit = %v, want $/server/port first", paths(got))
 	}
-	if got := filterSearch(lm, all, "src", true); len(got) == 0 || paths(got)[0] != "$/mounts/0/src" {
+	if got := filterSearch(lm, all, "src", true, nil); len(got) == 0 || paths(got)[0] != "$/mounts/0/src" {
 		t.Errorf("src first hit = %v, want $/mounts/0/src first", paths(got))
 	}
-	// the tier is stable: without an exact key the order is unchanged
-	if got := filterSearch(lm, all, "8080", true); len(got) == 0 || paths(got)[0] != "$/server" {
-		t.Errorf("8080 first hit = %v, want $/server first (document order)", paths(got))
+	// a value only its own row carries matches that row alone — the container
+	// above it rolls the value up, which is no longer a match target
+	if got := filterSearch(lm, all, "8080", true, nil); len(got) != 1 || paths(got)[0] != "$/server/port" {
+		t.Errorf("8080 hits = %v, want exactly $/server/port", paths(got))
 	}
+	// the tier is stable: without an exact key the order is unchanged
+	eq(paths(filterSearch(lm, all, "0", true, nil)), "$/server/port", "$/server/host")
 
 	// anchored path queries: prefix match from the document root
-	eq(paths(filterSearch(lm, all, "/server/port", true)), "$/server/port")
-	anch := filterSearch(lm, all, "/server", true)
+	eq(paths(filterSearch(lm, all, "/server/port", true, nil)), "$/server/port")
+	anch := filterSearch(lm, all, "/server", true, nil)
 	for _, p := range paths(anch) {
 		if !strings.HasPrefix(p, "$/server") {
 			t.Errorf("anchored /server hit %q lacks the $/server prefix", p)
 		}
 	}
 	eq(paths(anch)[:1], "$/server") // exact full path ranks first
-	eq(paths(filterSearch(lm, all, "$/server/port", true)), "$/server/port")
+	eq(paths(filterSearch(lm, all, "$/server/port", true, nil)), "$/server/port")
 
 	// non-anchored path queries: substring match anywhere in the path
-	eq(paths(filterSearch(lm, all, "server/port", true)), "$/server/port")
-	eq(paths(filterSearch(lm, all, "mounts/0/src", true)), "$/mounts/0/src")
+	eq(paths(filterSearch(lm, all, "server/port", true, nil)), "$/server/port")
+	eq(paths(filterSearch(lm, all, "mounts/0/src", true, nil)), "$/mounts/0/src")
 
 	// paths that do not exist
-	if got := filterSearch(lm, all, "/mnt", true); len(got) != 0 {
+	if got := filterSearch(lm, all, "/mnt", true, nil); len(got) != 0 {
 		t.Errorf("path query /mnt = %d rows, want 0", len(got))
 	}
 	// a bare "/" matches every row
-	if got := filterSearch(lm, all, "/", true); len(got) != len(all) {
+	if got := filterSearch(lm, all, "/", true, nil); len(got) != len(all) {
 		t.Errorf("bare / = %d rows, want all %d", len(got), len(all))
 	}
 }
 
 // --- search & replace helpers ----------------------------------------------
+
+func TestFilterSearchRegex(t *testing.T) {
+	lm := lmAt(testDoc())
+	all := searchIndex(lm, lm.top())
+	paths := func(rows []row) (out []string) {
+		for _, r := range rows {
+			out = append(out, docPath(r.path))
+		}
+		return out
+	}
+	eq := func(got []string, want ...string) {
+		t.Helper()
+		if strings.Join(got, "|") != strings.Join(want, "|") {
+			t.Errorf("paths = %v, want %v", got, want)
+		}
+	}
+	match := func(pat string) []string {
+		return paths(filterSearch(lm, all, pat, false, regexp.MustCompile(pat)))
+	}
+
+	// the regex targets the same text literal mode matches: title/key plus the
+	// row's own scalar value; a full leaf-key match still ranks first
+	eq(match(`(?i)token`), "$/auth/token", "$/auth") // the field outranks its variant row
+	eq(match(`\bport\b`), "$/server/port")           // $/server's roll-up is no target
+	eq(match(`0\.0\.0\.0`), "$/server/host")
+	// a query containing "/" targets the document path, regex included
+	eq(match(`server/port$`), "$/server/port")
+	// the pattern matches original-case text: folding is the caller's (?i)
+	eq(paths(filterSearch(lm, all, `(?i)SRC`, false, regexp.MustCompile(`(?i)SRC`))), "$/mounts/0/src")
+	if got := match(`SRC`); len(got) != 0 {
+		t.Errorf("exact-case SRC = %v, want no regex hit", got)
+	}
+	// a pattern matching only a container roll-up finds nothing
+	if got := match(`port=8080`); len(got) != 0 {
+		t.Errorf("container roll-up matched by regex: %v", got)
+	}
+}
 
 func TestReplaceAll(t *testing.T) {
 	cases := []struct {
@@ -582,10 +628,31 @@ func TestReplaceAll(t *testing.T) {
 		{"a§b A§B", "§", "§§", true, "a§§b A§§B", 2}, // multibyte-safe
 	}
 	for _, c := range cases {
-		got, n := replaceAll(c.s, c.old, c.rep, c.fold)
+		got, n := replaceAll(c.s, c.old, c.rep, c.fold, nil)
 		if got != c.want || n != c.wantN {
 			t.Errorf("replaceAll(%q, %q, %q, %v) = (%q, %d), want (%q, %d)",
 				c.s, c.old, c.rep, c.fold, got, n, c.want, c.wantN)
+		}
+	}
+}
+
+func TestReplaceAllRegex(t *testing.T) {
+	cases := []struct {
+		s, pat, rep string
+		want        string
+		wantN       int
+	}{
+		{"hello", "l+", "x", "hexo", 1},
+		{"foo1bar2", "[0-9]+", "#", "foo#bar#", 2},
+		{"abc123", "(b)(c)", "[$2$1]", "a[cb]123", 1}, // $N groups expand
+		{"HELLO hello", "(?i)hello", "x", "x x", 2},   // folding is the caller's (?i)
+		{"bbb", "a*", "x", "xbxbxbx", 4},              // empty match at each boundary
+	}
+	for _, c := range cases {
+		got, n := replaceAll(c.s, c.pat, c.rep, false, regexp.MustCompile(c.pat))
+		if got != c.want || n != c.wantN {
+			t.Errorf("replaceAll(%q, %q, %q, regexp) = (%q, %d), want (%q, %d)",
+				c.s, c.pat, c.rep, got, n, c.want, c.wantN)
 		}
 	}
 }
@@ -595,7 +662,7 @@ func TestReplaceHits(t *testing.T) {
 	all := searchIndex(lm, lm.top())
 
 	// non-empty query: only string values containing q, relabeled as previews
-	hits := replaceHits(lm, all, "/data", "/opt", true)
+	hits := replaceHits(lm, all, "/data", "/opt", true, nil)
 	if len(hits) != 1 {
 		t.Fatalf("hits = %d, want 1 ($/mounts/0/src)", len(hits))
 	}
@@ -607,15 +674,15 @@ func TestReplaceHits(t *testing.T) {
 	}
 
 	// fold=false demands the exact case
-	if got := replaceHits(lm, all, "/DATA", "/opt", false); len(got) != 0 {
+	if got := replaceHits(lm, all, "/DATA", "/opt", false, nil); len(got) != 0 {
 		t.Errorf("exact-case /DATA = %d hits, want 0", len(got))
 	}
-	if got := replaceHits(lm, all, "/DATA", "/opt", true); len(got) != 1 {
+	if got := replaceHits(lm, all, "/DATA", "/opt", true, nil); len(got) != 1 {
 		t.Errorf("folded /DATA = %d hits, want 1", len(got))
 	}
 
 	// empty query: every string value, original labels, numbers excluded
-	strs := replaceHits(lm, all, "", "", true)
+	strs := replaceHits(lm, all, "", "", true, nil)
 	if len(strs) != 4 { // name, server/host, mounts/0/src, mounts/0/dst
 		t.Fatalf("empty-query hits = %d, want 4", len(strs))
 	}
@@ -639,7 +706,7 @@ func TestReplaceHits(t *testing.T) {
 	}}
 	lm2 := &listModel{model: dupModel, doc: dup, stack: []*menuState{{kind: menuObject,
 		node: dupModel, path: nil}}, width: 80, height: 24}
-	got := replaceHits(lm2, searchIndex(lm2, lm2.top()), "secret", "x", true)
+	got := replaceHits(lm2, searchIndex(lm2, lm2.top()), "secret", "x", true, nil)
 	if len(got) != 1 {
 		t.Errorf("duplicate variant paths = %d hits, want 1", len(got))
 	}
@@ -672,13 +739,13 @@ func TestSearchIndexUnknownKeys(t *testing.T) {
 
 	// search matches the unknown key name and its value overview
 	for _, q := range []string{"legacy", "gamma", "extra"} {
-		if got := filterSearch(lm, all, q, true); len(got) == 0 {
+		if got := filterSearch(lm, all, q, true, nil); len(got) == 0 {
 			t.Errorf("filter %q found no unknown row", q)
 		}
 	}
 
 	// replace previews target unknown string values, nested included
-	hits := replaceHits(lm, all, "a", "A", true)
+	hits := replaceHits(lm, all, "a", "A", true, nil)
 	paths := map[string]bool{}
 	for _, h := range hits {
 		paths[docPath(h.path)] = true

@@ -16,6 +16,8 @@ import (
 	"strings"
 	"sync"
 	"time"
+
+	"json-schema-editor/internal/icons"
 )
 
 // MaxBytes caps http response bodies (and thus schema documents). Exported
@@ -112,8 +114,8 @@ func Load(loc string) ([]byte, error) {
 }
 
 // Note returns the user-facing note about how the last Load of loc was
-// served ("⚠ ..." when the origin was unreachable and the cached copy was
-// used), or "" for a live fetch, a cache hit or a local file.
+// served (an icons.Warn-prefixed note when the origin was unreachable and the
+// cached copy was used), or "" for a live fetch, a cache hit or a local file.
 func Note(loc string) string {
 	mu.Lock()
 	defer mu.Unlock()
@@ -165,7 +167,7 @@ func loadHTTP(loc string) ([]byte, string, error) {
 		// Origin-side failures fall back to the cached copy; other statuses
 		// (404 and friends) stay hard errors so a wrong URL is not masked.
 		if ok && resp.StatusCode >= 500 {
-			return body, fmt.Sprintf("⚠ using the cached schema: GET %s: status %d", loc, resp.StatusCode), nil
+			return body, fmt.Sprintf("%s using the cached schema: GET %s: status %d", icons.Warn, loc, resp.StatusCode), nil
 		}
 		return nil, "", fmt.Errorf("GET %s: status %d", loc, resp.StatusCode)
 	}
@@ -190,7 +192,7 @@ func loadHTTP(loc string) ([]byte, string, error) {
 // staleOrErr yields the cached copy when there is one, else the error.
 func staleOrErr(loc string, body []byte, ok bool, err error) ([]byte, string, error) {
 	if ok {
-		return body, fmt.Sprintf("⚠ using the cached schema: %v", err), nil
+		return body, fmt.Sprintf("%s using the cached schema: %v", icons.Warn, err), nil
 	}
 	return nil, "", err
 }

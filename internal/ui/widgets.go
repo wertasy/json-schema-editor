@@ -11,6 +11,7 @@ import (
 
 	"github.com/charmbracelet/huh"
 
+	"json-schema-editor/internal/icons"
 	"json-schema-editor/internal/jsondoc"
 	"json-schema-editor/internal/smodel"
 )
@@ -207,7 +208,7 @@ func (a *app) enumEntry(fn *smodel.FormNode, path []any) entry {
 			}
 		}
 		if !found {
-			warn = "⚠ current value not in options"
+			warn = icons.Warn + " current value not in options"
 			bind = ""
 		}
 	}

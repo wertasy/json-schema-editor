@@ -6,11 +6,13 @@ package ui
 
 import (
 	"fmt"
+	"regexp"
 	"sort"
 	"strconv"
 	"strings"
 	"unicode"
 
+	"json-schema-editor/internal/icons"
 	"json-schema-editor/internal/jsondoc"
 	"json-schema-editor/internal/smodel"
 )
@@ -54,7 +56,7 @@ const (
 	rowVariant                // oneOf variant picker line
 	rowNoItems                // placeholder for empty menus
 	rowUnknown                // document key the schema does not define
-	rowIssues                 // "⚠ N validation errors" status row (root)
+	rowIssues                 // "<err|warn> N validation errors" status row (root)
 )
 
 // row is one line of a menu. fn/path drive editing and drill-down; idx is
@@ -1075,21 +1077,103 @@ func memberOf(n *jsondoc.Node, key string) *jsondoc.Node {
 	return nil
 }
 
+// rowScalarValue reports whether the row's own value is a scalar: its
+// document value, or the schema default when the key is unset. Container rows
+// (object, array, oneOf roll-up) and unset rows without a default answer
+// false.
+func rowScalarValue(lm *listModel, r row) bool {
+	n, ok := lm.doc.Get(r.path)
+	if !ok || n == nil || n.Null {
+		if r.fn == nil || r.fn.Default == nil {
+			return false
+		}
+		n = r.fn.Default
+	}
+	return n.Str != nil || n.Num != nil || n.Bool != nil
+}
+
+// rowSearchText is the text-mode match target of a row: "Title Key <value>"
+// for a row carrying a scalar value, "key <value>" for a schema-less scalar
+// row. A row whose value is a container matches its title/key only: its
+// overview summarizes child rows, which match the same text themselves, so
+// matching the roll-up would list every child hit twice — once as the parent,
+// once as the child. ok=false when the row never matches in text mode.
+func rowSearchText(lm *listModel, r row) (string, bool) {
+	if r.fn == nil {
+		if r.kind != rowUnknown {
+			return "", false
+		}
+		return unknownMatchText(r, rowScalarValue(lm, r)), true
+	}
+	text := r.fn.Title + " " + r.fn.Key
+	if rowScalarValue(lm, r) {
+		if s := summary(lm, r.fn, r.path); s != "—" {
+			text += " " + s
+		}
+	}
+	return text, true
+}
+
 // filterSearch narrows the index to rows matching q. A query containing "/"
 // is a document-path query: the row path ($/a/b/0) is the only match target —
 // title/key/value matching is suspended (search values with a slash-free
 // keyword instead). A leading "$" or "/" anchors the match at the document
-// root; without it the path matches anywhere. Otherwise Title, Key or value
-// overview must contain q; fold=true compares case-insensitively (the
-// historic behavior), fold=false requires an exact-case match. An empty query
+// root; without it the path matches anywhere. Otherwise the row text must
+// contain q: title and key, plus the value for rows carrying a scalar value
+// (container overviews are roll-ups of child rows and never match); fold=true
+// compares case-insensitively (the historic behavior), fold=false requires an
+// exact-case match. An empty query
 // keeps everything. Hits whose leaf key equals q (text mode) or whose full
 // path equals the query path (path mode) rank first; ties keep document
 // order. Variant rows match schema identity only: their jump target is the
 // picker row. Schema-less rows (unknown keys) match their key and value
-// overview.
-func filterSearch(lm *listModel, all []row, q string, fold bool) []row {
+// overview. When re != nil the query is a regular expression, matched
+// against the path when it contains "/" and the text target otherwise; full
+// leaf-key/path matches rank first. The pattern arrives stripped of the path
+// anchor (splitPathAnchor), so an anchored path query requires a match at the
+// start of the path body — the regex counterpart of the literal matcher's
+// prefix rule.
+func filterSearch(lm *listModel, all []row, q string, fold bool, re *regexp.Regexp) []row {
 	if q == "" {
 		return all
+	}
+	if re != nil {
+		isPath := strings.Contains(q, "/")
+		anchored := false
+		if isPath {
+			_, anchored = splitPathAnchor(q)
+		}
+		var out []row
+		for _, r := range all {
+			var text string
+			if isPath {
+				text = pathBody(r.path, anchored)
+			} else {
+				var ok bool
+				if text, ok = rowSearchText(lm, r); !ok {
+					continue
+				}
+			}
+			if anchored {
+				// the path anchor means "matches from the document root"
+				if loc := re.FindStringIndex(text); loc == nil || loc[0] != 0 {
+					continue
+				}
+			} else if !re.MatchString(text) {
+				continue
+			}
+			out = append(out, r)
+		}
+		full := func(r row) bool {
+			target := rowKey(r)
+			if isPath {
+				target = pathBody(r.path, anchored)
+			}
+			loc := re.FindStringIndex(target)
+			return loc != nil && loc[0] == 0 && loc[1] == len(target)
+		}
+		sort.SliceStable(out, func(i, j int) bool { return full(out[i]) && !full(out[j]) })
+		return out
 	}
 	pathQ, anchored, isPath := parsePathQuery(q)
 	if fold && !isPath {
@@ -1119,19 +1203,10 @@ func filterSearch(lm *listModel, all []row, q string, fold bool) []row {
 			}
 			continue
 		}
+		var ok bool
 		var text string
-		if r.fn == nil {
-			if r.kind != rowUnknown {
-				continue
-			}
-			text = unknownMatchText(r)
-		} else {
-			text = r.fn.Title + " " + r.fn.Key
-			if r.kind != rowVariant {
-				if s := summary(lm, r.fn, r.path); s != "—" {
-					text += " " + s
-				}
-			}
+		if text, ok = rowSearchText(lm, r); !ok {
+			continue
 		}
 		if fold {
 			text = strings.ToLower(text)
@@ -1157,6 +1232,33 @@ func filterSearch(lm *listModel, all []row, q string, fold bool) []row {
 	}
 	sort.SliceStable(out, func(i, j int) bool { return score(out[i]) < score(out[j]) })
 	return out
+}
+
+// splitPathAnchor splits the UI's anchored path syntax off a query: a leading
+// "$/" or "/" — the form the breadcrumbs print, e.g. "$/server/port" — means
+// the query targets the path from the document root. ok=false leaves the
+// query untouched. It is the regex-mode counterpart of parsePathQuery, and
+// also keeps a leading "$" away from the regexp engine, where it would read
+// as an end-of-text anchor and match nothing.
+func splitPathAnchor(q string) (rest string, anchored bool) {
+	if r, ok := strings.CutPrefix(q, "$/"); ok {
+		return r, true
+	}
+	if r, ok := strings.CutPrefix(q, "/"); ok {
+		return r, true
+	}
+	return q, false
+}
+
+// pathBody is a row path as a match subject: "$/a/b/0" normally; for an
+// anchored query, whose pattern was stripped of the "$/" prefix by
+// splitPathAnchor, the body "a/b/0" — the pattern then matches at its start.
+func pathBody(path []any, anchored bool) string {
+	p := docPath(path)
+	if !anchored || len(p) < 2 { // the root renders as "$": nothing left to match
+		return p
+	}
+	return p[2:]
 }
 
 // parsePathQuery classifies a query containing "/" as a document-path query:
@@ -1187,12 +1289,17 @@ func rowKey(r row) string {
 	return ""
 }
 
-// unknownMatchText is the match text of a schema-less row: its key (the
-// last path segment) plus the value overview carried in the label.
-func unknownMatchText(r row) string {
+// unknownMatchText is the match text of a schema-less row: its key (the last
+// path segment) plus, for a scalar value, the value overview carried in the
+// label. A container value contributes no text — its members are indexed as
+// rows of their own.
+func unknownMatchText(r row, withValue bool) string {
 	key := ""
 	if n := len(r.path); n > 0 {
 		key = fmt.Sprint(r.path[n-1])
+	}
+	if !withValue {
+		return key
 	}
 	overview := r.label
 	if i := strings.Index(r.label, "  "); i >= 0 {
@@ -1204,8 +1311,13 @@ func unknownMatchText(r row) string {
 // replaceAll replaces every occurrence of old in s with rep, scanning left
 // to right without re-scanning replacements (a rep containing old is not
 // replaced again). fold=true matches case-insensitively. It returns the new
-// string and the number of occurrences replaced.
-func replaceAll(s, old, rep string, fold bool) (string, int) {
+// string and the number of occurrences replaced. With re != nil the query is
+// a regular expression instead: replacement is leftmost non-overlapping and
+// rep expands $1 capture groups.
+func replaceAll(s, old, rep string, fold bool, re *regexp.Regexp) (string, int) {
+	if re != nil {
+		return re.ReplaceAllString(s, rep), len(re.FindAllStringIndex(s, -1))
+	}
 	if old == "" {
 		return s, 0
 	}
@@ -1247,7 +1359,7 @@ func runesFoldEqual(a, b []rune) bool {
 // preview. An empty query lists every string value with its original label
 // (mirroring filterSearch's keep-everything rule). Duplicate paths — oneOf
 // variants walking the same location — are kept once.
-func replaceHits(lm *listModel, all []row, q, rep string, fold bool) []row {
+func replaceHits(lm *listModel, all []row, q, rep string, fold bool, re *regexp.Regexp) []row {
 	var out []row
 	var seen [][]any
 	for _, r := range all {
@@ -1268,7 +1380,7 @@ func replaceHits(lm *listModel, all []row, q, rep string, fold bool) []row {
 		seen = append(seen, r.path)
 		r2 := r
 		if q != "" {
-			new, c := replaceAll(*n.Str, q, rep, fold)
+			new, c := replaceAll(*n.Str, q, rep, fold, re)
 			if c == 0 {
 				continue
 			}
@@ -1351,10 +1463,10 @@ func docArrayLen(doc *jsondoc.Node, path []any) int {
 	return len(*n.Array)
 }
 
-// issueStatusLabel composes the root status row label: validation errors
-// and unknown-key warnings are counted separately, e.g.
-// "⚠ 2 validation errors", "⚠ 1 validation error · 1 warning",
-// "⚠ 2 warnings".
+// issueStatusLabel composes the root status row label: validation errors and
+// unknown-key warnings are counted separately and carry their severity glyph,
+// e.g. "<err> 2 validation errors", "<err> 1 validation error · <warn> 1 warning",
+// "<warn> 2 warnings".
 func issueStatusLabel(errs, warns int) string {
 	plural := func(n int) string {
 		if n == 1 {
@@ -1364,11 +1476,12 @@ func issueStatusLabel(errs, warns int) string {
 	}
 	switch {
 	case errs > 0 && warns > 0:
-		return fmt.Sprintf("⚠ %d validation error%s · %d warning%s", errs, plural(errs), warns, plural(warns))
+		return fmt.Sprintf("%s %d validation error%s · %s %d warning%s",
+			icons.Err, errs, plural(errs), icons.Warn, warns, plural(warns))
 	case errs > 0:
-		return fmt.Sprintf("⚠ %d validation error%s", errs, plural(errs))
+		return fmt.Sprintf("%s %d validation error%s", icons.Err, errs, plural(errs))
 	default:
-		return fmt.Sprintf("⚠ %d warning%s", warns, plural(warns))
+		return fmt.Sprintf("%s %d warning%s", icons.Warn, warns, plural(warns))
 	}
 }
 

@@ -6,6 +6,7 @@ import (
 
 	tea "github.com/charmbracelet/bubbletea"
 
+	"json-schema-editor/internal/icons"
 	"json-schema-editor/internal/jsondoc"
 )
 
@@ -40,6 +41,8 @@ func key(k string) tea.KeyMsg {
 		return tea.KeyMsg{Type: tea.KeyCtrlR}
 	case "alt+i":
 		return tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("i"), Alt: true}
+	case "alt+x":
+		return tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("x"), Alt: true}
 	case "ctrl+u":
 		return tea.KeyMsg{Type: tea.KeyCtrlU}
 	case "home":
@@ -92,8 +95,8 @@ func TestMenuRootView(t *testing.T) {
 	}
 
 	// status line shows on the root screen only
-	m2 := newListModel(testModel(), testDoc(), Options{Status: "⚠ loaded config has 2 validation errors"})
-	if v := m2.View(); !contains(v, "⚠ loaded config has 2 validation errors") {
+	m2 := newListModel(testModel(), testDoc(), Options{Status: icons.Warn + " schema compile failed, save-time validation disabled: 2 validation errors"})
+	if v := m2.View(); !contains(v, icons.Warn+" schema compile failed") {
 		t.Errorf("status line missing:\n%s", v)
 	}
 	press(m2, "down", "down", "enter")
@@ -465,7 +468,7 @@ func TestJumpKeysOverlays(t *testing.T) {
 	press(m, "esc")
 
 	// enum select overlay: Mode row → options
-	press(m, "down", "down") // ⚠ row, Name row, Mode row
+	press(m, "down", "down") // issues row, Name row, Mode row
 	press(m, "enter")
 	if m.sel == nil {
 		t.Fatal("enum select overlay should open")

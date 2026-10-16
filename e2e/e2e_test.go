@@ -18,6 +18,7 @@ import (
 
 	"github.com/creack/pty"
 
+	"json-schema-editor/internal/icons"
 	"json-schema-editor/internal/jsondoc"
 )
 
@@ -568,11 +569,23 @@ func TestPtySearch(t *testing.T) {
 	}
 	frame, off := waitFrame("root menu", 0, "Save and exit")
 	tty.Write([]byte("/")) // open search (single key: chunked runes won't match)
-	_, off = waitFrame("search view", off, "search:")
-	tty.Write([]byte("8080")) // root search: value hits
+	_, off = waitFrame("search view", off, "search:", "alt+x regex")
+	tty.Write([]byte("8080")) // root search: value hit on the row that owns it
+	prev := off
 	frame, off = waitFrame("value hits", off,
-		"$/server  port=8080 host=localhost +1", // container overview hit
-		"$/server/port  8080")                   // leaf value hit
+		"$/server/port  8080") // leaf value hit
+	if strings.Contains(frame[prev:], "$/server  port=8080 host=localhost +1") {
+		t.Errorf("a container must not match through its child roll-up:\n%s", frame[prev:])
+	}
+	tty.Write([]byte("\x1b")) // close search
+	time.Sleep(200 * time.Millisecond)
+	tty.Write([]byte("/")) // reopen: the "$/" path syntax works in regex mode too
+	_, off = waitFrame("search view again", off, "search:")
+	tty.Write([]byte("$/server/port"))
+	frame, off = waitFrame("anchored path hit", off, "$/server/port  8080")
+	if strings.Contains(frame[off:], "invalid regex") {
+		t.Errorf("the path anchor must not reach the regexp engine:\n%s", frame[off:])
+	}
 	tty.Write([]byte("\x1b")) // close search
 	time.Sleep(200 * time.Millisecond)
 	tty.Write([]byte("\x1b[B\x1b[B\x1b[B\r")) // ↓↓↓ enter → Server ($/server); row 0 is the issues row
@@ -666,7 +679,7 @@ func TestPtySearchReplace(t *testing.T) {
 		}
 	}
 
-	frame, off := waitFrame("root menu", 0, "Save and exit", "⚠ 2 warnings")
+	frame, off := waitFrame("root menu", 0, "Save and exit", icons.Warn+" 2 warnings")
 	_ = frame
 	tty.Write([]byte("r")) // open search-and-replace directly
 	_, off = waitFrame("replace view", off, "replace:", "case-insensitive")

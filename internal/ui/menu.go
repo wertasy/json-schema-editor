@@ -7,6 +7,7 @@ package ui
 
 import (
 	"fmt"
+	"regexp"
 	"strings"
 	"time"
 
@@ -14,6 +15,7 @@ import (
 	"github.com/charmbracelet/bubbles/textinput"
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
+	"json-schema-editor/internal/icons"
 	"json-schema-editor/internal/jsondoc"
 	"json-schema-editor/internal/smodel"
 )
@@ -35,6 +37,7 @@ var helpLines = []string{
 	"ctrl+s       save (stay in the session)",
 	"/            search below the current path",
 	"r            search & replace string values",
+	"alt+x        regex toggle (default on): match the query as a regular expression ($1 groups in replace)",
 	"@ / .        record / play a macro",
 	"?            open/close this help",
 	"ctrl+c       quit without saving (exit 130)",
@@ -153,6 +156,15 @@ type searchState struct {
 	all      []row
 	results  []row
 	cursor   int
+	regex    bool           // true = the query is an RE2 regular expression (alt+x)
+	re       *regexp.Regexp // compiled query; nil unless regex && query compiled ok
+	reErr    string         // regexp.Compile error message; "" when ok
+	// A search jump parks the overlay instead of closing it: esc at the
+	// landing depth (returnDepth) reopens it, and closing it always returns to
+	// the menu the search was opened from (origin).
+	parked      bool
+	returnDepth int
+	origin      []*menuState
 }
 
 type listModel struct {
@@ -566,7 +578,16 @@ func (m *listModel) listView() string {
 		if !m.search.foldCase {
 			caseTxt = "case-sensitive"
 		}
-		b.WriteString(mHelp.Render(clipRunes("enter jump/replace · tab replace · alt+i "+caseTxt+" · ctrl+r replace all · esc close", m.width)))
+		if m.search.reErr != "" {
+			b.WriteString(mErr.Render(clipRunes("invalid regex: "+m.search.reErr+" · esc close", m.width)))
+			b.WriteByte('\n')
+			return b.String()
+		}
+		modeTxt := "literal"
+		if m.search.regex {
+			modeTxt = "regex"
+		}
+		b.WriteString(mHelp.Render(clipRunes("enter jump/replace · tab replace · alt+i "+caseTxt+" · alt+x "+modeTxt+" · ctrl+r replace all · esc close", m.width)))
 		b.WriteByte('\n')
 		return b.String()
 	}
@@ -957,13 +978,24 @@ func (m *listModel) hasIssue(path []any) bool {
 	return m.hasErr(path) || m.hasWarn(path)
 }
 
-// issueMark renders the ⚠ row mark in the worst severity at path: red for
-// validation errors, yellow for unknown-key warnings.
+// issueMark renders the severity row mark for path: the error glyph in red
+// for validation errors, the warning glyph in yellow for unknown-key warnings.
 func (m *listModel) issueMark(path []any) string {
 	if m.hasErr(path) {
-		return mErr.Render("⚠")
+		return mErr.Render(icons.Err)
 	}
-	return mWarn.Render("⚠")
+	return mWarn.Render(icons.Warn)
+}
+
+// worstIssueIcon picks the severity glyph for a set of issues: any real
+// validation error outranks the warnings.
+func worstIssueIcon(items []issue) string {
+	for _, it := range items {
+		if !it.warn {
+			return icons.Err
+		}
+	}
+	return icons.Warn
 }
 
 // issuesSeverity returns the style for the aggregate status row: red while
@@ -1200,7 +1232,7 @@ func (m *listModel) confirmView() string {
 // issuesView lists the load-time validation issues; enter jumps to the field.
 func (m *listModel) issuesView() string {
 	var b strings.Builder
-	b.WriteString(mTitle.Render(fmt.Sprintf("⚠ Validation issues (%d)", len(m.issues.items))))
+	b.WriteString(mTitle.Render(fmt.Sprintf("%s Validation issues (%d)", worstIssueIcon(m.issues.items), len(m.issues.items))))
 	b.WriteByte('\n')
 	if len(m.issues.items) == 0 {
 		b.WriteString(mDim.Render("( no issues )"))
@@ -1247,7 +1279,7 @@ func (m *listModel) issuesView() string {
 
 func (m *listModel) errsView() string {
 	var b strings.Builder
-	b.WriteString(mTitle.Render("Cannot save: validation errors"))
+	b.WriteString(mTitle.Render(icons.Err + " Cannot save: validation errors"))
 	b.WriteByte('\n')
 	height := m.height - 3
 	if height < 1 {

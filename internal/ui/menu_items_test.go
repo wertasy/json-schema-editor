@@ -391,12 +391,12 @@ func TestMenuSearchJump(t *testing.T) {
 		t.Fatalf("search mode should open:\n%s", m.View())
 	}
 	press(m, "p", "o", "r", "t")
-	if len(m.search.results) != 2 { // $/server overview + $/server/port value
-		t.Fatalf("results = %d, want 2", len(m.search.results))
+	if len(m.search.results) != 1 { // $/server/port only: $/server just rolls the value up
+		t.Fatalf("results = %d, want 1", len(m.search.results))
 	}
 	press(m, "enter")
 	if m.search.active {
-		t.Fatal("enter should close search")
+		t.Fatal("enter should park the search and render the jump target")
 	}
 	if len(m.stack) != 2 || !contains(m.View(), "$/server") {
 		t.Fatalf("jump should land inside Server:\n%s", m.View())
@@ -421,13 +421,97 @@ func TestMenuSearchJump(t *testing.T) {
 	}
 	press(m3, "esc")
 	press(m3, "/", "0", ".", "0")
-	if len(m3.search.results) != 1 { // $/server/host = 0.0.0.0
-		t.Fatalf("scoped value search = %d results, want 1", len(m3.search.results))
+	if len(m3.search.results) != 2 { // regex default: "." matches any char, so 8080 counts too
+		t.Fatalf("scoped regex search = %d results, want 2", len(m3.search.results))
 	}
 	if v := m3.View(); !contains(v, "$/server/host") {
 		t.Fatalf("scoped results should show breadcrumb-style paths:\n%s", v)
 	}
 	press(m3, "esc")
+	press(m3, "/", "0", "\\", ".", "0")
+	if len(m3.search.results) != 1 { // escaped dot: only $/server/host = 0.0.0.0
+		t.Fatalf("scoped escaped search = %d results, want 1", len(m3.search.results))
+	}
+	press(m3, "esc")
+}
+
+func TestMenuSearchJumpReturn(t *testing.T) {
+	// a jump out of the results is reversible: esc at the landing reopens the
+	// search, and closing the search returns to the menu it was opened from
+	m := newListModel(testModel(), testDoc(), Options{})
+	m.Update(tea.WindowSizeMsg{Width: 100, Height: 30})
+	press(m, "/", "8", "0", "8", "0")
+	press(m, "enter") // land on $/server/port
+	if m.search.active || len(m.stack) != 2 {
+		t.Fatalf("jump should land inside Server: stack %d, active %v", len(m.stack), m.search.active)
+	}
+	if !contains(m.View(), "> Port") {
+		t.Fatalf("cursor should sit on Port:\n%s", m.View())
+	}
+
+	press(m, "esc") // back to the list: query, results and cursor intact
+	if !m.search.active {
+		t.Fatal("esc at the landing should reopen the search")
+	}
+	if len(m.search.results) != 1 || m.search.cursor != 0 {
+		t.Fatalf("parked search = %d results, cursor %d", len(m.search.results), m.search.cursor)
+	}
+	if v := m.View(); !contains(v, "search: 8080") {
+		t.Fatalf("the query should survive the jump:\n%s", v)
+	}
+
+	press(m, "esc") // closing returns to the pre-search menu, not to $/server
+	if m.search.active || len(m.stack) != 1 || !contains(m.View(), "> Name*") {
+		t.Fatalf("close should restore the root menu:\n%s", m.View())
+	}
+
+	// edits made at the landing show up in the refreshed list on return
+	m2 := newListModel(testModel(), testDoc(), Options{})
+	m2.Update(tea.WindowSizeMsg{Width: 100, Height: 30})
+	press(m2, "/", "8", "0", "8", "0", "enter")
+	press(m2, "enter", "ctrl+u", "9", "9", "9", "9", "enter") // edit the landed value
+	if got := numAt(t, m2.doc, "server", "port"); got != "9999" {
+		t.Fatalf("port = %s, want 9999", got)
+	}
+	press(m2, "esc")
+	if !m2.search.active || len(m2.search.results) != 0 {
+		t.Fatalf("the refreshed list should drop the edited value: active %v, %d results",
+			m2.search.active, len(m2.search.results))
+	}
+
+	// landing on a container: drilly deeper first, the overlay comes last
+	m3 := newListModel(testModel(), testDoc(), Options{})
+	m3.Update(tea.WindowSizeMsg{Width: 100, Height: 30})
+	press(m3, "/", "m", "o", "u", "n", "t", "s")
+	press(m3, "enter") // land on the Mounts menu
+	if len(m3.stack) != 2 {
+		t.Fatalf("mounts landing stack = %d, want 2", len(m3.stack))
+	}
+	press(m3, "enter") // drill into the first item
+	if len(m3.stack) != 3 {
+		t.Fatalf("drill stack = %d, want 3", len(m3.stack))
+	}
+	press(m3, "esc") // one level up, the search stays parked
+	if m3.search.active || len(m3.stack) != 2 {
+		t.Fatalf("esc below the landing should pop a level: stack %d, active %v",
+			len(m3.stack), m3.search.active)
+	}
+	press(m3, "esc") // back at the landing: the list reopens
+	if !m3.search.active {
+		t.Fatal("esc at the landing should reopen the search")
+	}
+
+	// replace mode parks and returns the same way
+	m4 := newListModel(testModel(), testDoc(), Options{})
+	m4.Update(tea.WindowSizeMsg{Width: 100, Height: 30})
+	press(m4, "r", "w", "e", "b", "a", "p", "p", "enter")
+	press(m4, "esc")
+	if !m4.search.active || !m4.search.replace {
+		t.Fatal("the replace overlay should come back")
+	}
+	if v := m4.View(); !contains(v, "replace:") {
+		t.Fatalf("replace input missing after the return:\n%s", v)
+	}
 }
 
 func TestEditCompletion(t *testing.T) {
@@ -727,6 +811,94 @@ func TestMenuSearchReplace(t *testing.T) {
 	}
 	if c := m4.top().cursor; c != 0 {
 		t.Fatalf("jump cursor = %d, want the Name row (0)", c)
+	}
+}
+
+func TestMenuSearchRegex(t *testing.T) {
+	// regex is the default query mode: metacharacters are live as soon as the
+	// overlay opens, alt+x falls back to literal substring matching and back
+	m := newListModel(testModel(), testDoc(), Options{})
+	m.Update(tea.WindowSizeMsg{Width: 100, Height: 30})
+	press(m, "/")
+	if v := m.View(); !contains(v, "alt+x regex") {
+		t.Fatalf("the overlay should open in regex mode:\n%s", v)
+	}
+	press(m, "0", "\\", ".", "0")
+	if len(m.search.results) != 1 { // $/server/host = 0.0.0.0
+		t.Fatalf("regex 0\\.0 = %d hits, want 1", len(m.search.results))
+	}
+	press(m, "alt+x")
+	if len(m.search.results) != 0 { // literal `0\.0` matches no value
+		t.Fatalf("literal 0\\.0 = %d hits, want 0", len(m.search.results))
+	}
+	if v := m.View(); !contains(v, "alt+x literal") {
+		t.Fatalf("footer should show literal mode:\n%s", v)
+	}
+	press(m, "alt+x")
+	if len(m.search.results) != 1 {
+		t.Fatalf("toggling back to regex = %d hits, want 1", len(m.search.results))
+	}
+	press(m, "esc")
+
+	// the path syntax the breadcrumbs print keeps working: "$/" anchors the
+	// match at the document root instead of reading as a regex "end of text"
+	m5 := newListModel(testModel(), testDoc(), Options{})
+	m5.Update(tea.WindowSizeMsg{Width: 100, Height: 30})
+	press(m5, "/")
+	for _, k := range []string{"$", "/", "s", "e", "r", "v", "e", "r"} {
+		press(m5, k)
+	}
+	if len(m5.search.results) == 0 {
+		t.Fatal("anchored path query found nothing")
+	}
+	for _, r := range m5.search.results { // prefix match: $/server and its children
+		if p := docPath(r.path); !strings.HasPrefix(p, "$/server") {
+			t.Fatalf("anchored hit %q lacks the $/server prefix", p)
+		}
+	}
+	if got := m5.search.results[0].path; !pathEq(got, []any{"server"}) {
+		t.Fatalf("exact path should rank first, got %v", got)
+	}
+	press(m5, "esc")
+
+	// deeper than the root: an anchored query is not a substring search
+	m6 := newListModel(testModel(), testDoc(), Options{})
+	m6.Update(tea.WindowSizeMsg{Width: 100, Height: 30})
+	press(m6, "/")
+	for _, k := range []string{"$", "/", "p", "o", "r", "t"} {
+		press(m6, k)
+	}
+	if len(m6.search.results) != 0 { // nothing starts with $/port …
+		t.Fatalf("anchored $/port = %d hits, want 0", len(m6.search.results))
+	}
+	press(m6, "esc")
+
+	// an uncompilable pattern yields no results plus a footer error
+	m2 := newListModel(testModel(), testDoc(), Options{})
+	m2.Update(tea.WindowSizeMsg{Width: 100, Height: 30})
+	press(m2, "/", "(")
+	if len(m2.search.results) != 0 {
+		t.Fatalf("invalid regex = %d hits, want 0", len(m2.search.results))
+	}
+	if v := m2.View(); !contains(v, "invalid regex") {
+		t.Fatalf("footer should report the regex error:\n%s", v)
+	}
+	press(m2, "esc")
+
+	// replace mode: regex by default, $1 groups expand in the replacement
+	m3 := newListModel(testModel(), testDoc(), Options{})
+	m3.Update(tea.WindowSizeMsg{Width: 100, Height: 30})
+	press(m3, "r", "(", "\\", "d", "+", ")")
+	if len(m3.search.results) != 1 { // only $/server/host holds digits
+		t.Fatalf("replace regex hits = %d, want 1", len(m3.search.results))
+	}
+	press(m3, "tab", "[", "$", "1", "]")
+	if v := m3.View(); !contains(v, "[0].[0].[0].[0]") {
+		t.Fatalf("preview should expand $1:\n%s", v)
+	}
+	press(m3, "enter")
+	if s := strAt(t, m3.doc, "server", "host"); s != "[0].[0].[0].[0]" {
+		t.Fatalf("host = %q, want [0].[0].[0].[0]", s)
 	}
 }
 

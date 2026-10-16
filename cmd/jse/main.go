@@ -14,6 +14,7 @@ import (
 
 	"json-schema-editor/internal/catalog"
 	"json-schema-editor/internal/fetch"
+	"json-schema-editor/internal/icons"
 	"json-schema-editor/internal/jsondoc"
 	"json-schema-editor/internal/smodel"
 	"json-schema-editor/internal/ui"
@@ -193,7 +194,7 @@ func run() int {
 	}
 	if v, verr := validate.New(schemaLoc); verr != nil {
 		msg := strings.ReplaceAll(verr.Error(), "\n", " ")
-		status = append(status, "⚠ schema compile failed, save-time validation disabled: "+msg)
+		status = append(status, icons.Warn+" schema compile failed, save-time validation disabled: "+msg)
 	} else {
 		check = v.Check
 		if loaded {

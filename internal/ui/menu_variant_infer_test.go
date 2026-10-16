@@ -9,6 +9,7 @@ import (
 
 	tea "github.com/charmbracelet/bubbletea"
 
+	"json-schema-editor/internal/icons"
 	"json-schema-editor/internal/jsondoc"
 	"json-schema-editor/internal/smodel"
 )
@@ -629,7 +630,7 @@ func TestIssuesLiveRefresh(t *testing.T) {
 	m.Update(tea.WindowSizeMsg{Width: 100, Height: 30})
 
 	// two problems marked, status row counts them
-	if !contains(m.View(), "⚠ 2 validation errors") {
+	if !contains(m.View(), icons.Err+" 2 validation errors") {
 		t.Fatalf("status row should count 2:\n%s", m.View())
 	}
 	if !m.hasIssue([]any{"server", "port"}) || !m.hasIssue([]any{"name"}) {
@@ -656,7 +657,7 @@ func TestIssuesLiveRefresh(t *testing.T) {
 		t.Fatal("the fixed row must lose its mark")
 	}
 	press(m, "esc") // back to the root
-	if v := m.View(); !contains(v, "⚠ 1 validation error") {
+	if v := m.View(); !contains(v, icons.Err+" 1 validation error") {
 		t.Fatalf("count should drop to 1 (singular):\n%s", v)
 	}
 
@@ -670,7 +671,7 @@ func TestIssuesLiveRefresh(t *testing.T) {
 	if len(m.issuesNow) != 0 {
 		t.Fatalf("issues after both fixes = %d, want 0", len(m.issuesNow))
 	}
-	if v := m.View(); contains(v, "validation errors") || contains(v, "⚠") {
+	if v := m.View(); contains(v, "validation errors") || contains(v, icons.Err) || contains(v, icons.Warn) {
 		t.Fatalf("clean document must show no status row or marks:\n%s", v)
 	}
 

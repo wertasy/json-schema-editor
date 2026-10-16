@@ -13,6 +13,7 @@ import (
 	"strings"
 
 	"json-schema-editor/internal/fetch"
+	"json-schema-editor/internal/icons"
 	"json-schema-editor/internal/jsondoc"
 )
 
@@ -187,7 +188,7 @@ func (p *parser) resolveRef(ref string, ctx *refCtx, depth int) (*jsondoc.Node, 
 // schema normalizes one schema node into a FormNode.
 func (p *parser) schema(n *jsondoc.Node, ctx *refCtx, key string, required bool, depth int) *FormNode {
 	if depth > maxDepth {
-		return &FormNode{Key: key, Title: titleFallback(key), Kind: KRaw, Desc: "⚠ max schema depth exceeded, edit as JSON"}
+		return &FormNode{Key: key, Title: titleFallback(key), Kind: KRaw, Desc: icons.Warn + " max schema depth exceeded, edit as JSON"}
 	}
 	if n == nil || n.Null || !(n.Object != nil || n.Bool != nil) {
 		// Boolean schemas (true/false) and null: no form semantics.
@@ -198,7 +199,7 @@ func (p *parser) schema(n *jsondoc.Node, ctx *refCtx, key string, required bool,
 		return &FormNode{Key: key, Title: titleFallback(key), Kind: KRaw, Desc: "boolean schema, edit as JSON"}
 	}
 	if p.onPath[n] {
-		return &FormNode{Key: key, Title: titleFallback(key), Kind: KRaw, Desc: "⚠ recursive $ref, edit as JSON"}
+		return &FormNode{Key: key, Title: titleFallback(key), Kind: KRaw, Desc: icons.Warn + " recursive $ref, edit as JSON"}
 	}
 	if fn, ok := p.memo[n]; ok {
 		cp := *fn
@@ -213,11 +214,19 @@ func (p *parser) schema(n *jsondoc.Node, ctx *refCtx, key string, required bool,
 	defer delete(p.onPath, n)
 
 	fn := p.build(n, ctx, key, required, depth)
-	if fn.Title == "" {
-		fn.Title = titleFallback(key)
-	}
+	// Memoize before applying the key fallback: the fallback title belongs
+	// to the property that references this node, not to the node itself.
+	// The same $ref target (e.g. sing-box's shared duration definitions) is
+	// reachable under several property keys; storing the first key's
+	// fallback would leak it as the title of every other referencing key.
 	p.memo[n] = fn
-	return fn
+	cp := *fn
+	cp.Key = key
+	cp.Required = required
+	if cp.Title == "" {
+		cp.Title = titleFallback(key)
+	}
+	return &cp
 }
 
 func titleFallback(key string) string {
@@ -234,7 +243,7 @@ func (p *parser) build(n *jsondoc.Node, ctx *refCtx, key string, required bool, 
 		if err != nil {
 			return &FormNode{
 				Key: key, Kind: KRaw, Required: required,
-				Desc: appendWarn(descOf(n), "⚠ ref unreachable: "+*refNode.Str),
+				Desc: appendWarn(descOf(n), icons.Warn+" ref unreachable: "+*refNode.Str),
 			}
 		}
 		merged := p.schema(target, tctx, key, required, depth+1)

@@ -480,6 +480,27 @@ func TestRootNonObject(t *testing.T) {
 	}
 }
 
+func TestSharedRefTargetKeepsOwnTitle(t *testing.T) {
+	// Several properties $ref-ing the same untitled definition must each
+	// fall back to their own key, not the first key that touched the node
+	// (sing-box schema shares duration/address defs across many fields).
+	fn := mustLoad(t, `{
+  "type": "object",
+  "$defs": {"duration": {"type": "string"}},
+  "properties": {
+    "connect_timeout": {"$ref": "#/$defs/duration"},
+    "udp_timeout":     {"$ref": "#/$defs/duration"},
+    "fallback_delay":  {"$ref": "#/$defs/duration"}
+  }
+}`)
+	for _, key := range []string{"connect_timeout", "udp_timeout", "fallback_delay"} {
+		c := child(t, fn, key)
+		if c.Title != key {
+			t.Fatalf("child %q: title = %q, want own key", key, c.Title)
+		}
+	}
+}
+
 func TestLoadErrors(t *testing.T) {
 	if _, _, err := Load(filepath.Join(t.TempDir(), "nope.json")); err == nil {
 		t.Fatal("missing file should error")

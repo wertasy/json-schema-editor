@@ -7,6 +7,7 @@ package ui
 import (
 	"encoding/json"
 	"fmt"
+	"regexp"
 	"strings"
 	"time"
 
@@ -135,9 +136,14 @@ func (m *listModel) space(r row) tea.Cmd {
 }
 
 // back pops one menu level; on the root screen it asks for confirmation.
-// At the depth a validation-issue jump landed on, it returns to the issue
-// list instead (the overlay is parked while the user fixes the field).
+// At the depth a search jump landed on, it reopens the parked search overlay
+// instead; at the depth a validation-issue jump landed on, it returns to the
+// issue list (both overlays are parked while the user works on the field).
 func (m *listModel) back() {
+	if m.search.parked && len(m.stack) == m.search.returnDepth {
+		m.searchReturnTo()
+		return
+	}
 	if m.issuesBack != nil && len(m.stack) == m.issuesReturn {
 		m.issuesReturnTo()
 		return
@@ -1098,6 +1104,13 @@ func (m *listModel) openSearch(replace bool) {
 	m.search.active = true
 	m.search.replace = replace
 	m.search.foldCase = true
+	m.search.regex = true // regex queries by default; alt+x falls back to literal
+	m.search.re = nil
+	m.search.reErr = ""
+	m.search.parked = false
+	m.search.returnDepth = 0
+	// closing the overlay returns here, whatever the search jumped to
+	m.search.origin = append([]*menuState(nil), m.stack...)
 	m.search.all = searchIndex(m, m.top())
 	ti := textinput.New()
 	ti.Prompt = ""
@@ -1114,23 +1127,89 @@ func (m *listModel) openSearch(replace bool) {
 	m.search.cursor = 0
 }
 
-// closeSearch tears the overlay down (enter-jump, esc, replace-all).
+// closeSearch tears the overlay down (esc, replace-all), returning to the
+// menu the search was opened from — a jump in between never becomes the
+// permanent context.
 func (m *listModel) closeSearch() {
 	m.search.active = false
 	m.search.replace = false
 	m.search.results = nil
 	m.search.all = nil
+	m.search.parked = false
+	m.search.returnDepth = 0
+	if origin := m.search.origin; origin != nil {
+		m.stack = origin
+		m.search.origin = nil
+	}
+}
+
+// searchReturnTo reopens the parked search overlay from its jump target: the
+// stack goes back to where the search was opened, the index is rebuilt
+// against the (possibly edited) document and the results are recomputed with
+// the query as typed. The cursor stays on the hit the jump started from.
+func (m *listModel) searchReturnTo() {
+	cur := m.search.cursor
+	m.search.parked = false
+	m.search.returnDepth = 0
+	if origin := m.search.origin; origin != nil {
+		m.stack = origin
+		m.search.origin = nil
+	}
+	m.search.all = searchIndex(m, m.top())
+	m.refilter()
+	if cur > len(m.search.results)-1 {
+		cur = len(m.search.results) - 1
+	}
+	if cur < 0 {
+		cur = 0
+	}
+	m.search.cursor = cur
+	m.search.active = true
 }
 
 // refilter recomputes the result list from the current inputs: replace mode
 // projects string-value hits with their replacement preview, jump mode keeps
-// the title/key/value filter. Both honor the case-fold toggle.
+// the row filter. Both honor the case-fold toggle and the regex toggle (a
+// regular expression is the default; alt+x falls back to literal substring
+// matching). An uncompilable pattern yields no results plus a footer error.
 func (m *listModel) refilter() {
 	q := m.search.ti.Value()
+	m.search.re, m.search.reErr = nil, ""
+	if m.search.regex && q != "" {
+		pattern := q
+		// Row search keeps the path syntax breadcrumbs print: a leading "$/"
+		// or "/" is an anchor, so it is stripped here and the matcher requires
+		// the match at the start of the path. Left in, a leading "$" would
+		// reach the regexp engine as an end-of-text anchor and match nothing.
+		// Replace mode matches string values instead: the query is verbatim.
+		if !m.search.replace {
+			if rest, ok := splitPathAnchor(q); ok {
+				pattern = rest
+			}
+		}
+		if m.search.foldCase {
+			pattern = "(?i)" + pattern
+		}
+		re, err := regexp.Compile(pattern)
+		if err != nil {
+			// report the error against the typed query, not our wrappers
+			if _, rawErr := regexp.Compile(q); rawErr != nil {
+				err = rawErr
+			}
+			m.search.reErr = err.Error()
+		} else {
+			m.search.re = re
+		}
+	}
+	if m.search.reErr != "" {
+		m.search.results = nil
+		m.search.cursor = 0
+		return
+	}
 	if m.search.replace {
-		m.search.results = replaceHits(m, m.search.all, q, m.search.rti.Value(), m.search.foldCase)
+		m.search.results = replaceHits(m, m.search.all, q, m.search.rti.Value(), m.search.foldCase, m.search.re)
 	} else {
-		m.search.results = filterSearch(m, m.search.all, q, m.search.foldCase)
+		m.search.results = filterSearch(m, m.search.all, q, m.search.foldCase, m.search.re)
 	}
 	m.search.cursor = 0
 }
@@ -1158,6 +1237,10 @@ func (m *listModel) keySearch(msg tea.KeyMsg) tea.Cmd {
 		m.search.foldCase = !m.search.foldCase
 		m.refilter()
 		return nil
+	case "alt+x":
+		m.search.regex = !m.search.regex
+		m.refilter()
+		return nil
 	case "ctrl+r":
 		if m.search.replace {
 			return m.replaceSearchAll()
@@ -1170,7 +1253,8 @@ func (m *listModel) keySearch(msg tea.KeyMsg) tea.Cmd {
 			return nil
 		}
 		res := m.search.results[m.search.cursor]
-		m.closeSearch()
+		m.search.active = false // park the overlay: esc at the landing reopens it
+		m.search.parked = true
 		m.issuesBack = nil // a fresh jump replaces any parked issue list
 		m.stack = rebuildStack(m.model, m.doc, res.path)
 		rows := menuRows(m)
@@ -1179,6 +1263,7 @@ func (m *listModel) keySearch(msg tea.KeyMsg) tea.Cmd {
 			m.top().cursor = idx
 		}
 		m.top().offset = 0
+		m.search.returnDepth = len(m.stack)
 		return nil
 	case "esc":
 		m.closeSearch()
@@ -1206,7 +1291,7 @@ func (m *listModel) replaceSearchCurrent() tea.Cmd {
 	if n == nil || n.Str == nil {
 		return nil
 	}
-	s, c := replaceAll(*n.Str, q, m.search.rti.Value(), m.search.foldCase)
+	s, c := replaceAll(*n.Str, q, m.search.rti.Value(), m.search.foldCase, m.search.re)
 	if c == 0 {
 		return nil
 	}
@@ -1234,7 +1319,7 @@ func (m *listModel) replaceSearchAll() tea.Cmd {
 		if n == nil || n.Str == nil {
 			continue
 		}
-		s, c := replaceAll(*n.Str, q, m.search.rti.Value(), m.search.foldCase)
+		s, c := replaceAll(*n.Str, q, m.search.rti.Value(), m.search.foldCase, m.search.re)
 		if c == 0 {
 			continue
 		}
