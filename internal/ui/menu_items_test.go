@@ -560,3 +560,156 @@ func TestMenuDeleteKey(t *testing.T) {
 		t.Fatal("delete on an item row must remove the item")
 	}
 }
+
+func TestMenuSearchReplace(t *testing.T) {
+	doc := testDoc()
+	m := newListModel(testModel(), doc, Options{})
+	m.Update(tea.WindowSizeMsg{Width: 100, Height: 30})
+
+	// r opens the overlay in replace mode, search input focused
+	press(m, "r")
+	if !m.search.active || !m.search.replace {
+		t.Fatal("r should open search in replace mode")
+	}
+	if !m.search.ti.Focused() || m.search.rti.Focused() {
+		t.Fatal("the search input must be focused first")
+	}
+	if v := m.View(); !contains(v, "replace:") || !contains(v, "case-insensitive") {
+		t.Fatalf("replace overlay should show the input and case mode:\n%s", m.View())
+	}
+
+	// the query previews the projected replacement on string hits only
+	press(m, "/data")
+	if len(m.search.results) != 1 {
+		t.Fatalf("results = %d, want the $/mounts[0]/src hit", len(m.search.results))
+	}
+	press(m, "tab")
+	if !m.search.rti.Focused() {
+		t.Fatal("tab should focus the replace input")
+	}
+	press(m, "/opt")
+	if v := m.View(); !contains(v, "$/mounts[0]/src  /data → /opt") {
+		t.Fatalf("preview label missing:\n%s", v)
+	}
+
+	// enter replaces the highlighted value and keeps the overlay open
+	press(m, "enter")
+	if s := strAt(t, doc, "mounts", 0, "src"); s != "/opt" {
+		t.Fatalf("src = %q, want /opt", s)
+	}
+	if !m.search.active {
+		t.Fatal("enter on the replace input must keep the overlay open")
+	}
+	if len(m.search.results) != 0 { // "/opt" no longer contains "/data"
+		t.Fatalf("replaced value should drop from the results, got %d", len(m.search.results))
+	}
+	press(m, "esc")
+	if m.search.active || m.search.replace {
+		t.Fatal("esc should close the overlay")
+	}
+	if s := strAt(t, doc, "mounts", 0, "dst"); s != "/mnt" {
+		t.Fatalf("esc must not touch other values, dst = %q", s)
+	}
+
+	// ctrl+r replaces every hit in scope; numbers stay untouched
+	doc2 := tobj(tmem("name", tstr("alpha")),
+		tmem("server", tobj(tmem("host", tstr("alpha.example.com")), tmem("port", tnum("8080")))))
+	m2 := newListModel(testModel(), doc2, Options{})
+	m2.Update(tea.WindowSizeMsg{Width: 100, Height: 30})
+	press(m2, "r", "alpha", "tab", "beta", "ctrl+r")
+	if s := strAt(t, doc2, "name"); s != "beta" {
+		t.Fatalf("name = %q, want beta", s)
+	}
+	if s := strAt(t, doc2, "server", "host"); s != "beta.example.com" {
+		t.Fatalf("host = %q, want beta.example.com", s)
+	}
+	if got := numAt(t, doc2, "server", "port"); got != "8080" {
+		t.Fatalf("port = %s, want 8080 untouched", got)
+	}
+	if m2.search.active {
+		t.Fatal("replace-all should close the overlay")
+	}
+	if m2.notice != "replaced 2 occurrence(s) in 2 value(s)" {
+		t.Fatalf("notice = %q", m2.notice)
+	}
+
+	// alt+i toggles case sensitivity for the search and replace alike
+	doc3 := tobj(tmem("name", tstr("alpha")),
+		tmem("server", tobj(tmem("host", tstr("alpha.example.com")))))
+	m3 := newListModel(testModel(), doc3, Options{})
+	m3.Update(tea.WindowSizeMsg{Width: 100, Height: 30})
+	press(m3, "r", "ALPHA")
+	if len(m3.search.results) != 2 {
+		t.Fatalf("folded ALPHA = %d hits, want 2", len(m3.search.results))
+	}
+	press(m3, "alt+i")
+	if len(m3.search.results) != 0 {
+		t.Fatalf("exact-case ALPHA = %d hits, want 0", len(m3.search.results))
+	}
+	if v := m3.View(); !contains(v, "case-sensitive") || contains(v, "case-insensitive") {
+		t.Fatalf("help line should show case-sensitive:\n%s", v)
+	}
+	press(m3, "enter", "ctrl+r") // both must no-op on zero hits
+	if s := strAt(t, doc3, "name"); s != "alpha" {
+		t.Fatalf("enter/ctrl+r with 0 hits must not write, name = %q", s)
+	}
+	press(m3, "alt+i")
+	if len(m3.search.results) != 2 {
+		t.Fatalf("toggling back should restore the folded hits, got %d", len(m3.search.results))
+	}
+
+	// the replace scope follows the breadcrumb: only the subtree is rewritten
+	doc6 := tobj(tmem("name", tstr("same")),
+		tmem("server", tobj(tmem("host", tstr("same")))))
+	m6 := newListModel(testModel(), doc6, Options{})
+	m6.Update(tea.WindowSizeMsg{Width: 100, Height: 30})
+	press(m6, "down", "down", "enter") // root → $/server
+	press(m6, "r", "same", "tab", "other", "ctrl+r")
+	if s := strAt(t, doc6, "server", "host"); s != "other" {
+		t.Fatalf("host = %q, want other", s)
+	}
+	if s := strAt(t, doc6, "name"); s != "same" {
+		t.Fatalf("scoped replace leaked to $/name: %q", s)
+	}
+
+	// / opens jump search; tab arms replace mid-flight
+	m4 := newListModel(testModel(), testDoc(), Options{})
+	m4.Update(tea.WindowSizeMsg{Width: 100, Height: 30})
+	press(m4, "/", "t", "a", "b")
+	if m4.search.replace {
+		t.Fatal("typing in the search input must not arm replace")
+	}
+	press(m4, "tab")
+	if !m4.search.replace || !m4.search.rti.Focused() {
+		t.Fatal("tab should arm replace and focus its input")
+	}
+
+	// esc aborts without writing
+	doc5 := testDoc()
+	m5 := newListModel(testModel(), doc5, Options{})
+	m5.Update(tea.WindowSizeMsg{Width: 100, Height: 30})
+	press(m5, "r", "/data", "tab", "zzz", "esc")
+	if s := strAt(t, doc5, "mounts", 0, "src"); s != "/data" {
+		t.Fatalf("esc must discard the replacement, src = %q", s)
+	}
+
+	// with replace armed, enter on the search input still jumps
+	press(m4, "esc", "/", "webapp")
+	if len(m4.search.results) != 1 {
+		t.Fatalf("webapp hits = %d, want 1", len(m4.search.results))
+	}
+	press(m4, "tab", "tab") // arm replace, focus back on the search input
+	if !m4.search.replace || !m4.search.ti.Focused() {
+		t.Fatal("the second tab should return focus to the search input")
+	}
+	press(m4, "enter")
+	if m4.search.active {
+		t.Fatal("enter on the search input still jumps")
+	}
+	if v := m4.View(); !contains(v, "Name*") || !contains(v, "webapp") {
+		t.Fatalf("jump target wrong:\n%s", v)
+	}
+	if c := m4.top().cursor; c != 0 {
+		t.Fatalf("jump cursor = %d, want the Name row (0)", c)
+	}
+}

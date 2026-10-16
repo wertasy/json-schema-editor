@@ -405,20 +405,27 @@ func TestSearchIndexAndFilter(t *testing.T) {
 		}
 	}
 	// filter by title and key, case-insensitive
-	if got := filterSearch(lm, all, "token"); len(got) != 2 { // variant + field
+	if got := filterSearch(lm, all, "token", true); len(got) != 2 { // variant + field
 		t.Errorf("filter token = %d rows, want 2", len(got))
 	}
-	if got := filterSearch(lm, all, "SRC"); len(got) != 2 { // Source + $/mounts[0] overview
+	if got := filterSearch(lm, all, "SRC", true); len(got) != 2 { // Source + $/mounts[0] overview
 		t.Errorf("filter SRC by key = %d rows, want 2", len(got))
 	}
-	if got := filterSearch(lm, all, ""); len(got) != len(all) {
+	// fold=false demands the exact case
+	if got := filterSearch(lm, all, "SRC", false); len(got) != 0 {
+		t.Errorf("exact-case SRC = %d rows, want 0", len(got))
+	}
+	if got := filterSearch(lm, all, "src", false); len(got) != 2 { // $/mounts[0] overview + $/mounts[0]/src
+		t.Errorf("exact-case src = %d rows, want 2", len(got))
+	}
+	if got := filterSearch(lm, all, "", true); len(got) != len(all) {
 		t.Errorf("empty query must keep all rows")
 	}
 	// values match: leaf values and container overviews alike
-	if got := filterSearch(lm, all, "8080"); len(got) != 2 { // $/server overview + $/server/port
+	if got := filterSearch(lm, all, "8080", true); len(got) != 2 { // $/server overview + $/server/port
 		t.Errorf("filter 8080 by value = %d rows, want 2", len(got))
 	}
-	if got := filterSearch(lm, all, "/mnt"); len(got) != 2 { // $/mounts[0] overview + $/mounts[0]/dst
+	if got := filterSearch(lm, all, "/mnt", true); len(got) != 2 { // $/mounts[0] overview + $/mounts[0]/dst
 		t.Errorf("filter /mnt by value = %d rows, want 2", len(got))
 	}
 
@@ -429,7 +436,91 @@ func TestSearchIndexAndFilter(t *testing.T) {
 	if len(innerAll) != 4 { // port, host, debug, ratio
 		t.Fatalf("scoped index = %d rows, want 4", len(innerAll))
 	}
-	if got := filterSearch(inner, innerAll, "name"); len(got) != 0 {
+	if got := filterSearch(inner, innerAll, "name", true); len(got) != 0 {
 		t.Errorf("scoped search must not leave the current menu, got %d", len(got))
+	}
+}
+
+// --- search & replace helpers ----------------------------------------------
+
+func TestReplaceAll(t *testing.T) {
+	cases := []struct {
+		s, old, rep string
+		fold        bool
+		want        string
+		wantN       int
+	}{
+		{"Hello world HELLO", "hello", "hi", true, "hi world hi", 2},
+		{"Hello", "hello", "x", true, "x", 1},
+		{"Hello", "hello", "x", false, "Hello", 0},
+		{"Grösse GRÖSSE", "grösse", "S", true, "S S", 2},
+		{"Größe", "GRÖSSE", "X", true, "Größe", 0},   // simple fold: ß is not ss
+		{"aaa", "aa", "b", true, "ba", 1},            // non-overlapping scan
+		{"ab", "a", "aa", true, "aab", 1},            // rep containing old: no rescan
+		{"abc", "", "x", true, "abc", 0},             // empty old
+		{"abc", "z", "x", false, "abc", 0},           // no match
+		{"a§b A§B", "§", "§§", true, "a§§b A§§B", 2}, // multibyte-safe
+	}
+	for _, c := range cases {
+		got, n := replaceAll(c.s, c.old, c.rep, c.fold)
+		if got != c.want || n != c.wantN {
+			t.Errorf("replaceAll(%q, %q, %q, %v) = (%q, %d), want (%q, %d)",
+				c.s, c.old, c.rep, c.fold, got, n, c.want, c.wantN)
+		}
+	}
+}
+
+func TestReplaceHits(t *testing.T) {
+	lm := lmAt(testDoc())
+	all := searchIndex(lm, lm.top())
+
+	// non-empty query: only string values containing q, relabeled as previews
+	hits := replaceHits(lm, all, "/data", "/opt", true)
+	if len(hits) != 1 {
+		t.Fatalf("hits = %d, want 1 ($/mounts[0]/src)", len(hits))
+	}
+	if hits[0].path == nil || len(hits[0].path) != 3 {
+		t.Fatalf("hit path = %v, want $/mounts[0]/src", hits[0].path)
+	}
+	if hits[0].label != "$/mounts[0]/src  /data → /opt" {
+		t.Errorf("preview label = %q", hits[0].label)
+	}
+
+	// fold=false demands the exact case
+	if got := replaceHits(lm, all, "/DATA", "/opt", false); len(got) != 0 {
+		t.Errorf("exact-case /DATA = %d hits, want 0", len(got))
+	}
+	if got := replaceHits(lm, all, "/DATA", "/opt", true); len(got) != 1 {
+		t.Errorf("folded /DATA = %d hits, want 1", len(got))
+	}
+
+	// empty query: every string value, original labels, numbers excluded
+	strs := replaceHits(lm, all, "", "", true)
+	if len(strs) != 4 { // name, server/host, mounts[0]/src, mounts[0]/dst
+		t.Fatalf("empty-query hits = %d, want 4", len(strs))
+	}
+	for _, r := range strs {
+		if r.fn != nil && r.fn.Key == "port" {
+			t.Error("the number port must not be a replace hit")
+		}
+		if r.label == "" {
+			t.Error("empty-query hits keep their original labels")
+		}
+	}
+
+	// duplicate paths (rowField + two variant rows share the oneOf field's
+	// path) are kept once
+	dup := tobj(tmem("auth", tstr("secret")))
+	dupModel := &smodel.FormNode{Key: "$", Title: "$", Kind: smodel.KObject, Children: []*smodel.FormNode{
+		{Key: "auth", Title: "Auth", Kind: smodel.KOneOf, Variants: []*smodel.FormNode{
+			{Key: "auth", Title: "A", Kind: smodel.KScalar, JSONType: "string"},
+			{Key: "auth", Title: "B", Kind: smodel.KScalar, JSONType: "string"},
+		}},
+	}}
+	lm2 := &listModel{model: dupModel, doc: dup, stack: []*menuState{{kind: menuObject,
+		node: dupModel, path: nil}}, width: 80, height: 24}
+	got := replaceHits(lm2, searchIndex(lm2, lm2.top()), "secret", "x", true)
+	if len(got) != 1 {
+		t.Errorf("duplicate variant paths = %d hits, want 1", len(got))
 	}
 }

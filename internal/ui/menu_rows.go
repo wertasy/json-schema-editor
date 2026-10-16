@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"strconv"
 	"strings"
+	"unicode"
 
 	"json-schema-editor/internal/jsondoc"
 	"json-schema-editor/internal/smodel"
@@ -779,27 +780,111 @@ func searchIndex(lm *listModel, st *menuState) []row {
 }
 
 // filterSearch narrows the index to rows whose Title, Key or value overview
-// contains q (case-insensitive); an empty query keeps everything. Variant
-// rows match schema identity only: their jump target is the picker row.
-func filterSearch(lm *listModel, all []row, q string) []row {
-	q = strings.ToLower(q)
+// contains q; fold=true compares case-insensitively (the historic behavior),
+// fold=false requires an exact-case match. An empty query keeps everything.
+// Variant rows match schema identity only: their jump target is the picker row.
+func filterSearch(lm *listModel, all []row, q string, fold bool) []row {
 	if q == "" {
 		return all
+	}
+	if fold {
+		q = strings.ToLower(q)
 	}
 	var out []row
 	for _, r := range all {
 		if r.fn == nil {
 			continue
 		}
-		text := strings.ToLower(r.fn.Title + " " + r.fn.Key)
+		text := r.fn.Title + " " + r.fn.Key
 		if r.kind != rowVariant {
 			if s := summary(lm, r.fn, r.path); s != "—" {
-				text += " " + strings.ToLower(s)
+				text += " " + s
 			}
+		}
+		if fold {
+			text = strings.ToLower(text)
 		}
 		if strings.Contains(text, q) {
 			out = append(out, r)
 		}
+	}
+	return out
+}
+
+// replaceAll replaces every occurrence of old in s with rep, scanning left
+// to right without re-scanning replacements (a rep containing old is not
+// replaced again). fold=true matches case-insensitively. It returns the new
+// string and the number of occurrences replaced.
+func replaceAll(s, old, rep string, fold bool) (string, int) {
+	if old == "" {
+		return s, 0
+	}
+	if !fold {
+		n := strings.Count(s, old)
+		if n == 0 {
+			return s, 0
+		}
+		return strings.ReplaceAll(s, old, rep), n
+	}
+	sr, or := []rune(s), []rune(old)
+	var b strings.Builder
+	n := 0
+	for i := 0; i < len(sr); {
+		if i+len(or) <= len(sr) && runesFoldEqual(sr[i:i+len(or)], or) {
+			b.WriteString(rep)
+			n++
+			i += len(or)
+			continue
+		}
+		b.WriteRune(sr[i])
+		i++
+	}
+	return b.String(), n
+}
+
+func runesFoldEqual(a, b []rune) bool {
+	for i := range a {
+		if unicode.ToLower(a[i]) != unicode.ToLower(b[i]) {
+			return false
+		}
+	}
+	return true
+}
+
+// replaceHits narrows the index to rows whose document value is a string
+// containing q (per fold), relabeling each hit
+// "<docPath>  <old> → <new>" so the result list doubles as the replacement
+// preview. An empty query lists every string value with its original label
+// (mirroring filterSearch's keep-everything rule). Duplicate paths — oneOf
+// variants walking the same location — are kept once.
+func replaceHits(lm *listModel, all []row, q, rep string, fold bool) []row {
+	var out []row
+	var seen [][]any
+	for _, r := range all {
+		dup := false
+		for _, p := range seen {
+			if pathEq(p, r.path) {
+				dup = true
+				break
+			}
+		}
+		if dup {
+			continue
+		}
+		n, ok := lm.doc.Get(r.path)
+		if !ok || n == nil || n.Str == nil {
+			continue
+		}
+		seen = append(seen, r.path)
+		r2 := r
+		if q != "" {
+			new, c := replaceAll(*n.Str, q, rep, fold)
+			if c == 0 {
+				continue
+			}
+			r2.label = docPath(r.path) + "  " + valueClip(*n.Str) + " → " + valueClip(new)
+		}
+		out = append(out, r2)
 	}
 	return out
 }

@@ -596,3 +596,99 @@ func TestPtySearch(t *testing.T) {
 		t.Errorf("abort must not rewrite the config: %v", err)
 	}
 }
+
+// TestPtySearchReplace drives the r-search-replace end to end: string-value
+// hits preview as old → new, ctrl+r rewrites them all in the doc, and ctrl+s
+// persists the file with the replaced host.
+func TestPtySearchReplace(t *testing.T) {
+	dir := t.TempDir()
+	cfg := filepath.Join(dir, "server.config.json")
+	src, err := os.ReadFile("../examples/server.config.json")
+	if err != nil {
+		t.Fatal(err)
+	}
+	// the shipped example carries mode "quic", illegal for the schema enum:
+	// fix it so ctrl+s can actually save after the replace
+	fixed := strings.Replace(string(src), `"mode": "quic"`, `"mode": "tcp"`, 1)
+	if err := os.WriteFile(cfg, []byte(fixed), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	cmd := exec.Command(jseBin, "-s", "examples/server.schema.json", cfg)
+	cmd.Dir = ".."
+	cmd.Env = append(os.Environ(), "TERM=xterm-256color")
+	tty, err := pty.StartWithSize(cmd, &pty.Winsize{Rows: 30, Cols: 120})
+	if err != nil {
+		t.Skipf("no pty available: %v", err)
+	}
+	defer tty.Close()
+
+	frames := make(chan string, 64)
+	go func() {
+		buf := make([]byte, 4096)
+		var acc bytes.Buffer
+		for {
+			n, err := tty.Read(buf)
+			if n > 0 {
+				acc.Write(buf[:n])
+				frames <- acc.String()
+			}
+			if err != nil {
+				close(frames)
+				return
+			}
+		}
+	}()
+	waitFrame := func(what string, offset int, want ...string) (string, int) {
+		t.Helper()
+		deadline := time.After(15 * time.Second)
+		for {
+			select {
+			case frame, ok := <-frames:
+				if !ok {
+					t.Fatalf("pty closed while waiting for %s", what)
+				}
+				ready := true
+				for _, w := range want {
+					if !strings.Contains(frame[offset:], w) {
+						ready = false
+						break
+					}
+				}
+				if ready {
+					return frame, len(frame)
+				}
+			case <-deadline:
+				t.Fatalf("timed out waiting for %s", what)
+			}
+		}
+	}
+
+	frame, off := waitFrame("root menu", 0, "Save and exit")
+	_ = frame
+	tty.Write([]byte("r")) // open search-and-replace directly
+	_, off = waitFrame("replace view", off, "replace:", "case-insensitive")
+	tty.Write([]byte("localhost"))
+	_, off = waitFrame("replace preview", off, "$/server/host  localhost →")
+	tty.Write([]byte("\t127.0.0.1")) // focus the replace input, type the text
+	_, off = waitFrame("replacement typed", off, "$/server/host  localhost → 127.0.0.1")
+	tty.Write([]byte("\x12")) // ctrl+r: replace all in scope
+	_, off = waitFrame("replace-all notice", off, "replaced 1 occurrence")
+	tty.Write([]byte("\x13")) // ctrl+s: persist
+	_, _ = waitFrame("saved", off, "Saved")
+	content, err := os.ReadFile(cfg)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(content), `"host": "127.0.0.1"`) {
+		t.Errorf("replaced host missing after save:\n%s", content)
+	}
+	if strings.Contains(string(content), "localhost") {
+		t.Errorf("old host still present after save:\n%s", content)
+	}
+	tty.Write([]byte("\x03")) // ctrl+c abort
+	waitErr := cmd.Wait()
+	if ee, ok := waitErr.(*exec.ExitError); !ok || ee.ExitCode() != 130 {
+		t.Fatalf("exit after ctrl+c = %v, want 130", waitErr)
+	}
+}

@@ -28,10 +28,18 @@ func key(k string) tea.KeyMsg {
 		return tea.KeyMsg{Type: tea.KeyRight}
 	case "space":
 		return tea.KeyMsg{Type: tea.KeySpace, Runes: []rune(" ")}
+	case "tab":
+		return tea.KeyMsg{Type: tea.KeyTab}
+	case "shift+tab":
+		return tea.KeyMsg{Type: tea.KeyShiftTab}
 	case "ctrl+c":
 		return tea.KeyMsg{Type: tea.KeyCtrlC}
 	case "ctrl+s":
 		return tea.KeyMsg{Type: tea.KeyCtrlS}
+	case "ctrl+r":
+		return tea.KeyMsg{Type: tea.KeyCtrlR}
+	case "alt+i":
+		return tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("i"), Alt: true}
 	case "ctrl+u":
 		return tea.KeyMsg{Type: tea.KeyCtrlU}
 	default:
@@ -69,7 +77,7 @@ func TestMenuRootView(t *testing.T) {
 		"Server", "port=8080 host=0.0.0.0 +1", "—",
 		"Name*", "Server*", // required star shows regardless of a set value
 		"Mounts", "1 item", "Auth", "Save and exit", "Edit raw JSON",
-		"↑/↓ · enter edit/open · space toggle · del delete · esc back · ctrl+s save · / search · ctrl+c quit",
+		"↑/↓ · enter edit/open · space · del delete · esc · ctrl+s save · / search · r replace · ctrl+c quit",
 	} {
 		if !contains(v, want) {
 			t.Errorf("root view missing %q:\n%s", want, v)

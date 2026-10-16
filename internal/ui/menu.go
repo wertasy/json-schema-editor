@@ -17,7 +17,7 @@ import (
 	"json-schema-editor/internal/smodel"
 )
 
-const menuHelp = "↑/↓ · enter edit/open · space toggle · del delete · esc back · ctrl+s save · / search · ctrl+c quit"
+const menuHelp = "↑/↓ · enter edit/open · space · del delete · esc · ctrl+s save · / search · r replace · ctrl+c quit"
 const overlayHelp = "enter select · esc cancel"
 
 // maxMacroKeys caps a single recorded macro; reaching it stops recording and
@@ -104,11 +104,14 @@ type confirmState struct {
 // searchState is the "/" filter mode, scoped to the subtree below the
 // current breadcrumb path.
 type searchState struct {
-	active  bool
-	ti      textinput.Model
-	all     []row
-	results []row
-	cursor  int
+	active   bool
+	replace  bool // replace mode: show the replace input, results are previews
+	foldCase bool // true = match case-insensitively (default)
+	ti       textinput.Model
+	rti      textinput.Model
+	all      []row
+	results  []row
+	cursor   int
 }
 
 type listModel struct {
@@ -365,6 +368,11 @@ func (m *listModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.text.ta, cmd = m.text.ta.Update(msg)
 	case m.search.active:
 		m.search.ti, cmd = m.search.ti.Update(msg)
+		var cmd2 tea.Cmd
+		m.search.rti, cmd2 = m.search.rti.Update(msg)
+		if cmd == nil {
+			cmd = cmd2
+		}
 	}
 	return m, cmd
 }
@@ -432,8 +440,22 @@ func (m *listModel) listView() string {
 	}
 
 	if m.search.active {
-		m.writeSearchRows(&b, m.height-header-1)
+		h := m.height - header - 2 // search line + help line
+		if m.search.replace {
+			h--
+		}
+		m.writeSearchRows(&b, h)
 		b.WriteString(mHelp.Render("search: ") + m.search.ti.View())
+		b.WriteByte('\n')
+		if m.search.replace {
+			b.WriteString(mHelp.Render("replace: ") + m.search.rti.View())
+			b.WriteByte('\n')
+		}
+		caseTxt := "case-insensitive"
+		if !m.search.foldCase {
+			caseTxt = "case-sensitive"
+		}
+		b.WriteString(mHelp.Render(clipRunes("enter jump/replace · tab replace · alt+i "+caseTxt+" · ctrl+r replace all · esc close", m.width)))
 		b.WriteByte('\n')
 		return b.String()
 	}

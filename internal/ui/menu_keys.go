@@ -52,7 +52,9 @@ func (m *listModel) keyList(msg tea.KeyMsg) tea.Cmd {
 	case "delete":
 		m.deletePair(r)
 	case "/":
-		m.openSearch()
+		m.openSearch(false)
+	case "r":
+		m.openSearch(true)
 	case "ctrl+s":
 		return m.save()
 	}
@@ -857,14 +859,46 @@ func (m *listModel) suggestionHint() string {
 
 // --- search ----------------------------------------------------------------
 
-func (m *listModel) openSearch() {
+// openSearch arms the scoped search overlay; replace=true shows the replace
+// input and projects string-value replacement previews from the start.
+func (m *listModel) openSearch(replace bool) {
 	m.search.active = true
+	m.search.replace = replace
+	m.search.foldCase = true
 	m.search.all = searchIndex(m, m.top())
 	ti := textinput.New()
 	ti.Prompt = ""
 	ti.Focus()
 	m.search.ti = ti
-	m.search.results = m.search.all
+	rti := textinput.New()
+	rti.Prompt = ""
+	m.search.rti = rti
+	if replace {
+		m.refilter()
+	} else {
+		m.search.results = m.search.all
+	}
+	m.search.cursor = 0
+}
+
+// closeSearch tears the overlay down (enter-jump, esc, replace-all).
+func (m *listModel) closeSearch() {
+	m.search.active = false
+	m.search.replace = false
+	m.search.results = nil
+	m.search.all = nil
+}
+
+// refilter recomputes the result list from the current inputs: replace mode
+// projects string-value hits with their replacement preview, jump mode keeps
+// the title/key/value filter. Both honor the case-fold toggle.
+func (m *listModel) refilter() {
+	q := m.search.ti.Value()
+	if m.search.replace {
+		m.search.results = replaceHits(m, m.search.all, q, m.search.rti.Value(), m.search.foldCase)
+	} else {
+		m.search.results = filterSearch(m, m.search.all, q, m.search.foldCase)
+	}
 	m.search.cursor = 0
 }
 
@@ -876,14 +910,34 @@ func (m *listModel) keySearch(msg tea.KeyMsg) tea.Cmd {
 	case "down":
 		m.search.cursor = wrapCursor(m.search.cursor, 1, len(m.search.results))
 		return nil
+	case "tab", "shift+tab":
+		m.search.replace = true
+		if m.search.rti.Focused() {
+			m.search.rti.Blur()
+			m.search.ti.Focus()
+		} else {
+			m.search.ti.Blur()
+			m.search.rti.Focus()
+		}
+		m.refilter()
+		return nil
+	case "alt+i":
+		m.search.foldCase = !m.search.foldCase
+		m.refilter()
+		return nil
+	case "ctrl+r":
+		if m.search.replace {
+			return m.replaceSearchAll()
+		}
 	case "enter":
+		if m.search.replace && m.search.rti.Focused() {
+			return m.replaceSearchCurrent()
+		}
 		if len(m.search.results) == 0 {
 			return nil
 		}
 		res := m.search.results[m.search.cursor]
-		m.search.active = false
-		m.search.results = nil
-		m.search.all = nil
+		m.closeSearch()
 		m.issuesBack = nil // a fresh jump replaces any parked issue list
 		m.stack = rebuildStack(m.model, m.doc, res.path)
 		rows := menuRows(m)
@@ -892,16 +946,70 @@ func (m *listModel) keySearch(msg tea.KeyMsg) tea.Cmd {
 		m.top().offset = 0
 		return nil
 	case "esc":
-		m.search.active = false
-		m.search.results = nil
-		m.search.all = nil
+		m.closeSearch()
 		return nil
 	}
 	var cmd tea.Cmd
-	m.search.ti, cmd = m.search.ti.Update(msg)
-	m.search.results = filterSearch(m, m.search.all, m.search.ti.Value())
-	m.search.cursor = 0
+	if m.search.rti.Focused() {
+		m.search.rti, cmd = m.search.rti.Update(msg)
+	} else {
+		m.search.ti, cmd = m.search.ti.Update(msg)
+	}
+	m.refilter()
 	return cmd
+}
+
+// replaceSearchCurrent rewrites the highlighted hit's string value and
+// keeps the cursor on the next surviving hit.
+func (m *listModel) replaceSearchCurrent() tea.Cmd {
+	q := m.search.ti.Value()
+	if q == "" || len(m.search.results) == 0 {
+		return nil
+	}
+	res := m.search.results[m.search.cursor]
+	n, _ := m.doc.Get(res.path)
+	if n == nil || n.Str == nil {
+		return nil
+	}
+	s, c := replaceAll(*n.Str, q, m.search.rti.Value(), m.search.foldCase)
+	if c == 0 {
+		return nil
+	}
+	m.doc.Set(res.path, &jsondoc.Node{Str: &s})
+	cur := m.search.cursor
+	m.refilter()
+	if cur >= len(m.search.results) {
+		cur = max(len(m.search.results)-1, 0)
+	}
+	m.search.cursor = cur
+	return nil
+}
+
+// replaceSearchAll rewrites every occurrence of the query in every string
+// value of the scoped index (case per foldCase), closes the overlay and
+// leaves a count notice.
+func (m *listModel) replaceSearchAll() tea.Cmd {
+	q := m.search.ti.Value()
+	if q == "" || len(m.search.results) == 0 {
+		return nil
+	}
+	occ, vals := 0, 0
+	for _, r := range m.search.results {
+		n, _ := m.doc.Get(r.path)
+		if n == nil || n.Str == nil {
+			continue
+		}
+		s, c := replaceAll(*n.Str, q, m.search.rti.Value(), m.search.foldCase)
+		if c == 0 {
+			continue
+		}
+		m.doc.Set(r.path, &jsondoc.Node{Str: &s})
+		occ += c
+		vals++
+	}
+	m.closeSearch()
+	m.notice = fmt.Sprintf("replaced %d occurrence(s) in %d value(s)", occ, vals)
+	return nil
 }
 
 // cursorForRow finds the row matching a search hit (same schema node at the
