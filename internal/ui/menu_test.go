@@ -42,6 +42,10 @@ func key(k string) tea.KeyMsg {
 		return tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("i"), Alt: true}
 	case "ctrl+u":
 		return tea.KeyMsg{Type: tea.KeyCtrlU}
+	case "home":
+		return tea.KeyMsg{Type: tea.KeyHome}
+	case "end":
+		return tea.KeyMsg{Type: tea.KeyEnd}
 	default:
 		return tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune(k)}
 	}
@@ -70,14 +74,14 @@ func numAt(t *testing.T, doc *jsondoc.Node, path ...any) string {
 
 func TestMenuRootView(t *testing.T) {
 	m := newListModel(testModel(), testDoc(), Options{})
-	m.Update(tea.WindowSizeMsg{Width: 100, Height: 30})
+	m.Update(tea.WindowSizeMsg{Width: 120, Height: 30})
 	v := m.View()
 	for _, want := range []string{
 		"Server Configuration", "$", "Name", "webapp", "Mode", "http",
 		"Server", "port=8080 host=0.0.0.0 +1", "—",
 		"Name*", "Server*", // required star shows regardless of a set value
 		"Mounts", "1 item", "Auth", "Save and exit", "Edit raw JSON",
-		"↑/↓ · enter edit/open · space · del delete · esc · ctrl+s save · / search · r replace · ctrl+c quit",
+		"↑/↓ · gg/G · enter edit/open · space · del delete · esc · ctrl+s save · / search · r replace · ctrl+c quit",
 	} {
 		if !contains(v, want) {
 			t.Errorf("root view missing %q:\n%s", want, v)
@@ -379,5 +383,53 @@ func TestMenuSaveFlow(t *testing.T) {
 	}
 	if cmd == nil {
 		t.Fatal("Save and exit must quit")
+	}
+}
+
+func TestJumpKeys(t *testing.T) {
+	m := newListModel(testModel(), testDoc(), Options{})
+	m.Update(tea.WindowSizeMsg{Width: 100, Height: 30})
+	last := len(menuRows(m)) - 1
+
+	// G and End jump to the last row; gg and Home back to the first
+	press(m, "G")
+	if m.top().cursor != last {
+		t.Fatalf("G: cursor = %d, want %d", m.top().cursor, last)
+	}
+	press(m, "end")
+	if m.top().cursor != last {
+		t.Fatalf("End: cursor = %d, want %d", m.top().cursor, last)
+	}
+	press(m, "g", "g")
+	if m.top().cursor != 0 {
+		t.Fatalf("gg: cursor = %d, want 0", m.top().cursor)
+	}
+	press(m, "home")
+	if m.top().cursor != 0 {
+		t.Fatalf("Home: cursor = %d, want 0", m.top().cursor)
+	}
+
+	// a lone g arms but does not move; a different key disarms it
+	press(m, "j") // leave the top row
+	press(m, "g")
+	if m.top().cursor != 1 {
+		t.Fatalf("lone g moved the cursor: %d", m.top().cursor)
+	}
+	press(m, "j")
+	if m.top().cursor != 2 {
+		t.Fatalf("key after a lone g should move normally: %d", m.top().cursor)
+	}
+
+	// an armed g still fires after an intervening jump key
+	press(m, "G")
+	press(m, "g")
+	press(m, "g")
+	if m.top().cursor != 0 {
+		t.Fatalf("gg after G: cursor = %d, want 0", m.top().cursor)
+	}
+
+	// the rows stay addressable after the jumps (no offset drift)
+	if v := m.View(); !contains(v, "Save and exit") {
+		t.Fatalf("last row must render after a jump:\n%s", v)
 	}
 }

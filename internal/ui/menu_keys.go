@@ -8,6 +8,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"strings"
+	"time"
 
 	"github.com/charmbracelet/bubbles/textinput"
 	tea "github.com/charmbracelet/bubbletea"
@@ -26,7 +27,22 @@ func (m *listModel) keyList(msg tea.KeyMsg) tea.Cmd {
 		return nil
 	}
 	r := rows[st.cursor]
+	armed := !m.gArm.IsZero() && time.Since(m.gArm) < ggTimeout
+	m.gArm = time.Time{}
 	switch msg.String() {
+	case "g":
+		// gg (two g's within a beat) jumps to the first row; a lone g
+		// arms the combo and is otherwise inert
+		if armed {
+			st.cursor = 0
+			return nil
+		}
+		m.gArm = time.Now()
+		return nil
+	case "G", "end":
+		st.cursor = max(len(rows)-1, 0)
+	case "home":
+		st.cursor = 0
 	case "up", "k":
 		st.cursor = wrapCursor(st.cursor, -1, len(rows))
 	case "down", "j":

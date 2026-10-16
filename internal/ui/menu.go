@@ -8,6 +8,7 @@ package ui
 import (
 	"fmt"
 	"strings"
+	"time"
 
 	"github.com/charmbracelet/bubbles/textarea"
 	"github.com/charmbracelet/bubbles/textinput"
@@ -17,12 +18,16 @@ import (
 	"json-schema-editor/internal/smodel"
 )
 
-const menuHelp = "↑/↓ · enter edit/open · space · del delete · esc · ctrl+s save · / search · r replace · ctrl+c quit"
+const menuHelp = "↑/↓ · gg/G · enter edit/open · space · del delete · esc · ctrl+s save · / search · r replace · ctrl+c quit"
 const overlayHelp = "enter select · esc cancel"
 
 // maxMacroKeys caps a single recorded macro; reaching it stops recording and
 // keeps the keys captured so far.
 const maxMacroKeys = 500
+
+// ggTimeout is how long a lone g stays armed waiting for its second press
+// of the gg jump-to-top combo.
+const ggTimeout = 750 * time.Millisecond
 
 var (
 	mTitle  = lipgloss.NewStyle().Bold(true)
@@ -132,6 +137,7 @@ type listModel struct {
 	search        searchState
 	menuCache     map[*smodel.FormNode]*smodel.FormNode
 	notice        string        // transient list-mode message, cleared on the next key
+	gArm          time.Time     // nonzero while a lone g is waiting for its gg partner
 	recording     bool          // macro capture armed
 	recBuf        []tea.KeyMsg  // keys captured so far
 	macro         []tea.KeyMsg  // last completed macro
