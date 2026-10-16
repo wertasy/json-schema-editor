@@ -353,7 +353,16 @@ func (p *parser) buildChildren(n *jsondoc.Node, ctx *refCtx, depth int) []*FormN
 		}
 	}
 	var children []*FormNode
+	seen := map[string]bool{}
 	for _, m := range *props.Object {
+		// machine-generated schemas repeat keys inside one properties
+		// object (older sing-box schemas repeat the dial-fields tables);
+		// the document value always resolves to the first member, so later
+		// duplicates would be dead rows — keep the first occurrence only
+		if seen[m.Key] {
+			continue
+		}
+		seen[m.Key] = true
 		children = append(children, p.schema(m.Val, ctx, m.Key, reqSet[m.Key], depth+1))
 	}
 	return children

@@ -224,6 +224,35 @@ func TestRelativeRefAgainstDocBase(t *testing.T) {
 	}
 }
 
+// TestDuplicatePropertyKeys: machine-generated schemas repeat keys inside
+// one properties object (e.g. the dial-fields tables of older sing-box
+// schemas). jsondoc keeps every member, but the document value always
+// resolves to the first member, so later duplicates are dead rows — they
+// must be dropped, keeping the first occurrence.
+func TestDuplicatePropertyKeys(t *testing.T) {
+	fn := mustLoad(t, `{
+  "type": "object",
+  "properties": {
+    "a": {"type": "string", "title": "First A"},
+    "b": {"type": "integer"},
+    "a": {"type": "boolean"},
+    "c": {"type": "string"},
+    "b": {"type": "number", "title": "Second B"}
+  }
+}`)
+	var keys []string
+	for _, c := range fn.Children {
+		keys = append(keys, c.Key)
+	}
+	if strings.Join(keys, ",") != "a,b,c" {
+		t.Fatalf("children keys = %v, want [a b c]", keys)
+	}
+	a := child(t, fn, "a")
+	if a.Kind != KScalar || a.Kind == KBoolean {
+		t.Fatalf("first a must win, got kind=%v", a.Kind)
+	}
+}
+
 func TestAllOfMerge(t *testing.T) {
 	fn := mustLoad(t, `{
   "type": "object",
