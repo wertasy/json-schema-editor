@@ -18,7 +18,28 @@ import (
 	"json-schema-editor/internal/smodel"
 )
 
-const menuHelp = "↑/↓ · gg/G · enter edit/open · space · del delete · esc · ctrl+s save · / search · r replace · ctrl+c quit"
+const menuHelp = "↑/↓ · gg/G · enter edit/open · space · del delete · a add key · u undo · ctrl+r redo · esc · ctrl+s save · / search · r replace · ? help · ctrl+c quit"
+
+// helpLines is the full key reference shown by the "?" overlay.
+var helpLines = []string{
+	"↑/↓/j/k      move (wraps at both ends)",
+	"gg / G       jump to first / last row (Home/End too)",
+	"enter / → / l   edit field · open submenu",
+	"← / h        back one level",
+	"esc / q      cancel / back — q is a full alias outside text inputs",
+	"space        toggle boolean / enum member",
+	"d            delete array item (no confirm)",
+	"delete       delete the selected key-value pair",
+	"a            add a schema-less key under an object menu",
+	"u / ctrl+r   undo / redo",
+	"ctrl+s       save (stay in the session)",
+	"/            search below the current path",
+	"r            search & replace string values",
+	"@ / .        record / play a macro",
+	"?            open/close this help",
+	"ctrl+c       quit without saving (exit 130)",
+}
+
 const overlayHelp = "enter select · esc cancel"
 
 // maxMacroKeys caps a single recorded macro; reaching it stops recording and
@@ -35,15 +56,16 @@ var (
 	mStatus = lipgloss.NewStyle().Foreground(lipgloss.Color("3"))
 	mStar   = lipgloss.NewStyle().Foreground(lipgloss.Color("1"))
 	mErr    = lipgloss.NewStyle().Foreground(lipgloss.Color("1"))
+	mWarn   = lipgloss.NewStyle().Foreground(lipgloss.Color("3")) // unknown-key warnings: yellow, distinct from red errors
 	mTail   = lipgloss.NewStyle().Faint(true)
-	mHelp   = lipgloss.NewStyle().Faint(true).Foreground(lipgloss.AdaptiveColor{Light: "245", Dark: "240"})
+	mHelp   = lipgloss.NewStyle().Foreground(lipgloss.AdaptiveColor{Light: "245", Dark: "248"})
 	mDim    = lipgloss.NewStyle().Faint(true)
 
 	// panel chrome and value colors (adaptive: legible on light and dark)
 	mAccent  = lipgloss.NewStyle().Foreground(lipgloss.AdaptiveColor{Light: "27", Dark: "39"})
 	mSel     = lipgloss.NewStyle().Bold(true).Background(lipgloss.AdaptiveColor{Light: "250", Dark: "236"})
-	mValStr  = lipgloss.NewStyle().Foreground(lipgloss.AdaptiveColor{Light: "25", Dark: "51"})
-	mValNum  = lipgloss.NewStyle().Foreground(lipgloss.AdaptiveColor{Light: "28", Dark: "114"})
+	mValStr  = lipgloss.NewStyle().Foreground(lipgloss.AdaptiveColor{Light: "28", Dark: "114"})
+	mValNum  = lipgloss.NewStyle().Foreground(lipgloss.AdaptiveColor{Light: "25", Dark: "51"})
 	mValBool = lipgloss.NewStyle().Foreground(lipgloss.AdaptiveColor{Light: "127", Dark: "212"})
 	mValEnum = lipgloss.NewStyle().Foreground(lipgloss.AdaptiveColor{Light: "166", Dark: "215"})
 	mValObj  = lipgloss.NewStyle().Bold(true)
@@ -60,6 +82,15 @@ type editState struct {
 	cands  []string // existing same-key values in the document (fixed at open)
 	sugs   []string // cands filtered by the current input prefix
 	sugIdx int      // tab cycle position (-1 = none)
+}
+
+// addState is the key-name input overlay for a: add a schema-less
+// key-value member under the current object menu.
+type addState struct {
+	path []any            // object the new member goes into
+	node *smodel.FormNode // the menu's node; its Children are the known keys
+	ti   textinput.Model
+	err  string
 }
 
 // selState is the full-screen enum option picker.
@@ -90,6 +121,7 @@ type issuesState struct {
 type issue struct {
 	msg  string
 	path []any
+	warn bool // editor-level warning (schema-unknown key), not a validator error
 }
 
 // errsState is the save-time validation error overlay.
@@ -130,23 +162,28 @@ type listModel struct {
 	aborted       bool
 	exiting       bool // a save requested the session to end (Save and exit row)
 	edit          *editState
+	add           *addState // key-name input for a schema-less member (a)
 	sel           *selState
 	text          *textState
 	errs          *errsState
 	confirm       *confirmState
+	help          bool // "?" keyboard-help overlay
 	search        searchState
 	menuCache     map[*smodel.FormNode]*smodel.FormNode
-	notice        string        // transient list-mode message, cleared on the next key
-	gArm          time.Time     // nonzero while a lone g is waiting for its gg partner
-	recording     bool          // macro capture armed
-	recBuf        []tea.KeyMsg  // keys captured so far
-	macro         []tea.KeyMsg  // last completed macro
-	baseline      *jsondoc.Node // loaded/last-saved snapshot for change marks
-	issuesNow     []issue       // live validation problems (refreshed after writes)
-	errPaths      [][]any       // issue locations, marked on their rows
-	issues        *issuesState  // open issues overlay
-	issuesBack    *issuesState  // parked overlay: esc at the jump target returns here
-	issuesReturn  int           // stack depth of the jump target
+	notice        string          // transient list-mode message, cleared on the next key
+	gArm          time.Time       // nonzero while a lone g is waiting for its gg partner
+	recording     bool            // macro capture armed
+	recBuf        []tea.KeyMsg    // keys captured so far
+	macro         []tea.KeyMsg    // last completed macro
+	undoStack     []*jsondoc.Node // doc snapshot before each change; u restores
+	redoStack     []*jsondoc.Node // undone states; ctrl+r restores
+	baseline      *jsondoc.Node   // loaded/last-saved snapshot for change marks
+	issuesNow     []issue         // live validation problems (refreshed after writes)
+	errPaths      [][]any         // validation error locations, marked on their rows
+	warnPaths     [][]any         // unknown-key warning locations (yellow marks)
+	issues        *issuesState    // open issues overlay
+	issuesBack    *issuesState    // parked overlay: esc at the jump target returns here
+	issuesReturn  int             // stack depth of the jump target
 }
 
 // newMenuTextarea builds the raw-JSON editor sized for the current screen.
@@ -175,13 +212,17 @@ func newMenuTextarea(m *listModel) textarea.Model {
 
 // newListModel builds the root menu for the form tree.
 func newListModel(model *smodel.FormNode, doc *jsondoc.Node, opts Options) *listModel {
+	stack := []*menuState{{kind: menuKindFor(model), node: model}}
+	if doc != nil {
+		seedVariantCursor(stack[0], doc) // oneOf root: open on the matched variant
+	}
 	m := &listModel{
 		model:  model,
 		doc:    doc,
 		opts:   opts,
 		width:  80,
 		height: 24,
-		stack:  []*menuState{{kind: menuKindFor(model), node: model}},
+		stack:  stack,
 	}
 	if doc != nil {
 		m.baseline = jsondoc.FromAny(doc.ToAny())
@@ -194,8 +235,14 @@ func newListModel(model *smodel.FormNode, doc *jsondoc.Node, opts Options) *list
 func (m *listModel) setIssues(items []issue) {
 	m.issuesNow = items
 	m.errPaths = m.errPaths[:0]
+	m.warnPaths = m.warnPaths[:0]
 	for _, it := range items {
-		if it.path != nil {
+		if it.path == nil {
+			continue
+		}
+		if it.warn {
+			m.warnPaths = append(m.warnPaths, it.path)
+		} else {
 			m.errPaths = append(m.errPaths, it.path)
 		}
 	}
@@ -335,30 +382,51 @@ func (m *listModel) rowIndexByKey(st *menuState, key string) int {
 func (m *listModel) Init() tea.Cmd { return nil }
 
 // dispatchKey routes one key to the active handler and runs the post-key
-// refreshes (variant inference, live validation issues).
+// refreshes (variant inference, live validation issues). Keys that change
+// the document push the pre-key snapshot onto the undo stack, so one undo
+// step reverts exactly one key's worth of changes. u/ctrl+r act only in
+// list mode and bypass the snapshot wrap — restoring is not an edit.
 func (m *listModel) dispatchKey(msg tea.KeyMsg) tea.Cmd {
-	var cmd tea.Cmd
-	switch {
-	case m.confirm != nil:
-		cmd = m.keyConfirm(msg)
-	case m.issues != nil:
-		cmd = m.keyIssues(msg)
-	case m.errs != nil:
-		cmd = m.keyErrs(msg)
-	case m.text != nil:
-		cmd = m.keyText(msg)
-	case m.sel != nil:
-		cmd = m.keySel(msg)
-	case m.search.active:
-		cmd = m.keySearch(msg)
-	case m.edit != nil:
-		cmd = m.keyEdit(msg)
-	default:
-		cmd = m.keyList(msg)
+	if m.listMode() && m.applyHistoryKey(msg) {
+		m.gArm = time.Time{} // a history key breaks any armed gg combo
+		m.refreshVariantMenu()
+		m.refreshIssues()
+		return nil
+	}
+	pre := m.doc.Clone()
+	cmd := m.routeKey(msg)
+	if !nodesEqual(pre, m.doc) {
+		m.pushUndo(pre)
 	}
 	m.refreshVariantMenu()
 	m.refreshIssues()
 	return cmd
+}
+
+// routeKey is the overlay-priority dispatch: the innermost open surface
+// consumes the key.
+func (m *listModel) routeKey(msg tea.KeyMsg) tea.Cmd {
+	switch {
+	case m.help:
+		return m.keyHelp(msg)
+	case m.confirm != nil:
+		return m.keyConfirm(msg)
+	case m.issues != nil:
+		return m.keyIssues(msg)
+	case m.errs != nil:
+		return m.keyErrs(msg)
+	case m.text != nil:
+		return m.keyText(msg)
+	case m.sel != nil:
+		return m.keySel(msg)
+	case m.search.active:
+		return m.keySearch(msg)
+	case m.edit != nil:
+		return m.keyEdit(msg)
+	case m.add != nil:
+		return m.keyAdd(msg)
+	}
+	return m.keyList(msg)
 }
 
 func (m *listModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
@@ -371,6 +439,15 @@ func (m *listModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if msg.Type == tea.KeyCtrlC {
 			m.aborted = true
 			return m, tea.Quit
+		}
+		// q is an esc alias in every non-typing context (exit/cancel
+		// semantics); inside a focused text input it is an ordinary
+		// character and esc does the cancelling. Rewriting here means
+		// overlays, list mode and recorded macros all see esc; macros
+		// need no extra handling — q is rewritten before recording only
+		// outside inputs, so replays type/cancel exactly what was captured.
+		if msg.Type == tea.KeyRunes && !msg.Alt && string(msg.Runes) == "q" && !m.typing() {
+			msg = tea.KeyMsg{Type: tea.KeyEsc}
 		}
 		m.notice = ""
 		if cmd, consumed := m.macroControl(msg); consumed {
@@ -390,6 +467,8 @@ func (m *listModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	switch {
 	case m.edit != nil:
 		m.edit.ti, cmd = m.edit.ti.Update(msg)
+	case m.add != nil:
+		m.add.ti, cmd = m.add.ti.Update(msg)
 	case m.text != nil:
 		m.text.ta, cmd = m.text.ta.Update(msg)
 	case m.search.active:
@@ -405,6 +484,8 @@ func (m *listModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 func (m *listModel) View() string {
 	switch {
+	case m.help:
+		return m.helpView()
 	case m.confirm != nil:
 		return m.confirmView()
 	case m.issues != nil:
@@ -421,8 +502,8 @@ func (m *listModel) View() string {
 
 // --- list rendering ------------------------------------------------------
 
-// breadcrumb renders the navigation context as a jq-like document path
-// ("$/a/b[0]"). Levels that do not extend the path — oneOf pickers and
+// breadcrumb renders the navigation context as a document path
+// ("$/a/b/0"). Levels that do not extend the path — oneOf pickers and
 // variant editors — add no segment (the title line names them). Overlong
 // paths keep their tail, which is the informative end.
 func (m *listModel) breadcrumb() string {
@@ -488,11 +569,19 @@ func (m *listModel) listView() string {
 
 	rows := menuRows(m)
 	m.clampCursor(rows)
+	desc := m.focusedDesc(rows)
 	h := m.height - header - 1
+	if desc != "" {
+		h--
+	}
 	if m.notice != "" {
 		h--
 	}
 	m.writeRows(&b, rows, h)
+	if desc != "" {
+		b.WriteString(mHelp.Render(clipRunes(desc, m.width)))
+		b.WriteByte('\n')
+	}
 	if m.notice != "" {
 		b.WriteString(mErr.Render(clipRunes(m.notice, m.width)))
 		b.WriteByte('\n')
@@ -507,8 +596,39 @@ func (m *listModel) helpLine() string {
 	return m.recHint(menuHelp)
 }
 
+// helpView renders the "?" overlay: the full key reference.
+func (m *listModel) helpView() string {
+	var b strings.Builder
+	b.WriteString(mTitle.Render("Keyboard help"))
+	b.WriteString("\n\n")
+	for _, l := range helpLines {
+		b.WriteString(mHelp.Render(clipRunes(l, m.width)))
+		b.WriteByte('\n')
+	}
+	b.WriteString(m.recHint("esc/? close"))
+	b.WriteByte('\n')
+	return b.String()
+}
+
+// focusedDesc returns the schema description of the highlighted row (shown
+// dim above the help bar): field/drill rows carry it in fn, oneOf variant
+// rows in variant.
+func (m *listModel) focusedDesc(rows []row) string {
+	if len(rows) == 0 {
+		return ""
+	}
+	r := rows[m.top().cursor]
+	if r.fn != nil && r.fn.Desc != "" {
+		return r.fn.Desc
+	}
+	if r.variant != nil {
+		return r.variant.Desc
+	}
+	return ""
+}
+
 // recHint renders a hint row; while a macro capture is running it keeps a
-// right-aligned "● REC n" indicator instead of the hint tail, so arming q
+// right-aligned "● REC n" indicator instead of the hint tail, so arming @
 // stays visible on every surface that renders hints.
 func (m *listModel) recHint(hints string) string {
 	rec := fmt.Sprintf("● REC %d", len(m.recBuf))
@@ -558,6 +678,13 @@ func (m *listModel) writeRows(b *strings.Builder, rows []row, height int) {
 	// in-place input for a brand-new array item (row not in the list yet)
 	if m.edit != nil && m.edit.isNew {
 		m.writeCut(b, m.editLines(m.titleCol("New item")))
+	}
+	// key-name input for a schema-less member (a)
+	if m.add != nil {
+		m.writeCut(b, cursorPrefix(true)+m.titleCol("New key")+m.add.ti.View())
+		if m.add.err != "" {
+			m.writeCut(b, mErr.Render("  "+m.add.err))
+		}
 	}
 }
 
@@ -721,11 +848,11 @@ func (m *listModel) rowLine(r row, cursor bool) string {
 		left = mDim.Render(r.label)
 	case rowUnknown:
 		// document key the schema does not define: edit as raw JSON or delete
-		left = mErr.Render(r.label)
+		left = mWarn.Render(r.label)
 		v, _ := m.doc.Get(r.path)
 		right = m.rawValueStyle(v).Render(m.rawValueSummary(r.path))
 	case rowIssues:
-		left = mErr.Render(r.label)
+		left = m.issuesSeverity().Render(r.label)
 	default: // rowField / rowDrill
 		title := r.fn.Title
 		if m.fieldRequired(r) {
@@ -744,7 +871,7 @@ func (m *listModel) rowLine(r row, cursor bool) string {
 	}
 	if r.kind == rowField || r.kind == rowDrill || r.kind == rowUnknown {
 		if m.hasIssue(r.path) {
-			line += " " + mErr.Render("⚠")
+			line += " " + m.issueMark(r.path)
 		}
 		line += m.changeMark(r.path)
 	}
@@ -774,7 +901,7 @@ func (m *listModel) rawValueSummary(path []any) string {
 		}
 		return "no"
 	case v.Object != nil:
-		if s := objectSummary(v); s != "" {
+		if s := objectSummary(nil, v); s != "" {
 			return s
 		}
 		return "{}"
@@ -799,15 +926,60 @@ func (m *listModel) rawValueStyle(v *jsondoc.Node) lipgloss.Style {
 	return mValObj
 }
 
-// hasIssue reports whether path is a validation issue location or one of its
+// hasErr reports whether path is a validation-error location or one of its
 // ancestors (so containers light up too).
-func (m *listModel) hasIssue(path []any) bool {
+func (m *listModel) hasErr(path []any) bool {
 	for _, p := range m.errPaths {
 		if isPathPrefix(path, p) {
 			return true
 		}
 	}
 	return false
+}
+
+// hasWarn reports whether path is a warning-only issue location or one of
+// its ancestors. Errors take precedence over warnings at the call site.
+func (m *listModel) hasWarn(path []any) bool {
+	for _, p := range m.warnPaths {
+		if isPathPrefix(path, p) {
+			return true
+		}
+	}
+	return false
+}
+
+// hasIssue reports whether any problem (error or warning) touches path.
+func (m *listModel) hasIssue(path []any) bool {
+	return m.hasErr(path) || m.hasWarn(path)
+}
+
+// issueMark renders the ⚠ row mark in the worst severity at path: red for
+// validation errors, yellow for unknown-key warnings.
+func (m *listModel) issueMark(path []any) string {
+	if m.hasErr(path) {
+		return mErr.Render("⚠")
+	}
+	return mWarn.Render("⚠")
+}
+
+// issuesSeverity returns the style for the aggregate status row: red while
+// any real validation error remains, yellow when only warnings are left.
+func (m *listModel) issuesSeverity() lipgloss.Style {
+	for _, it := range m.issuesNow {
+		if !it.warn {
+			return mErr
+		}
+	}
+	return mWarn
+}
+
+// severityStyle picks the text color for one issue line: yellow for
+// unknown-key warnings, red for validator errors.
+func (m *listModel) severityStyle(it issue) lipgloss.Style {
+	if it.warn {
+		return mWarn
+	}
+	return mErr
 }
 
 // variantContains reports whether target is one of the oneOf node's variants
@@ -968,7 +1140,7 @@ func (m *listModel) variantValueSummary(v *smodel.FormNode, val *jsondoc.Node) s
 	switch v.Kind {
 	case smodel.KObject:
 		if val.Object != nil {
-			return objectSummary(val)
+			return objectSummary(v, val)
 		}
 	case smodel.KEnum:
 		enc := smodel.EncodeValue(val)
@@ -1018,7 +1190,7 @@ func (m *listModel) clampCursor(rows []row) {
 
 func (m *listModel) confirmView() string {
 	return mTitle.Render(m.confirm.title) + "\n\n" +
-		mHelp.Render("y yes · n no · esc no") + "\n"
+		mHelp.Render("y/enter/space yes · n/esc no") + "\n"
 }
 
 // issuesView lists the load-time validation issues; enter jumps to the field.
@@ -1052,9 +1224,10 @@ func (m *listModel) issuesView() string {
 	}
 	cut := lipgloss.NewStyle().MaxWidth(m.width)
 	for i := off; i < len(m.issues.items) && i < off+height; i++ {
-		line := "  " + m.issues.items[i].msg
+		it := m.issues.items[i]
+		line := "  " + m.severityStyle(it).Render(it.msg)
 		if i == m.issues.cursor {
-			line = mSel.Render("> " + m.issues.items[i].msg)
+			line = mSel.Render("> " + it.msg)
 		}
 		b.WriteString(cut.Render(line))
 		b.WriteByte('\n')

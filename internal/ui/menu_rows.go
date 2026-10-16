@@ -6,6 +6,7 @@ package ui
 
 import (
 	"fmt"
+	"sort"
 	"strconv"
 	"strings"
 	"unicode"
@@ -162,12 +163,15 @@ func menuRowsFor(lm *listModel, st *menuState) []row {
 		rows = append(rows, row{kind: rowNoItems, idx: -1, label: "( nothing here )"})
 	}
 	if len(lm.stack) > 0 && lm.stack[0] == st && len(lm.issuesNow) > 0 {
-		noun := "validation errors"
-		if len(lm.issuesNow) == 1 {
-			noun = "validation error"
+		errs, warns := 0, 0
+		for _, it := range lm.issuesNow {
+			if it.warn {
+				warns++
+			} else {
+				errs++
+			}
 		}
-		label := fmt.Sprintf("⚠ %d %s", len(lm.issuesNow), noun)
-		rows = append([]row{{kind: rowIssues, idx: -1, label: label}}, rows...)
+		rows = append([]row{{kind: rowIssues, idx: -1, label: issueStatusLabel(errs, warns)}}, rows...)
 	}
 	if len(lm.stack) > 0 && lm.stack[0] == st {
 		rows = append(rows,
@@ -239,19 +243,9 @@ func summary(lm *listModel, fn *smodel.FormNode, path []any) string {
 		}
 		return "—"
 	case smodel.KObject:
-		return objectSummary(v)
+		return objectSummary(fn, v)
 	case smodel.KArray:
-		if v.Array == nil {
-			return "—"
-		}
-		switch n := len(*v.Array); n {
-		case 0:
-			return "empty"
-		case 1:
-			return "1 item"
-		default:
-			return fmt.Sprintf("%d items", n)
-		}
+		return arraySummary(v)
 	case smodel.KOneOf:
 		idx := currentVariant(fn, v)
 		if idx < 0 {
@@ -263,9 +257,9 @@ func summary(lm *listModel, fn *smodel.FormNode, path []any) string {
 			// a real title gives the object context; untitled variants
 			// show the members alone (no meaningless fallback label)
 			if variant.Title != "" {
-				return variant.Title + " " + objectSummary(v)
+				return variant.Title + " " + objectSummary(variant, v)
 			}
-			return objectSummary(v)
+			return objectSummary(variant, v)
 		case smodel.KEnum:
 			enc := smodel.EncodeValue(v)
 			for _, o := range variant.Enum {
@@ -279,17 +273,7 @@ func summary(lm *listModel, fn *smodel.FormNode, path []any) string {
 			}
 			return "[y]"
 		case smodel.KArray:
-			if v.Array == nil {
-				return "—"
-			}
-			switch n := len(*v.Array); n {
-			case 0:
-				return "empty"
-			case 1:
-				return "1 item"
-			default:
-				return fmt.Sprintf("%d items", n)
-			}
+			return arraySummary(v)
 		case smodel.KScalar:
 			// leaf variants show their value, like any scalar row
 			if s := scalarText(v); s != "" {
@@ -306,8 +290,12 @@ func summary(lm *listModel, fn *smodel.FormNode, path []any) string {
 }
 
 // objectSummary shows the first two object members as k=v (nested values as
-// {…}/[N]), then " +N" for the rest; "{}" when empty.
-func objectSummary(n *jsondoc.Node) string {
+// {…}/[N]), then " +N" for the rest; "{}" when empty. Members render in the
+// schema's declared order (fn.Children) so every row of a list summarizes
+// alike regardless of how the document ordered its keys; keys the schema
+// does not know keep document order after the known ones. fn may be nil
+// (schema-less values): plain document order then.
+func objectSummary(fn *smodel.FormNode, n *jsondoc.Node) string {
 	if n == nil {
 		return "{}"
 	}
@@ -318,9 +306,29 @@ func objectSummary(n *jsondoc.Node) string {
 	if len(mem) == 0 {
 		return "{}"
 	}
+	rank := map[string]int{}
+	if fn != nil {
+		for i, c := range fn.Children {
+			if _, ok := rank[c.Key]; !ok {
+				rank[c.Key] = i
+			}
+		}
+	}
+	ordered := append([]jsondoc.Member(nil), mem...) // never reorder the doc
+	sort.SliceStable(ordered, func(i, j int) bool {
+		ri, ok := rank[ordered[i].Key]
+		if !ok {
+			ri = len(rank)
+		}
+		rj, ok := rank[ordered[j].Key]
+		if !ok {
+			rj = len(rank)
+		}
+		return ri < rj
+	})
 	parts := make([]string, 0, 3)
-	for i := 0; i < len(mem) && i < 2; i++ {
-		m := mem[i]
+	for i := 0; i < len(ordered) && i < 2; i++ {
+		m := ordered[i]
 		switch {
 		case m.Val == nil || m.Val.Null:
 			parts = append(parts, m.Key+"=null")
@@ -346,6 +354,64 @@ func objectSummary(n *jsondoc.Node) string {
 // valueClip truncates a scalar value for the summary column (24 runes,
 // ellipsis included).
 func valueClip(s string) string { return clipRunes(s, 24) }
+
+// arraySummary renders an array value column: any list that is not purely
+// object-valued previews its members ("[4] a 1 {…} +1" — bracketed count,
+// first values space-separated, "+N" for the rest; objects as {…}, nested
+// arrays as [N]), pure object arrays just count ("N items"), "empty" when
+// unset.
+func arraySummary(v *jsondoc.Node) string {
+	if v == nil || v.Array == nil {
+		return "—"
+	}
+	arr := *v.Array
+	if len(arr) == 0 {
+		return "empty"
+	}
+	label := fmt.Sprintf("%d item", len(arr))
+	if len(arr) != 1 {
+		label += "s"
+	}
+	pureObjects := true
+	for _, it := range arr {
+		if it == nil || it.Object == nil {
+			pureObjects = false
+			break
+		}
+	}
+	if pureObjects {
+		return label
+	}
+	const preview = 3
+	parts := make([]string, 0, preview)
+	for i := 0; i < len(arr) && i < preview; i++ {
+		parts = append(parts, arrayItemBrief(arr[i]))
+	}
+	s := fmt.Sprintf("[%d] ", len(arr)) + strings.Join(parts, " ")
+	if len(arr) > preview {
+		s += fmt.Sprintf(" +%d", len(arr)-preview)
+	}
+	return s
+}
+
+// arrayItemBrief renders one array member for the preview column.
+func arrayItemBrief(n *jsondoc.Node) string {
+	switch {
+	case n == nil || n.Null:
+		return "null"
+	case n.Object != nil:
+		return "{…}"
+	case n.Array != nil:
+		return fmt.Sprintf("[%d]", len(*n.Array))
+	case n.Str != nil:
+		return clipRunes(*n.Str, 16)
+	case n.Num != nil:
+		return n.Num.String()
+	case n.Bool != nil:
+		return fmt.Sprintf("%v", *n.Bool)
+	}
+	return clipRunes(smodel.EncodeValue(n), 16)
+}
 
 // clipRunes truncates s to max runes, the last being an ellipsis.
 func clipRunes(s string, max int) string {
@@ -432,6 +498,21 @@ func currentVariant(node *smodel.FormNode, val *jsondoc.Node) int {
 		}
 	}
 	return -1
+}
+
+// seedVariantCursor points a freshly built oneOf picker state at the variant
+// matching the current value (the ● row); unset values stay on row 0.
+func seedVariantCursor(st *menuState, doc *jsondoc.Node) {
+	if st == nil || st.kind != menuOneOf || doc == nil {
+		return
+	}
+	v, ok := doc.Get(st.path)
+	if !ok {
+		return
+	}
+	if idx := currentVariant(st.node, v); idx >= 0 {
+		st.cursor = idx
+	}
 }
 
 // displayTitle is the header/label for a node whose schema gave it no title
@@ -747,6 +828,9 @@ func rebuildStack(root *smodel.FormNode, doc *jsondoc.Node, path []any) []*menuS
 			cur, curPath = cur.Items, ipath
 		}
 	}
+	for i := range stack {
+		seedVariantCursor(stack[i], doc)
+	}
 	return stack
 }
 
@@ -892,7 +976,7 @@ func unknownKeyIssues(model *smodel.FormNode, doc *jsondoc.Node) []issue {
 		return nil
 	}
 	var out []issue
-	warn := func(path []any, key string) {
+	emit := func(path []any, key string) {
 		p := pathFor(path, key)
 		ptr := ""
 		for _, seg := range p {
@@ -901,6 +985,7 @@ func unknownKeyIssues(model *smodel.FormNode, doc *jsondoc.Node) []issue {
 		out = append(out, issue{
 			msg:  fmt.Sprintf("at '%s': unknown key %q (not in the schema)", ptr, key),
 			path: p,
+			warn: true,
 		})
 	}
 	unknownOf := func(val *jsondoc.Node, known map[string]bool, path []any) {
@@ -912,7 +997,7 @@ func unknownKeyIssues(model *smodel.FormNode, doc *jsondoc.Node) []issue {
 				continue // the editor's own schema pointer, not a user mistake
 			}
 			if !known[mem.Key] {
-				warn(path, mem.Key)
+				emit(path, mem.Key)
 			}
 		}
 	}
@@ -976,20 +1061,50 @@ func memberOf(n *jsondoc.Node, key string) *jsondoc.Node {
 	return nil
 }
 
-// filterSearch narrows the index to rows whose Title, Key or value overview
-// contains q; fold=true compares case-insensitively (the historic behavior),
-// fold=false requires an exact-case match. An empty query keeps everything.
-// Variant rows match schema identity only: their jump target is the picker
-// row. Schema-less rows (unknown keys) match their key and value overview.
+// filterSearch narrows the index to rows matching q. A query containing "/"
+// is a document-path query: the row path ($/a/b/0) is the only match target —
+// title/key/value matching is suspended (search values with a slash-free
+// keyword instead). A leading "$" or "/" anchors the match at the document
+// root; without it the path matches anywhere. Otherwise Title, Key or value
+// overview must contain q; fold=true compares case-insensitively (the
+// historic behavior), fold=false requires an exact-case match. An empty query
+// keeps everything. Hits whose leaf key equals q (text mode) or whose full
+// path equals the query path (path mode) rank first; ties keep document
+// order. Variant rows match schema identity only: their jump target is the
+// picker row. Schema-less rows (unknown keys) match their key and value
+// overview.
 func filterSearch(lm *listModel, all []row, q string, fold bool) []row {
 	if q == "" {
 		return all
 	}
-	if fold {
+	pathQ, anchored, isPath := parsePathQuery(q)
+	if fold && !isPath {
 		q = strings.ToLower(q)
 	}
 	var out []row
 	for _, r := range all {
+		if isPath {
+			p := docPath(r.path)
+			if fold {
+				p = strings.ToLower(p)
+			}
+			needle := "/" + pathQ
+			if fold {
+				needle = strings.ToLower(needle)
+			}
+			keep := true // bare "/", "$/" or "$//": every row
+			if pathQ != "" {
+				if anchored {
+					keep = strings.HasPrefix(p, "$"+needle)
+				} else {
+					keep = strings.Contains(p, needle)
+				}
+			}
+			if keep {
+				out = append(out, r)
+			}
+			continue
+		}
 		var text string
 		if r.fn == nil {
 			if r.kind != rowUnknown {
@@ -1011,7 +1126,51 @@ func filterSearch(lm *listModel, all []row, q string, fold bool) []row {
 			out = append(out, r)
 		}
 	}
+	eq := func(a, b string) bool {
+		if fold {
+			return strings.EqualFold(a, b)
+		}
+		return a == b
+	}
+	score := func(r row) int {
+		if isPath && pathQ != "" && eq(docPath(r.path), "$/"+pathQ) {
+			return 0 // exact full path (path mode)
+		}
+		if !isPath && eq(rowKey(r), q) {
+			return 0 // exact leaf key (text mode)
+		}
+		return 1
+	}
+	sort.SliceStable(out, func(i, j int) bool { return score(out[i]) < score(out[j]) })
 	return out
+}
+
+// parsePathQuery classifies a query containing "/" as a document-path query:
+// the row path ($/a/b/0) is then the only match target — title/key/value
+// matching is suspended (search values with a slash-free keyword instead).
+// A leading "$" or "/" anchors the match at the document root; without it
+// the path matches anywhere. norm drops the "$"/"/" prefix and a trailing
+// "/" (partial last segments still match: prefix semantics).
+func parsePathQuery(q string) (norm string, anchored, isPath bool) {
+	isPath = strings.Contains(q, "/")
+	anchored = strings.HasPrefix(q, "$") || strings.HasPrefix(q, "/")
+	norm = strings.TrimSuffix(strings.TrimPrefix(strings.TrimPrefix(q, "$"), "/"), "/")
+	return norm, anchored, isPath
+}
+
+// rowKey returns a row's leaf key for exact-key ranking: the last path
+// segment when it is a string, else the schema node's key (array-item drill
+// rows end in an index and rank by their array key).
+func rowKey(r row) string {
+	if n := len(r.path); n > 0 {
+		if s, ok := r.path[n-1].(string); ok {
+			return s
+		}
+	}
+	if r.fn != nil {
+		return r.fn.Key
+	}
+	return ""
 }
 
 // unknownMatchText is the match text of a schema-less row: its key (the
@@ -1178,8 +1337,29 @@ func docArrayLen(doc *jsondoc.Node, path []any) int {
 	return len(*n.Array)
 }
 
-// docPath renders a document path as the jq-like breadcrumb string
-// ("$/a/b[0]", "$" for the root).
+// issueStatusLabel composes the root status row label: validation errors
+// and unknown-key warnings are counted separately, e.g.
+// "⚠ 2 validation errors", "⚠ 1 validation error · 1 warning",
+// "⚠ 2 warnings".
+func issueStatusLabel(errs, warns int) string {
+	plural := func(n int) string {
+		if n == 1 {
+			return ""
+		}
+		return "s"
+	}
+	switch {
+	case errs > 0 && warns > 0:
+		return fmt.Sprintf("⚠ %d validation error%s · %d warning%s", errs, plural(errs), warns, plural(warns))
+	case errs > 0:
+		return fmt.Sprintf("⚠ %d validation error%s", errs, plural(errs))
+	default:
+		return fmt.Sprintf("⚠ %d warning%s", warns, plural(warns))
+	}
+}
+
+// docPath renders a document path as the breadcrumb string ("$/a/b/0",
+// "$" for the root). Keys and array indices both use "/" segments.
 func docPath(path []any) string {
 	var b strings.Builder
 	b.WriteByte('$')
@@ -1189,7 +1369,7 @@ func docPath(path []any) string {
 			b.WriteByte('/')
 			b.WriteString(s)
 		case int:
-			fmt.Fprintf(&b, "[%d]", s)
+			fmt.Fprintf(&b, "/%d", s)
 		}
 	}
 	return b.String()

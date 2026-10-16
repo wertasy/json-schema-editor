@@ -109,8 +109,8 @@ func TestOneOfItemAddInfer(t *testing.T) {
 	if top.variantOf != oneOf {
 		t.Fatalf("add should open the dynamic menu of the oneOf, got variantOf=%v", top.variantOf)
 	}
-	// the breadcrumb reads like a jq path, indices included
-	if v := m.View(); !contains(v, "$/inbounds[0]") {
+	// the breadcrumb carries the item index
+	if v := m.View(); !contains(v, "$/inbounds/0") {
 		t.Fatalf("breadcrumb should carry the item index:\n%s", v)
 	}
 	if v := m.View(); !contains(v, "Type") || !contains(v, "Listen") || !contains(v, "Password") {
@@ -127,7 +127,7 @@ func TestOneOfItemAddInfer(t *testing.T) {
 	}
 	press(m, "enter") // choose direct
 	if n, _ := doc.Get([]any{"inbounds", 0, "type"}); n == nil || n.Str == nil || *n.Str != "direct" {
-		t.Fatalf("inbounds[0].type = %v, want direct", n)
+		t.Fatalf("inbounds/0.type = %v, want direct", n)
 	}
 	if v := m.View(); !contains(v, "Listen") || contains(v, "Password") {
 		t.Fatalf("direct should narrow the menu to its own fields:\n%s", v)
@@ -144,7 +144,7 @@ func TestOneOfItemAddInfer(t *testing.T) {
 	}
 	press(m, "down", "enter") // choose trojan
 	if n, _ := doc.Get([]any{"inbounds", 0, "type"}); n == nil || n.Str == nil || *n.Str != "trojan" {
-		t.Fatalf("inbounds[0].type = %v, want trojan", n)
+		t.Fatalf("inbounds/0.type = %v, want trojan", n)
 	}
 	if v := m.View(); !contains(v, "Password") {
 		t.Fatalf("trojan should expose its own fields:\n%s", v)
@@ -248,7 +248,9 @@ func TestScalarVariantSelection(t *testing.T) {
 	if v := m.View(); !contains(v, "● variant 1") {
 		t.Fatalf("current mark missing:\n%s", v)
 	}
-	m.top().cursor = 0
+	if m.top().cursor != 0 {
+		t.Fatalf("picker must open on the current (string) variant, cursor = %d", m.top().cursor)
+	}
 	press(m, "enter")
 	if m.confirm != nil {
 		t.Fatal("re-entering the current variant must not confirm")
@@ -271,6 +273,48 @@ func TestScalarVariantSelection(t *testing.T) {
 	}
 	if m.top().kind != menuObject || m.top().node.Key != "http_client" {
 		t.Fatalf("object variant editor should open, got kind=%v", m.top().kind)
+	}
+}
+
+func TestVariantPickerCursorOnCurrentValue(t *testing.T) {
+	// sing-box ip_cidr style: scalar vs list-of-string variant; the current
+	// value is a list, so the picker must open on the list row (the ● row)
+	client := &smodel.FormNode{Key: "ip_cidr", Title: "IP CIDR", Kind: smodel.KOneOf, Variants: []*smodel.FormNode{
+		{Key: "ip_cidr", Kind: smodel.KScalar, JSONType: "string"},
+		{Key: "ip_cidr", Kind: smodel.KArray,
+			Items: &smodel.FormNode{Key: "ip_cidr", Kind: smodel.KScalar, JSONType: "string"}},
+	}}
+	root := &smodel.FormNode{Key: "$", Title: "Root", Kind: smodel.KObject,
+		Children: []*smodel.FormNode{client}}
+	m := newListModel(root, tobj(tmem("ip_cidr", tarr(tstr("1.2.3.4")))), Options{})
+	m.Update(tea.WindowSizeMsg{Width: 100, Height: 30})
+	press(m, "enter") // IP CIDR row → variant picker
+	if m.top().kind != menuOneOf {
+		t.Fatalf("expected the picker, got kind=%v", m.top().kind)
+	}
+	if m.top().cursor != 1 {
+		t.Fatalf("picker cursor = %d, want 1 (current value is a list)", m.top().cursor)
+	}
+	if v := m.View(); !contains(v, "●") || !contains(v, "list of string") {
+		t.Fatalf("current list variant should be marked:\n%s", v)
+	}
+
+	// no value: picker opens on the first row
+	m2 := newListModel(root, tobj(), Options{})
+	m2.Update(tea.WindowSizeMsg{Width: 100, Height: 30})
+	press(m2, "enter")
+	if m2.top().kind != menuOneOf || m2.top().cursor != 0 {
+		t.Fatalf("unset picker: kind=%v cursor=%d, want menuOneOf/0", m2.top().kind, m2.top().cursor)
+	}
+
+	// search-jump reaches the picker through rebuildStack: same seeding.
+	// The hit is the container row itself, so cursorForRow yields no match
+	// and the rebuilt stack's cursor must survive.
+	m3 := newListModel(root, tobj(tmem("ip_cidr", tarr(tstr("1.2.3.4")))), Options{})
+	m3.Update(tea.WindowSizeMsg{Width: 100, Height: 30})
+	press(m3, "/", "c", "i", "d", "r", "enter")
+	if m3.top().kind != menuOneOf || m3.top().cursor != 1 {
+		t.Fatalf("search jump: kind=%v cursor=%d, want menuOneOf/1", m3.top().kind, m3.top().cursor)
 	}
 }
 
@@ -423,8 +467,8 @@ func TestOneOfLeafSummaries(t *testing.T) {
 		t.Errorf("string variant summary = %q, want the value", got)
 	}
 	lm2 := lmAt(tobj(tmem("tag", tarr(tstr("a"), tstr("b")))))
-	if got := summary(lm2, tag, []any{"tag"}); got != "2 items" {
-		t.Errorf("array variant summary = %q, want 2 items", got)
+	if got := summary(lm2, tag, []any{"tag"}); got != "[2] a b" {
+		t.Errorf("array variant summary = %q, want [2] a b", got)
 	}
 
 	// the rendered row shows the value too (no "variant 1" echo)
@@ -435,7 +479,7 @@ func TestOneOfLeafSummaries(t *testing.T) {
 	}
 }
 
-func TestBreadcrumbJQPath(t *testing.T) {
+func TestBreadcrumbPath(t *testing.T) {
 	root, _, _ := inferModel()
 	lm := lmAt(tobj())
 	lm.model = root
@@ -446,26 +490,26 @@ func TestBreadcrumbJQPath(t *testing.T) {
 		{kind: menuItems, node: childOf(t, root, "inbounds"), path: []any{"inbounds"}},
 		{kind: menuObject, node: oneOfOf(t, root, "inbounds"), path: []any{"inbounds", 0}},
 	}
-	if got := lm.breadcrumb(); got != "$/inbounds[0]" {
-		t.Fatalf("breadcrumb = %q, want $/inbounds[0]", got)
+	if got := lm.breadcrumb(); got != "$/inbounds/0" {
+		t.Fatalf("breadcrumb = %q, want $/inbounds/0", got)
 	}
 
 	// oneOf picker level shares the path: no extra segment
 	lm.stack = append(lm.stack, &menuState{kind: menuOneOf, node: oneOfOf(t, root, "inbounds"), path: []any{"inbounds", 0}})
-	if got := lm.breadcrumb(); got != "$/inbounds[0]" {
+	if got := lm.breadcrumb(); got != "$/inbounds/0" {
 		t.Fatalf("picker level must not extend the path, got %q", got)
 	}
 
 	// depth: keys and indices compose
 	lm.stack = append(lm.stack, &menuState{kind: menuObject,
 		node: &smodel.FormNode{Key: "listen", Title: "Listen"}, path: []any{"inbounds", 3, "listen"}})
-	if got := lm.breadcrumb(); got != "$/inbounds[3]/listen" {
+	if got := lm.breadcrumb(); got != "$/inbounds/3/listen" {
 		t.Fatalf("deep path = %q", got)
 	}
 
 	// narrow terminal: the tail survives within the width
 	lm.width = 12
-	if got := lm.breadcrumb(); got != "…s[3]/listen" {
+	if got := lm.breadcrumb(); got != "…ds/3/listen" {
 		t.Fatalf("clipped path = %q, want the tail", got)
 	}
 

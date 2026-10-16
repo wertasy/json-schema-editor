@@ -8,6 +8,8 @@ import (
 	"testing"
 
 	tea "github.com/charmbracelet/bubbletea"
+	"github.com/charmbracelet/lipgloss"
+	"github.com/muesli/termenv"
 
 	"json-schema-editor/internal/jsondoc"
 	"json-schema-editor/internal/smodel"
@@ -216,12 +218,18 @@ func TestUnknownKeyIssuesListed(t *testing.T) {
 	if len(m.issuesNow) != 2 {
 		t.Fatalf("issues = %+v, want two unknown-key warnings", m.issuesNow)
 	}
+	if !m.issuesNow[0].warn || !m.issuesNow[1].warn {
+		t.Fatalf("unknown keys must be warnings: %+v", m.issuesNow)
+	}
 	if !pathEq(m.issuesNow[0].path, []any{"server", "legacy"}) ||
 		!pathEq(m.issuesNow[1].path, []any{"extra_key"}) {
 		t.Fatalf("warning paths = %v %v", m.issuesNow[0].path, m.issuesNow[1].path)
 	}
-	if v := m.View(); !contains(v, "⚠ 2 validation errors") {
+	if v := m.View(); !contains(v, "⚠ 2 warnings") {
 		t.Fatalf("status row missing:\n%s", v)
+	}
+	if !m.hasWarn([]any{"server", "legacy"}) || !m.hasIssue([]any{"extra_key"}) {
+		t.Fatalf("warning marks missing: err=%v warn=%v", m.errPaths, m.warnPaths)
 	}
 
 	// validator output combines with the warnings without double-flagging
@@ -235,6 +243,15 @@ func TestUnknownKeyIssuesListed(t *testing.T) {
 	if len(m.issuesNow) != 2 || !contains(m.issuesNow[0].msg, "additional properties") ||
 		!contains(m.issuesNow[1].msg, `unknown key "legacy"`) {
 		t.Fatalf("combined issues = %+v", m.issuesNow)
+	}
+	if m.issuesNow[0].warn || !m.issuesNow[1].warn {
+		t.Fatalf("severity mixed up: %+v", m.issuesNow)
+	}
+	if v := m.View(); !contains(v, "⚠ 1 validation error · 1 warning") {
+		t.Fatalf("mixed status label missing:\n%s", v)
+	}
+	if !m.hasErr([]any{"extra_key"}) || !m.hasWarn([]any{"server", "legacy"}) {
+		t.Fatalf("severity routing broken: err=%v warn=%v", m.errPaths, m.warnPaths)
 	}
 
 	// removing the keys clears their warnings
@@ -273,4 +290,38 @@ func issueLine(view string) string {
 		}
 	}
 	return ""
+}
+
+func TestUnknownKeyWarningColor(t *testing.T) {
+	old := lipgloss.ColorProfile()
+	lipgloss.SetColorProfile(termenv.ANSI)
+	defer lipgloss.SetColorProfile(old)
+
+	doc := testDoc()
+	doc.Set([]any{"extra_key"}, tstr("x"))
+	m := newListModel(testModel(), doc, Options{LoadErrors: []string{
+		"at '/server/port': minimum value is 1024",
+	}})
+	m.Update(tea.WindowSizeMsg{Width: 100, Height: 30})
+
+	var unknownLine, portLine bool
+	for _, l := range strings.Split(m.View(), "\n") {
+		switch {
+		case strings.Contains(l, "extra_key"):
+			unknownLine = true
+			// the unknown-key row is warning-only: yellow, never red
+			if !strings.Contains(l, "\x1b[33m") || strings.Contains(l, "\x1b[31m") {
+				t.Fatalf("unknown-key row must be yellow only, got %q", l)
+			}
+		case strings.Contains(l, "port=8080"): // the Server row: error ancestor
+			portLine = true
+			// the error and its ancestors keep the red mark
+			if !strings.Contains(l, "\x1b[31m") {
+				t.Fatalf("error-marked row must be red, got %q", l)
+			}
+		}
+	}
+	if !unknownLine || !portLine {
+		t.Fatalf("rows missing from view (unknown=%v port=%v)", unknownLine, portLine)
+	}
 }

@@ -111,20 +111,20 @@ func topLevelKeys(t *testing.T, path string) []string {
 // createScript drives a full create session against examples/server.schema.json:
 // fills every section once and saves (required inputs are re-typed on each
 // root rerun: huh validates the raw line, so empty cannot accept a default).
-const createScript = "webapp\n" + // Name
+const createScript = "demo\n" + // Name
 	"2\n" + // Mode → http
 	"1\n" + // Navigate → Server
 	"8080\nlocalhost\ny\n\n\n" + // Port, Host, Debug=y, Ratio=omit, Done
-	"webapp\n\n2\n" + // root rerun: Name, Mode=http, Navigate → Logging
+	"demo\n\n2\n" + // root rerun: Name, Mode=http, Navigate → Logging
 	"2\n0\n" + // Levels: toggle info, confirm
 	"2\n" + // Logging navigate → tags items
 	"1\nprod\n4\n" + // mgr: add item, value, done
 	"0\n1\n" + // Logging rerun: confirm levels, Done
-	"webapp\n\n3\n" + // root: → Mounts
-	"1\nwebapps/ROOT\n/var/www\n\n4\n" + // mgr: add mount {src,dst}, done
-	"webapp\n\n4\n" + // root: → Auth
+	"demo\n\n3\n" + // root: → Mounts
+	"1\ndemos/ROOT\n/var/www\n\n4\n" + // mgr: add mount {src,dst}, done
+	"demo\n\n4\n" + // root: → Auth
 	"2\nsecret123\n\n" + // variant Token, token, done
-	"webapp\n\n5\n" // root: save
+	"demo\n\n5\n" // root: save
 
 func TestCreateAccessible(t *testing.T) {
 	out := t.TempDir()
@@ -139,7 +139,7 @@ func TestCreateAccessible(t *testing.T) {
 	}
 	want := map[string]any{
 		"$schema": "examples/server.schema.json", // -s auto-fills the field
-		"name":    "webapp",
+		"name":    "demo",
 		"mode":    "http",
 		"server": map[string]any{
 			"port":  8080.0,
@@ -150,7 +150,7 @@ func TestCreateAccessible(t *testing.T) {
 			"levels": []any{"info"},
 			"tags":   []any{"prod"},
 		},
-		"mounts": []any{map[string]any{"src": "webapps/ROOT", "dst": "/var/www"}},
+		"mounts": []any{map[string]any{"src": "demos/ROOT", "dst": "/var/www"}},
 		"auth":   map[string]any{"token": "secret123"},
 	}
 	if got := readJSON(t, outFile); !reflect.DeepEqual(got, want) {
@@ -666,7 +666,7 @@ func TestPtySearchReplace(t *testing.T) {
 		}
 	}
 
-	frame, off := waitFrame("root menu", 0, "Save and exit", "⚠ 2 validation errors")
+	frame, off := waitFrame("root menu", 0, "Save and exit", "⚠ 2 warnings")
 	_ = frame
 	tty.Write([]byte("r")) // open search-and-replace directly
 	_, off = waitFrame("replace view", off, "replace:", "case-insensitive")
@@ -690,6 +690,111 @@ func TestPtySearchReplace(t *testing.T) {
 	}
 	if strings.Contains(string(content), "localhost") {
 		t.Errorf("old host still present after save:\n%s", content)
+	}
+	tty.Write([]byte("\x03")) // ctrl+c abort
+	waitErr := cmd.Wait()
+	if ee, ok := waitErr.(*exec.ExitError); !ok || ee.ExitCode() != 130 {
+		t.Fatalf("exit after ctrl+c = %v, want 130", waitErr)
+	}
+}
+
+// TestPtyUndoRedo drives u / ctrl+r end to end: an in-place name edit
+// commits, u reverts it (undone notice, saved file back to the original),
+// ctrl+r re-applies it (redone notice, saved file shows the edit again).
+func TestPtyUndoRedo(t *testing.T) {
+	dir := t.TempDir()
+	cfg := filepath.Join(dir, "server.config.json")
+	src, err := os.ReadFile("../examples/server.config.json")
+	if err != nil {
+		t.Fatal(err)
+	}
+	// the shipped example carries mode "quic", illegal for the schema enum:
+	// fix it so ctrl+s can actually save around the undo/redo steps
+	fixed := strings.Replace(string(src), `"mode": "quic"`, `"mode": "tcp"`, 1)
+	if err := os.WriteFile(cfg, []byte(fixed), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	cmd := exec.Command(jseBin, "-s", "examples/server.schema.json", cfg)
+	cmd.Dir = ".."
+	cmd.Env = append(os.Environ(), "TERM=xterm-256color")
+	tty, err := pty.StartWithSize(cmd, &pty.Winsize{Rows: 30, Cols: 120})
+	if err != nil {
+		t.Skipf("no pty available: %v", err)
+	}
+	defer tty.Close()
+
+	frames := make(chan string, 64)
+	go func() {
+		buf := make([]byte, 4096)
+		var acc bytes.Buffer
+		for {
+			n, err := tty.Read(buf)
+			if n > 0 {
+				acc.Write(buf[:n])
+				frames <- acc.String()
+			}
+			if err != nil {
+				close(frames)
+				return
+			}
+		}
+	}()
+	waitFrame := func(what string, offset int, want ...string) (string, int) {
+		t.Helper()
+		deadline := time.After(15 * time.Second)
+		for {
+			select {
+			case frame, ok := <-frames:
+				if !ok {
+					t.Fatalf("pty closed while waiting for %s", what)
+				}
+				ready := true
+				for _, w := range want {
+					if !strings.Contains(frame[offset:], w) {
+						ready = false
+						break
+					}
+				}
+				if ready {
+					return frame, len(frame)
+				}
+			case <-deadline:
+				t.Fatalf("timed out waiting for %s", what)
+			}
+		}
+	}
+
+	_, off := waitFrame("root menu", 0, "Server Configuration", "Name")
+	time.Sleep(300 * time.Millisecond) // let the TUI finish raw-mode setup
+	// the example carries a schema-unknown key, so a status row sits above
+	// Name; step over it. name is pattern-bound (^[a-z][a-z0-9-]*$), so -x
+	// is a legal suffix where "!" would be refused.
+	tty.Write([]byte("\x1b[B")) // ↓ off the status row
+	tty.Write([]byte("\r-x\r")) // enter on Name (input prefills demo), append, commit
+	_, off = waitFrame("name edit committed", off, "demo-x")
+	tty.Write([]byte("u")) // undo
+	_, off = waitFrame("undone notice", off, "undone")
+	tty.Write([]byte("\x13")) // ctrl+s: persist the reverted doc
+	_, off = waitFrame("save after undo", off, "Saved")
+	content, err := os.ReadFile(cfg)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(content), `"name": "demo"`) ||
+		strings.Contains(string(content), `"name": "demo-x"`) {
+		t.Errorf("undo did not revert the saved name:\n%s", content)
+	}
+	tty.Write([]byte("\x12")) // ctrl+r: redo
+	_, off = waitFrame("redone notice", off, "redone", "demo-x")
+	tty.Write([]byte("\x13")) // ctrl+s: persist the re-applied doc
+	_, off = waitFrame("save after redo", off, "Saved")
+	content, err = os.ReadFile(cfg)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(content), `"name": "demo-x"`) {
+		t.Errorf("redo did not re-apply the saved name:\n%s", content)
 	}
 	tty.Write([]byte("\x03")) // ctrl+c abort
 	waitErr := cmd.Wait()

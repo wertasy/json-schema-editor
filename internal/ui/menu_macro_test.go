@@ -1,8 +1,10 @@
 package ui
 
-// Macro recording/playback tests: q arms capture, @ replays the last macro
-// through the normal dispatch path, literal q/@ inside text inputs are
-// recorded (and replayed) as characters.
+// Macro recording/playback tests: @ arms capture, . replays the last macro
+// through the normal dispatch path, literal @/. inside text inputs are
+// recorded (and replayed) as characters, and q ≡ esc outside text inputs
+// (literal inside, where it never touches macro state); in non-typing
+// contexts it is recorded as esc and replays as esc.
 
 import (
 	"fmt"
@@ -14,9 +16,9 @@ import (
 func TestMacroRecordPlayback(t *testing.T) {
 	m := newListModel(testModel(), testDoc(), Options{})
 
-	press(m, "q")
+	press(m, "@")
 	if !m.recording {
-		t.Fatalf("q should arm recording, notice=%q", m.notice)
+		t.Fatalf("@ should arm recording, notice=%q", m.notice)
 	}
 	if !contains(m.View(), "● REC 0") {
 		t.Fatalf("recording indicator missing:\n%s", m.View())
@@ -30,9 +32,9 @@ func TestMacroRecordPlayback(t *testing.T) {
 		t.Fatalf("recording indicator should count 2:\n%s", m.View())
 	}
 
-	press(m, "q")
+	press(m, "@")
 	if m.recording {
-		t.Fatal("q should stop recording")
+		t.Fatal("@ should stop recording")
 	}
 	if len(m.macro) != 2 {
 		t.Fatalf("macro = %d keys, want 2", len(m.macro))
@@ -47,14 +49,14 @@ func TestMacroRecordPlayback(t *testing.T) {
 	if got := m.top().cursor; got != 2 {
 		t.Fatalf("cursor after recording = %d, want 2", got)
 	}
-	press(m, "@")
+	press(m, ".")
 	if got := m.top().cursor; got != 4 {
 		t.Fatalf("cursor after playback = %d, want 4", got)
 	}
 	if !contains(m.notice, "played 2 keys") {
 		t.Fatalf("notice = %q", m.notice)
 	}
-	press(m, "@")
+	press(m, ".")
 	if got := m.top().cursor; got != 6 {
 		t.Fatalf("cursor after second playback = %d, want 6", got)
 	}
@@ -64,7 +66,7 @@ func TestMacroReplaysValueEdit(t *testing.T) {
 	m := newListModel(testModel(), testDoc(), Options{})
 
 	// Record "j" (Name → Mode) plus "l" (enum http → grpc).
-	press(m, "q", "j", "l", "q")
+	press(m, "@", "j", "l", "@")
 	if m.recording || len(m.macro) != 2 {
 		t.Fatalf("recording = %v, macro = %d keys, want false/2", m.recording, len(m.macro))
 	}
@@ -76,7 +78,7 @@ func TestMacroReplaysValueEdit(t *testing.T) {
 	if got := m.top().cursor; got != 0 {
 		t.Fatalf("cursor = %d, want 0", got)
 	}
-	press(m, "@")
+	press(m, ".")
 	if got := m.top().cursor; got != 1 {
 		t.Fatalf("cursor after playback = %d, want 1", got)
 	}
@@ -91,37 +93,37 @@ func TestMacroReplaysValueEdit(t *testing.T) {
 func TestMacroLiteralInInput(t *testing.T) {
 	m := newListModel(testModel(), testDoc(), Options{})
 
-	press(m, "q")     // start recording on the Name row
+	press(m, "@")     // start recording on the Name row
 	press(m, "enter") // open the in-place editor
 	if m.edit == nil {
 		t.Fatalf("editor did not open, notice=%q", m.notice)
 	}
-	press(m, "q", "@") // literal characters inside the input
+	press(m, "@", ".") // literal characters inside the input
 	if !m.recording {
-		t.Fatal("q inside a text input must not stop recording")
+		t.Fatal("@ inside a text input must not stop recording")
 	}
-	if got := m.edit.ti.Value(); got != "webappq@" {
-		t.Fatalf("input value = %q, want webappq@", got)
+	if got := m.edit.ti.Value(); got != "webapp@." {
+		t.Fatalf("input value = %q, want webapp@.", got)
 	}
 	press(m, "enter") // commit the edit
-	press(m, "q")     // stop recording
+	press(m, "@")     // stop recording
 
 	if m.recording {
-		t.Fatal("q in plain list mode should stop recording")
+		t.Fatal("@ in plain list mode should stop recording")
 	}
 	if len(m.macro) != 4 {
-		t.Fatalf("macro = %d keys, want 4 (enter, q, @, enter)", len(m.macro))
+		t.Fatalf("macro = %d keys, want 4 (enter, @, ., enter)", len(m.macro))
 	}
-	if got := strAt(t, m.doc, "name"); got != "webappq@" {
-		t.Fatalf("name after recording = %q, want webappq@", got)
+	if got := strAt(t, m.doc, "name"); got != "webapp@." {
+		t.Fatalf("name after recording = %q, want webapp@.", got)
 	}
 
-	press(m, "@") // replay the typed characters into the same input
+	press(m, ".") // replay the typed characters into the same input
 	if m.edit != nil {
 		t.Fatal("the replayed enter must have committed the edit")
 	}
-	if got := strAt(t, m.doc, "name"); got != "webappq@q@" {
-		t.Fatalf("name after playback = %q, want webappq@q@", got)
+	if got := strAt(t, m.doc, "name"); got != "webapp@.@." {
+		t.Fatalf("name after playback = %q, want webapp@.@.", got)
 	}
 	if !contains(m.notice, "played 4 keys") {
 		t.Fatalf("notice = %q", m.notice)
@@ -134,7 +136,7 @@ func TestMacroPlaybackStopsAtSessionEnd(t *testing.T) {
 	m := newListModel(testModel(), testDoc(), countSave(&saves))
 	m.macro = []tea.KeyMsg{key("ctrl+s"), key("j")}
 
-	_, cmd := m.Update(key("@"))
+	_, cmd := m.Update(key("."))
 	if saves != 1 || !m.saved {
 		t.Fatal("ctrl+s in the macro must write through Save")
 	}
@@ -156,7 +158,7 @@ func TestMacroPlaybackStopsAtSessionEnd(t *testing.T) {
 		key("enter"), // Save and exit
 		key("j"),
 	}
-	_, cmd = m2.Update(key("@"))
+	_, cmd = m2.Update(key("."))
 	if exits != 1 || !m2.saved {
 		t.Fatal("Save and exit in the macro must write through Save")
 	}
@@ -177,7 +179,7 @@ func TestMacroPlaybackStopsAtSessionEnd(t *testing.T) {
 func TestMacroEmptyAndCancel(t *testing.T) {
 	m := newListModel(testModel(), testDoc(), Options{})
 
-	press(m, "@")
+	press(m, ".")
 	if !contains(m.notice, "no macro recorded") {
 		t.Fatalf("notice = %q", m.notice)
 	}
@@ -185,7 +187,7 @@ func TestMacroEmptyAndCancel(t *testing.T) {
 		t.Fatalf("cursor = %d, want 0", got)
 	}
 
-	press(m, "q", "q") // arm and immediately stop: cancels
+	press(m, "@", "@") // arm and immediately stop: cancels
 	if m.recording {
 		t.Fatal("empty stop should end recording")
 	}
@@ -200,9 +202,9 @@ func TestMacroEmptyAndCancel(t *testing.T) {
 	}
 
 	// A cancel keeps the previous macro: record one, then arm and cancel.
-	press(m, "q", "j", "q")
-	press(m, "q")
-	press(m, "q")
+	press(m, "@", "j", "@")
+	press(m, "@")
+	press(m, "@")
 	if m.recording || m.macro == nil || len(m.macro) != 1 {
 		t.Fatalf("recording = %v, macro = %v, want false and the 1-key macro", m.recording, m.macro)
 	}
@@ -211,15 +213,15 @@ func TestMacroEmptyAndCancel(t *testing.T) {
 func TestMacroKeyConflicts(t *testing.T) {
 	m := newListModel(testModel(), testDoc(), Options{LoadErrors: []string{"at '/name': invalid"}})
 
-	// (a) not recording: q arms recording on the issue overlay too; the list
-	// stays open (esc is the close binding).
+	// (a) not recording: @ arms recording on the issue overlay too; the list
+	// stays open (esc/q is the close binding).
 	press(m, "enter")
 	if m.issues == nil {
 		t.Fatalf("status row should open the issue list:\n%s", m.View())
 	}
-	press(m, "q")
+	press(m, "@")
 	if !m.recording {
-		t.Fatalf("q should arm recording on the issue list, notice=%q", m.notice)
+		t.Fatalf("@ should arm recording on the issue list, notice=%q", m.notice)
 	}
 	if m.issues == nil {
 		t.Fatal("arming recording must not close the issue list")
@@ -227,32 +229,32 @@ func TestMacroKeyConflicts(t *testing.T) {
 	if !contains(m.View(), "● REC 0") {
 		t.Fatalf("recording indicator missing on the issue list:\n%s", m.View())
 	}
-	// (b) recording: q stops recording in every non-typing context, so the
-	// overlay keeps its state; @ replays against the open overlay; esc closes.
+	// (b) recording: @ stops recording in every non-typing context, so the
+	// overlay keeps its state; . replays against the open overlay; esc/q closes.
 	press(m, "down")
-	press(m, "q")
+	press(m, "@")
 	if m.recording {
-		t.Fatal("q must stop recording")
+		t.Fatal("@ must stop recording")
 	}
 	if m.issues == nil {
 		t.Fatal("the issue list must stay open while recording")
 	}
-	press(m, "@")
+	press(m, ".")
 	if !contains(m.notice, "played 1 keys") {
 		t.Fatalf("playback on the overlay: notice = %q", m.notice)
 	}
 	if m.issues == nil {
 		t.Fatal("playback must not close the issue list")
 	}
-	press(m, "esc")
+	press(m, "q")
 	if m.issues != nil {
-		t.Fatal("esc should close the issue list")
+		t.Fatal("q should close the issue list like esc")
 	}
 }
 
 func TestMacroCap(t *testing.T) {
 	m := newListModel(testModel(), testDoc(), Options{})
-	press(m, "q")
+	press(m, "@")
 	for i := 0; i < maxMacroKeys; i++ {
 		press(m, "j")
 	}
@@ -274,5 +276,60 @@ func TestMacroCap(t *testing.T) {
 	if m.recording || len(m.macro) != maxMacroKeys {
 		t.Fatalf("recording = %v, macro = %d keys, want false/%d",
 			m.recording, len(m.macro), maxMacroKeys)
+	}
+}
+
+// TestQIsEscapeAlias pins q ≡ esc outside text inputs — quit confirm at the
+// root, pop a menu — while inside an input q is an ordinary character and
+// esc cancels; q never touches macro state in non-typing contexts: it is
+// recorded as esc and replays as esc.
+func TestQIsEscapeAlias(t *testing.T) {
+	m := newListModel(testModel(), testDoc(), Options{})
+	press(m, "q")
+	if m.confirm == nil || !contains(m.View(), "Quit without saving?") {
+		t.Fatalf("q at the root must ask to quit like esc:\n%s", m.View())
+	}
+	press(m, "n") // stay
+
+	press(m, "enter") // in-place editor on Name
+	if m.edit == nil {
+		t.Fatal("enter should open the in-place editor")
+	}
+	press(m, "x", "q")
+	if m.edit == nil {
+		t.Fatal("q must not cancel the in-place edit — it is a literal character there")
+	}
+	if got := m.edit.ti.Value(); got != "webappxq" {
+		t.Fatalf("input = %q, want webappxq (q typed literally)", got)
+	}
+	press(m, "esc") // esc cancels
+	if m.edit != nil {
+		t.Fatal("esc must cancel the in-place edit")
+	}
+	if s := strAt(t, m.doc, "name"); s != "webapp" {
+		t.Fatalf("name = %q, want the untouched webapp", s)
+	}
+
+	press(m, "down", "down", "enter") // into the Server menu
+	press(m, "@")                     // arm recording inside the Server menu
+	press(m, "q")                     // esc semantics: pops back to the root, recorded as esc
+	if !m.recording {
+		t.Fatal("q must not stop recording")
+	}
+	if len(m.stack) != 1 {
+		t.Fatalf("stack = %d levels, want 1 (q must pop like esc)", len(m.stack))
+	}
+	if len(m.recBuf) != 1 || m.recBuf[0].String() != "esc" {
+		t.Fatalf("recBuf = %+v, want [esc]", m.recBuf)
+	}
+	press(m, "@") // stop recording
+	if m.recording || len(m.macro) != 1 {
+		t.Fatalf("recording = %v, macro = %v, want false/[esc]", m.recording, m.macro)
+	}
+
+	// the recorded q replays as esc: at the root it asks to quit
+	press(m, ".")
+	if m.confirm == nil || !contains(m.View(), "Quit without saving?") {
+		t.Fatalf("replayed q must act as esc:\n%s", m.View())
 	}
 }

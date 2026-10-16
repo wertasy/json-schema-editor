@@ -55,6 +55,10 @@ func (m *listModel) keyList(msg tea.KeyMsg) tea.Cmd {
 		m.deleteItem(r)
 	case "delete":
 		m.deletePair(r)
+	case "a":
+		m.addKey()
+	case "?":
+		m.help = true
 	case "/":
 		m.openSearch(false)
 	case "r":
@@ -135,8 +139,13 @@ func (m *listModel) back() {
 	}
 }
 
+// push drills into fn's menu. A classic oneOf picker opens on the variant
+// matching the current value (the ● row) instead of blindly on the first
+// row; unset values keep the first row.
 func (m *listModel) push(fn *smodel.FormNode, path []any) {
-	m.stack = append(m.stack, &menuState{kind: menuKindFor(fn), node: fn, path: path})
+	st := &menuState{kind: menuKindFor(fn), node: fn, path: path}
+	seedVariantCursor(st, m.doc)
+	m.stack = append(m.stack, st)
 }
 
 // pushChildMenu drills into a child node: all-object oneOfs open the
@@ -190,22 +199,23 @@ func (m *listModel) jumpKeys(msg tea.KeyMsg, cursor *int, n int) bool {
 
 // --- macro recording / playback -------------------------------------------
 
-// macroControl consumes the macro keys (q records, @ plays) before normal
+// macroControl consumes the macro keys (@ records, . plays) before normal
 // dispatch. Interception rules:
-//   - in a text input (edit field, raw textarea, search) q/@ stay literal;
-//   - while recording, q stops recording in every non-typing context
+//   - in a text input (edit field, raw textarea, search, add-key input)
+//     @/. stay literal;
+//   - while recording, @ stops recording in every non-typing context
 //     (overlays included) so capture can always be ended;
-//   - while not recording, q/@ are intercepted in every non-typing context
+//   - while not recording, @/. are intercepted in every non-typing context
 //     (overlays included — none binds them), so recording can be armed from
-//     anywhere, e.g. the validation-issues list (esc still closes it);
-//   - @ while recording is swallowed and NOT recorded (macros therefore can
-//     never contain macro keys, which makes playback recursion impossible).
+//     anywhere, e.g. the validation-issues list (esc/q still closes it);
+//   - . while recording is swallowed and NOT recorded (playback can never
+//     nest, so replaying a macro cannot recurse).
 func (m *listModel) macroControl(msg tea.KeyMsg) (tea.Cmd, bool) {
-	if m.edit != nil || m.text != nil || m.search.active {
-		return nil, false // typing: q/@ are ordinary characters
+	if m.typing() {
+		return nil, false // typing: @/. are ordinary characters
 	}
 	switch msg.String() {
-	case "q":
+	case "@":
 		if m.recording {
 			if len(m.recBuf) == 0 {
 				m.recBuf, m.recording = nil, false // cancel: the previous macro survives
@@ -213,18 +223,18 @@ func (m *listModel) macroControl(msg tea.KeyMsg) (tea.Cmd, bool) {
 				return nil, true
 			}
 			m.macro, m.recBuf, m.recording = m.recBuf, nil, false
-			m.notice = fmt.Sprintf("macro recorded: %d keys — @ plays it", len(m.macro))
+			m.notice = fmt.Sprintf("macro recorded: %d keys — . plays it", len(m.macro))
 			return nil, true
 		}
 		m.recBuf, m.recording = make([]tea.KeyMsg, 0, 16), true
-		m.notice = "recording — q stops, @ is ignored while recording"
+		m.notice = "recording — @ stops, . is ignored while recording"
 		return nil, true
-	case "@":
+	case ".":
 		if m.recording {
 			return nil, true // swallowed, not recorded
 		}
 		if len(m.macro) == 0 {
-			m.notice = "no macro recorded (q records one)"
+			m.notice = "no macro recorded (@ records one)"
 			return nil, true
 		}
 		return m.playMacro(), true
@@ -418,6 +428,61 @@ func (m *listModel) deleteItem(r row) {
 	m.doc.Remove(r.path)
 }
 
+// addKey opens the key-name input for a schema-less member under the
+// current object menu (a). Non-object menus (items lists, enum toggles,
+// variant pickers, scalar roots) refuse with a notice.
+func (m *listModel) addKey() {
+	st := m.top()
+	if st.kind != menuObject || st.node.Kind != smodel.KObject {
+		m.notice = "a adds a custom key under an object menu"
+		return
+	}
+	ti := textinput.New()
+	ti.Prompt = ""
+	ti.CharLimit = 0
+	ti.Focus()
+	m.add = &addState{path: clonePath(st.path), node: st.node, ti: ti}
+}
+
+// keyAdd drives the key-name input: enter validates the name and opens the
+// raw-JSON editor for the new member's value (ctrl+s there writes the pair;
+// esc at either stage writes nothing). Reuses pathFor (app.go) and
+// openRawAt — the same editor unknown-key rows already use.
+func (m *listModel) keyAdd(msg tea.KeyMsg) tea.Cmd {
+	switch msg.String() {
+	case "enter":
+		k := strings.TrimSpace(m.add.ti.Value())
+		if k == "" {
+			m.add.err = "key required"
+			return nil
+		}
+		for _, c := range m.add.node.Children {
+			if c.Key == k {
+				m.add.err = "key defined by the schema — edit its row instead"
+				return nil
+			}
+		}
+		if cur, ok := m.doc.Get(m.add.path); ok && cur != nil && cur.Object != nil {
+			for _, mem := range *cur.Object {
+				if mem.Key == k {
+					m.add.err = "key already exists"
+					return nil
+				}
+			}
+		}
+		path := pathFor(m.add.path, k)
+		m.add = nil
+		m.openRawAt(nil, path) // empty textarea; applyText parses + doc.Set
+		return nil
+	case "esc":
+		m.add = nil
+		return nil
+	}
+	var cmd tea.Cmd
+	m.add.ti, cmd = m.add.ti.Update(msg)
+	return cmd
+}
+
 // toggleEnumMember flips one option of an enum-valued array and rewrites
 // the whole array (option order); empty + optional removes the key.
 func (m *listModel) toggleEnumMember(r row) {
@@ -561,12 +626,22 @@ func (m *listModel) write(exit, forced bool) tea.Cmd {
 
 func (m *listModel) keyConfirm(msg tea.KeyMsg) tea.Cmd {
 	switch msg.String() {
-	case "y":
+	case "y", "enter", " ":
 		onYes := m.confirm.onYes
 		m.confirm = nil
 		return onYes(m)
 	case "n", "esc":
 		m.confirm = nil
+	}
+	return nil
+}
+
+// keyHelp drives the "?" keyboard-help overlay: esc/q/? close it, other
+// keys are ignored (the reference is static).
+func (m *listModel) keyHelp(msg tea.KeyMsg) tea.Cmd {
+	switch msg.String() {
+	case "esc", "q", "?":
+		m.help = false
 	}
 	return nil
 }
@@ -977,7 +1052,9 @@ func (m *listModel) keySearch(msg tea.KeyMsg) tea.Cmd {
 		m.stack = rebuildStack(m.model, m.doc, res.path)
 		rows := menuRows(m)
 		m.clampCursor(rows)
-		m.top().cursor = cursorForRow(rows, res)
+		if idx := cursorForRow(rows, res); idx >= 0 {
+			m.top().cursor = idx
+		}
 		m.top().offset = 0
 		return nil
 	case "esc":
@@ -1048,8 +1125,9 @@ func (m *listModel) replaceSearchAll() tea.Cmd {
 }
 
 // cursorForRow finds the row matching a search hit (same schema node at the
-// same path, or the same variant); 0 when the target is a container whose
-// menu we entered.
+// same path, or the same variant); -1 when the target is a container whose
+// menu we entered — the rebuilt stack then keeps its own cursor, e.g. the
+// oneOf picker seeded on the current variant.
 func cursorForRow(rows []row, res row) int {
 	for i, r := range rows {
 		if r.kind != rowVariant && res.kind != rowVariant &&
@@ -1060,5 +1138,5 @@ func cursorForRow(rows []row, res row) int {
 			return i
 		}
 	}
-	return 0
+	return -1
 }

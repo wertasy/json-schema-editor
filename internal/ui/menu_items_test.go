@@ -51,8 +51,8 @@ func TestMenuMountsAddFillBack(t *testing.T) {
 	if m.top().kind != menuObject || !contains(m.View(), "< Remove this item >") {
 		t.Fatalf("item menu should offer removal:\n%s", m.View())
 	}
-	if v := m.View(); !contains(v, "$/mounts[0]") {
-		t.Fatalf("breadcrumb should read like a jq path:\n%s", v)
+	if v := m.View(); !contains(v, "$/mounts/0") {
+		t.Fatalf("breadcrumb should carry the item index:\n%s", v)
 	}
 	press(m, "down", "enter") // Source field
 	if m.edit == nil {
@@ -173,8 +173,11 @@ func TestMenuOneOfVariants(t *testing.T) {
 		t.Fatalf("current variant should show its value summary:\n%s", v)
 	}
 
-	// enter on the current variant drills straight in
-	press(m, "down", "enter")
+	// the picker opens on the current variant; enter drills straight in
+	if m.top().cursor != 1 {
+		t.Fatalf("picker should open on the current variant, cursor = %d", m.top().cursor)
+	}
+	press(m, "enter")
 	if len(m.stack) != 3 || !contains(m.View(), "$/auth") {
 		t.Fatalf("enter on current variant should drill:\n%s", m.View())
 	}
@@ -581,14 +584,14 @@ func TestMenuSearchReplace(t *testing.T) {
 	// the query previews the projected replacement on string hits only
 	press(m, "/data")
 	if len(m.search.results) != 1 {
-		t.Fatalf("results = %d, want the $/mounts[0]/src hit", len(m.search.results))
+		t.Fatalf("results = %d, want the $/mounts/0/src hit", len(m.search.results))
 	}
 	press(m, "tab")
 	if !m.search.rti.Focused() {
 		t.Fatal("tab should focus the replace input")
 	}
 	press(m, "/opt")
-	if v := m.View(); !contains(v, "$/mounts[0]/src  /data → /opt") {
+	if v := m.View(); !contains(v, "$/mounts/0/src  /data → /opt") {
 		t.Fatalf("preview label missing:\n%s", v)
 	}
 

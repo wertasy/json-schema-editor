@@ -171,6 +171,36 @@ func TestSummaryRules(t *testing.T) {
 	if got := summary(lm6, name, []any{"name"}); got != string(long[:23])+"…" {
 		t.Errorf("long string = %q", got)
 	}
+	// string lists preview their members: [N] v0 v1 v2 +rest
+	tags := &smodel.FormNode{Key: "tags", Kind: smodel.KArray}
+	lm8 := lmAt(tobj(tmem("tags", tarr(tstr("a"), tstr("b"), tstr("c"), tstr("d")))))
+	if got := summary(lm8, tags, []any{"tags"}); got != "[4] a b c +1" {
+		t.Errorf("string list = %q, want [4] a b c +1", got)
+	}
+	if got := summary(lmAt(tobj(tmem("tags", tarr(tstr("a"), tstr("b"))))), tags, []any{"tags"}); got != "[2] a b" {
+		t.Errorf("short string list = %q, want [2] a b", got)
+	}
+	if got := summary(lmAt(tobj(tmem("tags", tarr(tstr("legacy"))))), tags, []any{"tags"}); got != "[1] legacy" {
+		t.Errorf("single string list = %q, want [1] legacy", got)
+	}
+	if got := summary(lmAt(tobj(tmem("tags", tarr(tstr("a"), tnum("1"))))), tags, []any{"tags"}); got != "[2] a 1" {
+		t.Errorf("mixed list = %q, want [2] a 1", got)
+	}
+	// numbers preview like strings; objects in a mixed list render as {…}
+	if got := summary(lmAt(tobj(tmem("tags", tarr(tnum("1"), tnum("22"), tnum("3.5"))))), tags, []any{"tags"}); got != "[3] 1 22 3.5" {
+		t.Errorf("number list = %q, want [3] 1 22 3.5", got)
+	}
+	if got := summary(lmAt(tobj(tmem("tags", tarr(tstr("a"), tnum("1"), tobj(tmem("k", tstr("v"))), tbool(true))))), tags, []any{"tags"}); got != "[4] a 1 {…} +1" {
+		t.Errorf("mixed with object = %q, want [4] a 1 {…} +1", got)
+	}
+	// pure object arrays keep the plain count
+	if got := summary(lmAt(tobj(tmem("tags", tarr(tobj(), tobj())))), tags, []any{"tags"}); got != "2 items" {
+		t.Errorf("pure object list = %q, want 2 items", got)
+	}
+	lm9 := lmAt(tobj(tmem("tags", tarr(tstr(string(long))))))
+	if got := summary(lm9, tags, []any{"tags"}); got != "[1] "+string(long[:15])+"…" {
+		t.Errorf("long string list = %q", got)
+	}
 	// raw nodes
 	raw := &smodel.FormNode{Key: "extra", Title: "Extra", Kind: smodel.KRaw}
 	lm7 := lmAt(tobj(tmem("extra", tobj(tmem("a", tnum("1"))))))
@@ -181,21 +211,43 @@ func TestSummaryRules(t *testing.T) {
 
 func TestObjectSummary(t *testing.T) {
 	cases := []struct {
+		fn   *smodel.FormNode
 		n    *jsondoc.Node
 		want string
 	}{
-		{tobj(), "{}"},
-		{nil, "{}"},
-		{tobj(tmem("a", tnum("1"))), "a=1"},
-		{tobj(tmem("a", tnum("1")), tmem("b", tbool(true))), "a=1 b=true"},
-		{tobj(tmem("a", tnum("1")), tmem("b", tbool(true)), tmem("c", tstr("x"))), "a=1 b=true +1"},
-		{tobj(tmem("a", tobj()), tmem("b", tarr(tnum("1")))), "a={…} b=[1]"},
-		{tobj(tmem("a", tnull())), "a=null"},
+		{nil, tobj(), "{}"},
+		{nil, nil, "{}"},
+		{nil, tobj(tmem("a", tnum("1"))), "a=1"},
+		{nil, tobj(tmem("a", tnum("1")), tmem("b", tbool(true))), "a=1 b=true"},
+		{nil, tobj(tmem("a", tnum("1")), tmem("b", tbool(true)), tmem("c", tstr("x"))), "a=1 b=true +1"},
+		{nil, tobj(tmem("a", tobj()), tmem("b", tarr(tnum("1")))), "a={…} b=[1]"},
+		{nil, tobj(tmem("a", tnull())), "a=null"},
 	}
 	for _, c := range cases {
-		if got := objectSummary(c.n); got != c.want {
+		if got := objectSummary(c.fn, c.n); got != c.want {
 			t.Errorf("objectSummary = %q, want %q", got, c.want)
 		}
+	}
+
+	// members render in schema order even when the document lists them
+	// differently: two list rows summarize alike (type before tag)
+	schema := &smodel.FormNode{Key: "inbound", Kind: smodel.KObject, Children: []*smodel.FormNode{
+		{Key: "type"}, {Key: "tag"}, {Key: "listen"}, {Key: "port"},
+	}}
+	doc := tobj(tmem("tag", tstr("in-proxy")), tmem("type", tstr("mixed")),
+		tmem("listen", tstr("::")), tmem("port", tnum("1080")))
+	if got := objectSummary(schema, doc); got != "type=mixed tag=in-proxy +2" {
+		t.Errorf("schema order = %q, want type=mixed tag=in-proxy +2", got)
+	}
+	docReordered := tobj(tmem("port", tnum("1080")), tmem("listen", tstr("::")),
+		tmem("type", tstr("mixed")), tmem("tag", tstr("in-proxy")))
+	if got := objectSummary(schema, docReordered); got != "type=mixed tag=in-proxy +2" {
+		t.Errorf("reordered doc = %q, want type=mixed tag=in-proxy +2", got)
+	}
+	// keys the schema does not know keep document order after the known ones
+	docUnknown := tobj(tmem("zz", tnum("1")), tmem("tag", tstr("t")), tmem("type", tstr("x")))
+	if got := objectSummary(schema, docUnknown); got != "type=x tag=t +1" {
+		t.Errorf("unknown key = %q, want type=x tag=t +1", got)
 	}
 }
 
@@ -397,7 +449,7 @@ func TestSearchIndexAndFilter(t *testing.T) {
 		return ""
 	}
 	// labels are breadcrumb-style paths plus the menu value overview
-	if l := find("Source"); l != "$/mounts[0]/src  /data" {
+	if l := find("Source"); l != "$/mounts/0/src  /data" {
 		t.Errorf("Source label = %q", l)
 	}
 	if l := find("Server"); l != "$/server  port=8080 host=0.0.0.0 +1" {
@@ -416,14 +468,14 @@ func TestSearchIndexAndFilter(t *testing.T) {
 	if got := filterSearch(lm, all, "token", true); len(got) != 2 { // variant + field
 		t.Errorf("filter token = %d rows, want 2", len(got))
 	}
-	if got := filterSearch(lm, all, "SRC", true); len(got) != 2 { // Source + $/mounts[0] overview
+	if got := filterSearch(lm, all, "SRC", true); len(got) != 2 { // Source + $/mounts/0 overview
 		t.Errorf("filter SRC by key = %d rows, want 2", len(got))
 	}
 	// fold=false demands the exact case
 	if got := filterSearch(lm, all, "SRC", false); len(got) != 0 {
 		t.Errorf("exact-case SRC = %d rows, want 0", len(got))
 	}
-	if got := filterSearch(lm, all, "src", false); len(got) != 2 { // $/mounts[0] overview + $/mounts[0]/src
+	if got := filterSearch(lm, all, "src", false); len(got) != 2 { // $/mounts/0 overview + $/mounts/0/src
 		t.Errorf("exact-case src = %d rows, want 2", len(got))
 	}
 	if got := filterSearch(lm, all, "", true); len(got) != len(all) {
@@ -433,8 +485,13 @@ func TestSearchIndexAndFilter(t *testing.T) {
 	if got := filterSearch(lm, all, "8080", true); len(got) != 2 { // $/server overview + $/server/port
 		t.Errorf("filter 8080 by value = %d rows, want 2", len(got))
 	}
-	if got := filterSearch(lm, all, "/mnt", true); len(got) != 2 { // $/mounts[0] overview + $/mounts[0]/dst
-		t.Errorf("filter /mnt by value = %d rows, want 2", len(got))
+	// "/mnt" is now a path query (contains "/") and matches no path; values
+	// with a slash are found via the slash-free keyword "mnt"
+	if got := filterSearch(lm, all, "mnt", true); len(got) != 2 { // $/mounts/0 overview + $/mounts/0/dst
+		t.Errorf("filter mnt by value = %d rows, want 2", len(got))
+	}
+	if got := filterSearch(lm, all, "/mnt", true); len(got) != 0 {
+		t.Errorf("path query /mnt = %d rows, want 0", len(got))
 	}
 
 	// scope: searching from inside Server stays below the breadcrumb
@@ -446,6 +503,60 @@ func TestSearchIndexAndFilter(t *testing.T) {
 	}
 	if got := filterSearch(inner, innerAll, "name", true); len(got) != 0 {
 		t.Errorf("scoped search must not leave the current menu, got %d", len(got))
+	}
+}
+
+func TestSearchRankAndPathQueries(t *testing.T) {
+	lm := lmAt(testDoc())
+	all := searchIndex(lm, lm.top())
+	paths := func(rows []row) (out []string) {
+		for _, r := range rows {
+			out = append(out, docPath(r.path))
+		}
+		return out
+	}
+	eq := func(got []string, want ...string) {
+		t.Helper()
+		if strings.Join(got, "|") != strings.Join(want, "|") {
+			t.Errorf("paths = %v, want %v", got, want)
+		}
+	}
+
+	// exact-key priority: the row whose key IS the query outranks rows that
+	// merely mention it (parent overviews, values containing the word)
+	if got := filterSearch(lm, all, "port", true); len(got) == 0 || paths(got)[0] != "$/server/port" {
+		t.Errorf("port first hit = %v, want $/server/port first", paths(got))
+	}
+	if got := filterSearch(lm, all, "src", true); len(got) == 0 || paths(got)[0] != "$/mounts/0/src" {
+		t.Errorf("src first hit = %v, want $/mounts/0/src first", paths(got))
+	}
+	// the tier is stable: without an exact key the order is unchanged
+	if got := filterSearch(lm, all, "8080", true); len(got) == 0 || paths(got)[0] != "$/server" {
+		t.Errorf("8080 first hit = %v, want $/server first (document order)", paths(got))
+	}
+
+	// anchored path queries: prefix match from the document root
+	eq(paths(filterSearch(lm, all, "/server/port", true)), "$/server/port")
+	anch := filterSearch(lm, all, "/server", true)
+	for _, p := range paths(anch) {
+		if !strings.HasPrefix(p, "$/server") {
+			t.Errorf("anchored /server hit %q lacks the $/server prefix", p)
+		}
+	}
+	eq(paths(anch)[:1], "$/server") // exact full path ranks first
+	eq(paths(filterSearch(lm, all, "$/server/port", true)), "$/server/port")
+
+	// non-anchored path queries: substring match anywhere in the path
+	eq(paths(filterSearch(lm, all, "server/port", true)), "$/server/port")
+	eq(paths(filterSearch(lm, all, "mounts/0/src", true)), "$/mounts/0/src")
+
+	// paths that do not exist
+	if got := filterSearch(lm, all, "/mnt", true); len(got) != 0 {
+		t.Errorf("path query /mnt = %d rows, want 0", len(got))
+	}
+	// a bare "/" matches every row
+	if got := filterSearch(lm, all, "/", true); len(got) != len(all) {
+		t.Errorf("bare / = %d rows, want all %d", len(got), len(all))
 	}
 }
 
@@ -485,12 +596,12 @@ func TestReplaceHits(t *testing.T) {
 	// non-empty query: only string values containing q, relabeled as previews
 	hits := replaceHits(lm, all, "/data", "/opt", true)
 	if len(hits) != 1 {
-		t.Fatalf("hits = %d, want 1 ($/mounts[0]/src)", len(hits))
+		t.Fatalf("hits = %d, want 1 ($/mounts/0/src)", len(hits))
 	}
 	if hits[0].path == nil || len(hits[0].path) != 3 {
-		t.Fatalf("hit path = %v, want $/mounts[0]/src", hits[0].path)
+		t.Fatalf("hit path = %v, want $/mounts/0/src", hits[0].path)
 	}
-	if hits[0].label != "$/mounts[0]/src  /data → /opt" {
+	if hits[0].label != "$/mounts/0/src  /data → /opt" {
 		t.Errorf("preview label = %q", hits[0].label)
 	}
 
@@ -504,7 +615,7 @@ func TestReplaceHits(t *testing.T) {
 
 	// empty query: every string value, original labels, numbers excluded
 	strs := replaceHits(lm, all, "", "", true)
-	if len(strs) != 4 { // name, server/host, mounts[0]/src, mounts[0]/dst
+	if len(strs) != 4 { // name, server/host, mounts/0/src, mounts/0/dst
 		t.Fatalf("empty-query hits = %d, want 4", len(strs))
 	}
 	for _, r := range strs {
@@ -550,7 +661,7 @@ func TestSearchIndexUnknownKeys(t *testing.T) {
 	}
 	for _, want := range []string{
 		"$/extra/note  alpha",
-		"$/extra/tags[0]  beta",
+		"$/extra/tags/0  beta",
 		"$/server/legacy  gamma",
 	} {
 		if !labels[want] {
@@ -571,7 +682,7 @@ func TestSearchIndexUnknownKeys(t *testing.T) {
 	for _, h := range hits {
 		paths[docPath(h.path)] = true
 	}
-	for _, want := range []string{"$/extra/note", "$/extra/tags[0]", "$/server/legacy"} {
+	for _, want := range []string{"$/extra/note", "$/extra/tags/0", "$/server/legacy"} {
 		if !paths[want] {
 			t.Errorf("replace hit %q missing: %v", want, paths)
 		}
