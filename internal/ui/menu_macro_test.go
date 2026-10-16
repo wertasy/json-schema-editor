@@ -129,6 +129,7 @@ func TestMacroLiteralInInput(t *testing.T) {
 }
 
 func TestMacroPlaybackStopsAtSessionEnd(t *testing.T) {
+	// plain ctrl+s writes mid-macro and playback continues
 	var saves int
 	m := newListModel(testModel(), testDoc(), countSave(&saves))
 	m.macro = []tea.KeyMsg{key("ctrl+s"), key("j")}
@@ -137,14 +138,39 @@ func TestMacroPlaybackStopsAtSessionEnd(t *testing.T) {
 	if saves != 1 || !m.saved {
 		t.Fatal("ctrl+s in the macro must write through Save")
 	}
-	if got := m.top().cursor; got != 0 {
-		t.Fatalf("cursor = %d, want 0 (second key must not run)", got)
+	if got := m.top().cursor; got != 1 {
+		t.Fatalf("cursor = %d, want 1 (playback continues after a plain save)", got)
 	}
-	if !contains(m.notice, "stopped at key 1/2") {
+	if !contains(m.notice, "played 2 keys") {
 		t.Fatalf("notice = %q", m.notice)
 	}
 	if cmd != nil {
-		t.Fatal("a plain ctrl+s writes and does not quit")
+		t.Fatal("a plain ctrl+s must not quit; only Save and exit ends the session")
+	}
+
+	// a macro containing Save and exit still stops at the session end
+	var exits int
+	m2 := newListModel(testModel(), testDoc(), countSave(&exits))
+	m2.macro = []tea.KeyMsg{
+		key("down"), key("down"), key("down"), key("down"), key("down"), key("down"),
+		key("enter"), // Save and exit
+		key("j"),
+	}
+	_, cmd = m2.Update(key("@"))
+	if exits != 1 || !m2.saved {
+		t.Fatal("Save and exit in the macro must write through Save")
+	}
+	if got := m2.top().cursor; got != 6 {
+		t.Fatalf("cursor = %d, want 6 (playback stopped on the Save and exit row, j must not run)", got)
+	}
+	if !contains(m2.notice, "stopped at key 7/8") {
+		t.Fatalf("notice = %q", m2.notice)
+	}
+	if cmd == nil {
+		t.Fatal("playback must keep the quit command")
+	}
+	if _, ok := cmd().(tea.QuitMsg); !ok {
+		t.Fatalf("cmd = %T, want tea.QuitMsg", cmd())
 	}
 }
 
@@ -185,35 +211,42 @@ func TestMacroEmptyAndCancel(t *testing.T) {
 func TestMacroKeyConflicts(t *testing.T) {
 	m := newListModel(testModel(), testDoc(), Options{LoadErrors: []string{"at '/name': invalid"}})
 
-	// (a) not recording: q keeps the issue overlay's own binding (close).
+	// (a) not recording: q arms recording on the issue overlay too; the list
+	// stays open (esc is the close binding).
 	press(m, "enter")
 	if m.issues == nil {
 		t.Fatalf("status row should open the issue list:\n%s", m.View())
 	}
 	press(m, "q")
-	if m.issues != nil {
-		t.Fatal("q must still close the issue list when not recording")
-	}
-	if m.recording {
-		t.Fatal("q in an overlay must not start recording")
-	}
-
-	// (b) recording: q stops recording in every non-typing context, so the
-	// overlay keeps its state.
-	press(m, "q")
 	if !m.recording {
-		t.Fatalf("q should arm recording, notice=%q", m.notice)
+		t.Fatalf("q should arm recording on the issue list, notice=%q", m.notice)
 	}
-	press(m, "enter")
 	if m.issues == nil {
-		t.Fatal("enter should open the issue list while recording")
+		t.Fatal("arming recording must not close the issue list")
 	}
+	if !contains(m.View(), "● REC 0") {
+		t.Fatalf("recording indicator missing on the issue list:\n%s", m.View())
+	}
+	// (b) recording: q stops recording in every non-typing context, so the
+	// overlay keeps its state; @ replays against the open overlay; esc closes.
+	press(m, "down")
 	press(m, "q")
 	if m.recording {
 		t.Fatal("q must stop recording")
 	}
 	if m.issues == nil {
 		t.Fatal("the issue list must stay open while recording")
+	}
+	press(m, "@")
+	if !contains(m.notice, "played 1 keys") {
+		t.Fatalf("playback on the overlay: notice = %q", m.notice)
+	}
+	if m.issues == nil {
+		t.Fatal("playback must not close the issue list")
+	}
+	press(m, "esc")
+	if m.issues != nil {
+		t.Fatal("esc should close the issue list")
 	}
 }
 

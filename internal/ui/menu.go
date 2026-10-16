@@ -476,15 +476,21 @@ func (m *listModel) listView() string {
 	return b.String()
 }
 
-// helpLine renders the bottom hint row; while recording it keeps a
-// right-aligned "● REC n" indicator instead of the hint tail.
+// helpLine renders the bottom hint row via recHint.
 func (m *listModel) helpLine() string {
+	return m.recHint(menuHelp)
+}
+
+// recHint renders a hint row; while a macro capture is running it keeps a
+// right-aligned "● REC n" indicator instead of the hint tail, so arming q
+// stays visible on every surface that renders hints.
+func (m *listModel) recHint(hints string) string {
 	rec := fmt.Sprintf("● REC %d", len(m.recBuf))
 	w := lipgloss.Width(rec)
 	if !m.recording || m.width < w+8 {
-		return mHelp.Render(clipRunes(menuHelp, m.width))
+		return mHelp.Render(clipRunes(hints, m.width))
 	}
-	left := clipRunes(menuHelp, m.width-w-1)
+	left := clipRunes(hints, m.width-w-1)
 	pad := m.width - lipgloss.Width(left) - w
 	if pad < 1 {
 		pad = 1
@@ -994,11 +1000,14 @@ func (m *listModel) issuesView() string {
 	if len(m.issues.items) == 0 {
 		b.WriteString(mDim.Render("( no issues )"))
 		b.WriteByte('\n')
-		b.WriteString(mHelp.Render("esc close"))
+		b.WriteString(m.recHint("esc close"))
 		b.WriteByte('\n')
 		return b.String()
 	}
 	height := m.height - 3
+	if m.notice != "" {
+		height-- // the notice renders as an extra row above the hints
+	}
 	if height < 1 {
 		height = 1
 	}
@@ -1021,7 +1030,11 @@ func (m *listModel) issuesView() string {
 		b.WriteString(cut.Render(line))
 		b.WriteByte('\n')
 	}
-	b.WriteString(mHelp.Render("↑/↓ move · enter jump to the field · esc close"))
+	if m.notice != "" {
+		b.WriteString(mErr.Render(clipRunes(m.notice, m.width)))
+		b.WriteByte('\n')
+	}
+	b.WriteString(m.recHint("↑/↓ move · enter jump to the field · esc close"))
 	b.WriteByte('\n')
 	return b.String()
 }

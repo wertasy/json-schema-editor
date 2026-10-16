@@ -165,8 +165,9 @@ func wrapCursor(cur, delta, n int) int {
 //   - in a text input (edit field, raw textarea, search) q/@ stay literal;
 //   - while recording, q stops recording in every non-typing context
 //     (overlays included) so capture can always be ended;
-//   - while not recording, q/@ are only intercepted in plain list mode, so
-//     overlay bindings (q closes the validation-issues list) are untouched;
+//   - while not recording, q/@ are intercepted in every non-typing context
+//     (overlays included — none binds them), so recording can be armed from
+//     anywhere, e.g. the validation-issues list (esc still closes it);
 //   - @ while recording is swallowed and NOT recorded (macros therefore can
 //     never contain macro keys, which makes playback recursion impossible).
 func (m *listModel) macroControl(msg tea.KeyMsg) (tea.Cmd, bool) {
@@ -185,18 +186,12 @@ func (m *listModel) macroControl(msg tea.KeyMsg) (tea.Cmd, bool) {
 			m.notice = fmt.Sprintf("macro recorded: %d keys — @ plays it", len(m.macro))
 			return nil, true
 		}
-		if m.confirm != nil || m.issues != nil || m.errs != nil || m.sel != nil {
-			return nil, false // overlays keep their own bindings
-		}
 		m.recBuf, m.recording = make([]tea.KeyMsg, 0, 16), true
 		m.notice = "recording — q stops, @ is ignored while recording"
 		return nil, true
 	case "@":
 		if m.recording {
 			return nil, true // swallowed, not recorded
-		}
-		if m.confirm != nil || m.issues != nil || m.errs != nil || m.sel != nil {
-			return nil, false
 		}
 		if len(m.macro) == 0 {
 			m.notice = "no macro recorded (q records one)"
@@ -208,13 +203,14 @@ func (m *listModel) macroControl(msg tea.KeyMsg) (tea.Cmd, bool) {
 }
 
 // playMacro replays the recorded keys through dispatchKey from the current
-// state. It stops early when a key ends the session (save or abort) and
-// returns the last command so tea.Quit still reaches bubbletea.
+// state. It stops early when a key ends the session (abort or save-and-exit;
+// plain ctrl+s only writes and playback continues) and returns the last
+// command so tea.Quit still reaches bubbletea.
 func (m *listModel) playMacro() tea.Cmd {
 	var last tea.Cmd
 	for i, k := range m.macro {
 		last = m.dispatchKey(k)
-		if m.saved || m.aborted {
+		if m.aborted || m.exiting {
 			m.notice = fmt.Sprintf("macro stopped at key %d/%d (session ended)", i+1, len(m.macro))
 			return last
 		}
@@ -589,7 +585,7 @@ func (m *listModel) keyIssues(msg tea.KeyMsg) tea.Cmd {
 				m.issuesBack, m.issuesReturn = parked, len(m.stack)
 			}
 		}
-	case "esc", "q":
+	case "esc":
 		m.issues = nil
 	}
 	return nil
