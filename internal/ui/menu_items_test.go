@@ -162,8 +162,19 @@ func TestMenuOneOfVariants(t *testing.T) {
 	doc := tobj(tmem("auth", tobj(tmem("token", tstr("secret123")))))
 	m := newListModel(testModel(), doc, Options{})
 	press(m, "down", "down", "down", "down", "down", "enter") // root → Auth
+	// a value exists: enter skips the variant picker and edits the current
+	// variant (Token object) directly
+	if m.top().kind != menuObject || m.top().node == nil || m.top().node.Title != "Token" {
+		t.Fatalf("enter with a value must edit the current variant, got kind=%v", m.top().kind)
+	}
+	if m.top().oneOf == nil {
+		t.Fatal("the variant editor must carry its oneOf for the type switch")
+	}
+
+	// ctrl+t opens the type picker on the current variant
+	press(m, "ctrl+t")
 	if m.top().kind != menuOneOf {
-		t.Fatalf("expected oneOf menu, got %d", m.top().kind)
+		t.Fatalf("ctrl+t must open the variant picker, got %d", m.top().kind)
 	}
 	v := m.View()
 	if !contains(v, "● Token") || !contains(v, "○ None") {
@@ -172,8 +183,6 @@ func TestMenuOneOfVariants(t *testing.T) {
 	if !contains(v, "token=secret123") {
 		t.Fatalf("current variant should show its value summary:\n%s", v)
 	}
-
-	// the picker opens on the current variant; enter drills straight in
 	if m.top().cursor != 1 {
 		t.Fatalf("picker should open on the current variant, cursor = %d", m.top().cursor)
 	}
@@ -181,7 +190,10 @@ func TestMenuOneOfVariants(t *testing.T) {
 	if len(m.stack) != 3 || !contains(m.View(), "$/auth") {
 		t.Fatalf("enter on current variant should drill:\n%s", m.View())
 	}
-	press(m, "esc", "up") // back to the variant list, cursor on None
+	press(m, "esc") // out of the token editor, back to the root list
+
+	// re-enter, then offer the switch via ctrl+t: picker, cursor onto None
+	press(m, "enter", "ctrl+t", "up")
 
 	// switching an existing value asks first
 	press(m, "enter")
@@ -204,10 +216,11 @@ func TestMenuOneOfVariants(t *testing.T) {
 		t.Fatalf("None should now be current:\n%s", v)
 	}
 
-	// n on the confirm keeps the value
+	// n on the confirm keeps the value: enter edits the current None variant
+	// (enum overlay) directly, ctrl+t offers the switch to Token
 	doc2 := tobj(tmem("auth", tstr("none")))
 	m2 := newListModel(testModel(), doc2, Options{})
-	press(m2, "down", "down", "down", "down", "down", "enter", "down", "enter")
+	press(m2, "down", "down", "down", "down", "down", "enter", "ctrl+t", "down", "enter")
 	if m2.confirm == nil {
 		t.Fatal("switching to Token should confirm")
 	}
@@ -750,5 +763,75 @@ func TestSearchReplaceUnknownKey(t *testing.T) {
 	}
 	if !contains(m.notice, "replaced 1 occurrence") {
 		t.Fatalf("notice = %q", m.notice)
+	}
+}
+
+// TestInsertItemAroundCursor: a inserts before, A after the cursor item;
+// < Add item > keeps appending without touching the doc until a field of
+// the fresh item is set.
+func TestInsertItemAroundCursor(t *testing.T) {
+	mk := func() (*listModel, *jsondoc.Node) {
+		doc := tobj(tmem("logging", tobj(tmem("tags", tarr(tstr("a"), tstr("b"), tstr("c"))))))
+		tags := childOf(t, childOf(t, testModel(), "logging"), "tags")
+		return lmAt(doc, &menuState{kind: menuItems, node: tags,
+			path: []any{"logging", "tags"}}), doc
+	}
+
+	// rows: < Add item >(0), a(1), b(2), c(3)
+	m, doc := mk()
+	press(m, "down", "A") // cursor on item 0 → insert after, editor opens
+	if m.edit == nil {
+		t.Fatal("A on a scalar item must open the editor")
+	}
+	press(m, "x", "enter")
+	if got := strArrAt(t, doc, "logging", "tags"); !eqStrs(got, "a", "x", "b", "c") {
+		t.Fatalf("A after item 0 = %v, want a x b c", got)
+	}
+
+	m, doc = mk()
+	press(m, "down", "down", "a") // cursor on item 1 (b) → insert before
+	press(m, "x", "enter")
+	if got := strArrAt(t, doc, "logging", "tags"); !eqStrs(got, "a", "x", "b", "c") {
+		t.Fatalf("a before item 1 = %v, want a x b c", got)
+	}
+
+	// cursor on < Add item >: A clamps to append
+	m, doc = mk()
+	press(m, "A")
+	press(m, "x", "enter")
+	if got := strArrAt(t, doc, "logging", "tags"); !eqStrs(got, "a", "b", "c", "x") {
+		t.Fatalf("A on the add row = %v, want a b c x", got)
+	}
+
+	// object items: A splices an empty container at idx+1 and drills in;
+	// the existing item shifts right
+	doc2 := tobj(tmem("mounts", tarr(
+		tobj(tmem("src", tstr("/a"))),
+		tobj(tmem("src", tstr("/b"))),
+	)))
+	mounts := childOf(t, testModel(), "mounts")
+	m2 := lmAt(doc2, &menuState{kind: menuItems, node: mounts, path: []any{"mounts"}})
+	press(m2, "down", "A")
+	if m2.top().kind != menuObject || !pathEq(m2.top().path, []any{"mounts", 1}) {
+		t.Fatalf("A must drill into the spliced item, got kind=%v path=%v",
+			m2.top().kind, m2.top().path)
+	}
+	arr, _ := m2.doc.Get([]any{"mounts"})
+	if len(*arr.Array) != 3 || (*arr.Array)[1].Object == nil || len(*(*arr.Array)[1].Object) != 0 {
+		t.Fatalf("spliced item 1 = %+v, want an empty object", (*arr.Array)[1])
+	}
+	shifted := *(*arr.Array)[2].Object
+	if len(shifted) != 1 || *shifted[0].Val.Str != "/b" {
+		t.Fatalf("item 1 must shift to index 2: %+v", (*arr.Array)[2])
+	}
+
+	// < Add item > stays traceless until a field is written
+	press(m2, "esc") // back to the items list
+	press(m2, "up", "enter")
+	if m2.top().kind != menuObject || !pathEq(m2.top().path, []any{"mounts", 3}) {
+		t.Fatalf("add row must append at len, path=%v", m2.top().path)
+	}
+	if arr, _ = m2.doc.Get([]any{"mounts"}); len(*arr.Array) != 3 {
+		t.Fatalf("append must not write the doc: len=%d", len(*arr.Array))
 	}
 }

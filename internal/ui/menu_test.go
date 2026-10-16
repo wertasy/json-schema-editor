@@ -81,7 +81,7 @@ func TestMenuRootView(t *testing.T) {
 		"Server", "port=8080 host=0.0.0.0 +1", "—",
 		"Name*", "Server*", // required star shows regardless of a set value
 		"Mounts", "1 item", "Auth", "Save and exit", "Edit raw JSON",
-		"↑/↓ · gg/G · enter edit/open · space · del delete · a add key · u undo · ctrl+r redo · esc · ctrl+s save · / search · r replace · ? help · ctrl+c quit",
+		"↑/↓ · gg/G · enter edit/open · space · del delete · a/A add · u undo · ctrl+r redo · esc · ctrl+s save · / search · r replace · ? help · ctrl+c quit",
 	} {
 		if !contains(v, want) {
 			t.Errorf("root view missing %q:\n%s", want, v)

@@ -18,7 +18,7 @@ import (
 	"json-schema-editor/internal/smodel"
 )
 
-const menuHelp = "↑/↓ · gg/G · enter edit/open · space · del delete · a add key · u undo · ctrl+r redo · esc · ctrl+s save · / search · r replace · ? help · ctrl+c quit"
+const menuHelp = "↑/↓ · gg/G · enter edit/open · space · del delete · a/A add · u undo · ctrl+r redo · esc · ctrl+s save · / search · r replace · ? help · ctrl+c quit"
 
 // helpLines is the full key reference shown by the "?" overlay.
 var helpLines = []string{
@@ -28,9 +28,9 @@ var helpLines = []string{
 	"← / h        back one level",
 	"esc / q      cancel / back — q is a full alias outside text inputs",
 	"space        toggle boolean / enum member",
-	"d            delete array item (no confirm)",
-	"delete       delete the selected key-value pair",
-	"a            add a schema-less key under an object menu",
+	"d / delete   delete the selected pair (required keys refused)",
+	"a / A        add a schema-less key before / after the cursor",
+	"ctrl+t       switch the variant type of a oneOf value",
 	"u / ctrl+r   undo / redo",
 	"ctrl+s       save (stay in the session)",
 	"/            search below the current path",
@@ -82,6 +82,7 @@ type editState struct {
 	cands  []string // existing same-key values in the document (fixed at open)
 	sugs   []string // cands filtered by the current input prefix
 	sugIdx int      // tab cycle position (-1 = none)
+	oneOf  *smodel.FormNode // set for scalar variant edits: ctrl+t type switch
 }
 
 // addState is the key-name input overlay for a: add a schema-less
@@ -89,6 +90,7 @@ type editState struct {
 type addState struct {
 	path []any            // object the new member goes into
 	node *smodel.FormNode // the menu's node; its Children are the known keys
+	idx  int              // member insert position captured from the cursor (a/A)
 	ti   textinput.Model
 	err  string
 }
@@ -99,14 +101,16 @@ type selState struct {
 	path   []any
 	opts   []smodel.EnumOpt
 	cursor int
+	oneOf  *smodel.FormNode // set for enum variant editors: ctrl+t type switch
 }
 
 // textState is the raw-JSON textarea overlay (nil path = whole document).
 type textState struct {
-	path []any
-	fn   *smodel.FormNode // nil at the root editor
-	ta   textarea.Model
-	err  string
+	path      []any
+	fn        *smodel.FormNode // nil at the root editor
+	ta        textarea.Model
+	err       string
+	insertIdx int // >= 0: a/A positioned add — splice at this member index on apply; -1 = plain Set
 }
 
 // issuesState is the load-time validation issues overlay: each entry can jump

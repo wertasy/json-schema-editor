@@ -52,11 +52,27 @@ func (m *listModel) keyList(msg tea.KeyMsg) tea.Cmd {
 	case " ":
 		return m.space(r)
 	case "d":
-		m.deleteItem(r)
+		m.deletePair(r)
+	case "ctrl+t":
+		if st.oneOf != nil { // classic variant editor: offer the type switch
+			oneOf, path := st.oneOf, clonePath(st.path)
+			m.stack = m.stack[:len(m.stack)-1]
+			m.push(oneOf, path)
+		}
 	case "delete":
 		m.deletePair(r)
 	case "a":
-		m.addKey()
+		if st.kind == menuItems {
+			m.insertItem(r, false)
+			return nil
+		}
+		m.addKey(r, false)
+	case "A":
+		if st.kind == menuItems {
+			m.insertItem(r, true)
+			return nil
+		}
+		m.addKey(r, true)
 	case "?":
 		m.help = true
 	case "/":
@@ -150,10 +166,21 @@ func (m *listModel) push(fn *smodel.FormNode, path []any) {
 
 // pushChildMenu drills into a child node: all-object oneOfs open the
 // dynamic merged/pinned item menu, everything else the classic menu kind.
+// A classic oneOf with an existing value skips the variant picker and
+// edits the current variant directly (ctrl+t offers the type switch); no
+// value keeps the pick-a-type-first flow.
 func (m *listModel) pushChildMenu(fn *smodel.FormNode, path []any) {
 	if fn.Kind == smodel.KOneOf && dynamicVariants(fn) != nil {
 		m.stack = append(m.stack, m.dynamicMenu(fn, path))
 		return
+	}
+	if fn.Kind == smodel.KOneOf {
+		if v, ok := m.doc.Get(path); ok && v != nil && !v.Null {
+			if idx := currentVariant(fn, v); idx >= 0 {
+				m.enterVariantEditor(fn.Variants[idx], path, fn)
+				return
+			}
+		}
 	}
 	m.push(fn, path)
 }
@@ -308,7 +335,7 @@ func (m *listModel) openRawAt(fn *smodel.FormNode, path []any) {
 		}
 	}
 	ta.Focus()
-	m.text = &textState{path: path, fn: fn, ta: ta}
+	m.text = &textState{path: path, fn: fn, ta: ta, insertIdx: -1}
 }
 
 // toggleBool flips a boolean field between its current/effective value and
@@ -363,32 +390,75 @@ func enumIndex(fn *smodel.FormNode, v *jsondoc.Node) int {
 
 // --- arrays --------------------------------------------------------------
 
-// addItem appends a new array item: object/oneOf/nested-array items drill
-// into a fresh item menu, scalar and enum items open their editors aimed at
-// the append position, booleans get their default appended.
+// addItem appends a new array item (< Add item > row): object/oneOf/
+// nested-array items drill into a fresh item menu, scalar and enum items
+// open their editors aimed at the append position, booleans get their
+// default appended.
 func (m *listModel) addItem() {
+	m.insertItemAt(docArrayLen(m.doc, m.top().path), false)
+}
+
+// insertItem inserts a fresh item before (after=false) or after
+// (after=true) the item under the cursor; a cursor that is not on an item
+// row clamps to the list position (top row: first, bottom: append).
+func (m *listModel) insertItem(r row, after bool) {
+	idx := 0
+	if r.kind == rowField || r.kind == rowDrill {
+		idx = r.idx
+		if after {
+			idx++
+		}
+	} else if after {
+		idx = docArrayLen(m.doc, m.top().path)
+	}
+	m.insertItemAt(idx, true)
+}
+
+// insertItemAt splices a fresh item at idx and opens its editor or drill —
+// the shared body of < Add item > (splice=false: nothing is written until a
+// field of the fresh item is set, so cancelling leaves no trace) and a/A
+// (splice=true: the insertion must shift the existing elements, so a
+// placeholder lands immediately — null for variant pickers and scalar
+// editors, {} / [] for drill targets; a cancelled scalar edit leaves the
+// placeholder, deletable with d).
+func (m *listModel) insertItemAt(idx int, splice bool) {
 	st := m.top()
 	items := st.node.Items
 	if items == nil {
 		return
 	}
-	ipath := pathIdx(st.path, docArrayLen(m.doc, st.path))
+	ipath := pathIdx(st.path, idx)
+	ins := func(v *jsondoc.Node) {
+		if splice {
+			m.doc.Insert(st.path, idx, v)
+		}
+	}
 	switch items.Kind {
 	case smodel.KOneOf:
+		ins(&jsondoc.Node{Null: true})
 		if dynamicVariants(items) != nil {
 			m.stack = append(m.stack, m.dynamicMenu(items, ipath))
 			return
 		}
 		m.push(items, ipath)
-	case smodel.KObject, smodel.KArray:
+	case smodel.KObject:
+		ins(&jsondoc.Node{Object: &[]jsondoc.Member{}})
+		m.push(items, ipath)
+	case smodel.KArray:
+		ins(&jsondoc.Node{Array: &[]*jsondoc.Node{}})
 		m.push(items, ipath)
 	case smodel.KBoolean:
 		b := false
 		if items.Default != nil && items.Default.Bool != nil {
 			b = *items.Default.Bool
 		}
-		m.doc.Set(ipath, &jsondoc.Node{Bool: &b})
+		if splice {
+			m.doc.Insert(st.path, idx, &jsondoc.Node{Bool: &b})
+		} else {
+			m.doc.Set(ipath, &jsondoc.Node{Bool: &b})
+		}
 	default: // scalar / enum / raw item
+		ins(&jsondoc.Node{Null: true})
 		m.openField(items, ipath, true)
 	}
 }
@@ -429,9 +499,10 @@ func (m *listModel) deleteItem(r row) {
 }
 
 // addKey opens the key-name input for a schema-less member under the
-// current object menu (a). Non-object menus (items lists, enum toggles,
-// variant pickers, scalar roots) refuse with a notice.
-func (m *listModel) addKey() {
+// current object menu (a before, A after the cursor's member; a cursor not
+// on an existing member appends). Non-object menus (items lists, enum
+// toggles, variant pickers, scalar roots) refuse with a notice.
+func (m *listModel) addKey(r row, after bool) {
 	st := m.top()
 	if st.kind != menuObject || st.node.Kind != smodel.KObject {
 		m.notice = "a adds a custom key under an object menu"
@@ -441,7 +512,33 @@ func (m *listModel) addKey() {
 	ti.Prompt = ""
 	ti.CharLimit = 0
 	ti.Focus()
-	m.add = &addState{path: clonePath(st.path), node: st.node, ti: ti}
+	m.add = &addState{path: clonePath(st.path), node: st.node,
+		idx: m.memberInsertIndex(r, after), ti: ti}
+}
+
+// memberInsertIndex returns the document member index a new key gets: the
+// cursor row's own member position (before/after it) when that key exists
+// in the document, else the append position (unset rows, status/save rows).
+func (m *listModel) memberInsertIndex(r row, after bool) int {
+	st := m.top()
+	cur, _ := m.doc.Get(st.path)
+	var mem []jsondoc.Member
+	if cur != nil && cur.Object != nil {
+		mem = *cur.Object
+	}
+	if (r.kind == rowField || r.kind == rowDrill || r.kind == rowUnknown) && len(r.path) > 0 {
+		if key, ok := r.path[len(r.path)-1].(string); ok {
+			for i := range mem {
+				if mem[i].Key == key {
+					if after {
+						return i + 1
+					}
+					return i
+				}
+			}
+		}
+	}
+	return len(mem)
 }
 
 // keyAdd drives the key-name input: enter validates the name and opens the
@@ -471,8 +568,10 @@ func (m *listModel) keyAdd(msg tea.KeyMsg) tea.Cmd {
 			}
 		}
 		path := pathFor(m.add.path, k)
+		idx := m.add.idx
 		m.add = nil
-		m.openRawAt(nil, path) // empty textarea; applyText parses + doc.Set
+		m.openRawAt(nil, path) // empty textarea; applyText parses + writes
+		m.text.insertIdx = idx
 		return nil
 	case "esc":
 		m.add = nil
@@ -521,11 +620,11 @@ func (m *listModel) enterVariant(r row) tea.Cmd {
 	v, hasV := m.doc.Get(r.path)
 	cur := currentVariant(st.node, v)
 	if cur >= 0 && st.node.Variants[cur] == r.variant {
-		m.enterVariantEditor(r.variant, r.path)
+		m.enterVariantEditor(r.variant, r.path, st.node)
 		return nil
 	}
 	if hasV && v != nil && !v.Null {
-		variant, path := r.variant, r.path
+		variant, path, oneOf := r.variant, r.path, st.node
 		m.confirm = &confirmState{
 			title: "Replace current value? (y/n)",
 			onYes: func(m *listModel) tea.Cmd {
@@ -534,25 +633,27 @@ func (m *listModel) enterVariant(r row) tea.Cmd {
 				} else {
 					m.doc.Remove(path)
 				}
-				m.enterVariantEditor(variant, path)
+				m.enterVariantEditor(variant, path, oneOf)
 				return nil
 			},
 		}
 		return nil
 	}
-	m.enterVariantEditor(r.variant, r.path)
+	m.enterVariantEditor(r.variant, r.path, st.node)
 	return nil
 }
 
-func (m *listModel) enterVariantEditor(variant *smodel.FormNode, path []any) {
+func (m *listModel) enterVariantEditor(variant *smodel.FormNode, path []any, oneOf *smodel.FormNode) {
 	switch variant.Kind {
 	case smodel.KObject, smodel.KArray:
 		m.push(variant, path)
+		m.top().oneOf = oneOf // ctrl+t offers the type switch
 	case smodel.KBoolean:
 		m.toggleBool(variant, path)
 	case smodel.KEnum:
 		cur, _ := m.doc.Get(path)
-		m.sel = &selState{fn: variant, path: path, opts: variant.Enum, cursor: enumIndex(variant, cur)}
+		m.sel = &selState{fn: variant, path: path, opts: variant.Enum,
+			cursor: enumIndex(variant, cur), oneOf: oneOf}
 	default:
 		// scalar / raw: leave the picker and edit at the field row of the
 		// parent menu, like any other value
@@ -560,6 +661,9 @@ func (m *listModel) enterVariantEditor(variant *smodel.FormNode, path []any) {
 			m.stack = m.stack[:len(m.stack)-1]
 		}
 		m.openField(variant, path, false)
+		if m.edit != nil {
+			m.edit.oneOf = oneOf // ctrl+t offers the type switch
+		}
 	}
 }
 
@@ -741,6 +845,11 @@ func (m *listModel) applyText() tea.Cmd {
 	}
 	if m.text.path == nil {
 		*m.doc = *n
+	} else if m.text.insertIdx >= 0 {
+		// positioned add (a/A): splice the new member at its member index
+		parent := m.text.path[:len(m.text.path)-1]
+		key := m.text.path[len(m.text.path)-1].(string)
+		m.doc.InsertMember(parent, key, m.text.insertIdx, n)
 	} else {
 		m.doc.Set(m.text.path, n)
 	}
@@ -753,6 +862,13 @@ func (m *listModel) keySel(msg tea.KeyMsg) tea.Cmd {
 		return nil
 	}
 	switch msg.String() {
+	case "ctrl+t":
+		if m.sel.oneOf != nil { // enum variant editor: offer the type switch
+			oneOf, path := m.sel.oneOf, clonePath(m.sel.path)
+			m.sel = nil
+			m.push(oneOf, path)
+		}
+		return nil
 	case "up", "k":
 		m.sel.cursor = wrapCursor(m.sel.cursor, -1, len(m.sel.opts))
 	case "down", "j":
@@ -768,6 +884,13 @@ func (m *listModel) keySel(msg tea.KeyMsg) tea.Cmd {
 
 func (m *listModel) keyEdit(msg tea.KeyMsg) tea.Cmd {
 	switch msg.String() {
+	case "ctrl+t":
+		if m.edit.oneOf != nil { // scalar variant edit: offer the type switch
+			oneOf, path := m.edit.oneOf, clonePath(m.edit.path)
+			m.edit = nil
+			m.push(oneOf, path)
+		}
+		return nil
 	case "enter":
 		if err := applyScalar(m.doc, m.edit.fn, m.edit.path, m.edit.ti.Value()); err != nil {
 			m.edit.err = err.Error()

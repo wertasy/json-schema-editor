@@ -29,13 +29,15 @@ const (
 // remembered so popping restores the exact view. variantOf is non-nil when
 // this is the dynamic item menu of an all-object oneOf: node then switches
 // between the merged union menu and the matched variant's menu as the value
-// at path disambiguates.
+// at path disambiguates. oneOf is non-nil on the top-level editor menu of a
+// classic oneOf variant (object/array): ctrl+t offers the type switch.
 type menuState struct {
 	kind           menuKind
 	node           *smodel.FormNode
 	path           []any
 	cursor, offset int
 	variantOf      *smodel.FormNode
+	oneOf          *smodel.FormNode // classic variant editor: ctrl+t type switch
 }
 
 // rowKind classifies one rendered line inside a menu.
@@ -777,7 +779,7 @@ func rebuildStack(root *smodel.FormNode, doc *jsondoc.Node, path []any) []*menuS
 					return stack
 				}
 				stack = append(stack, &menuState{kind: menuKindFor(variant),
-					node: variant, path: clonePath(curPath)})
+					node: variant, path: clonePath(curPath), oneOf: cur})
 				cur = variant
 			}
 			var child *smodel.FormNode
@@ -793,6 +795,18 @@ func rebuildStack(root *smodel.FormNode, doc *jsondoc.Node, path []any) []*menuS
 				continue // extra key without schema: skip the segment
 			}
 			cpath := pathFor(curPath, s)
+			if child.Kind == smodel.KOneOf {
+				// an existing value edits its variant directly; the picker
+				// stays one ctrl+t away
+				if v, ok := doc.Get(cpath); ok && v != nil && !v.Null {
+					if vi := currentVariant(child, v); vi >= 0 && !menuLeaf(child.Variants[vi]) {
+						stack = append(stack, &menuState{kind: menuKindFor(child.Variants[vi]),
+							node: child.Variants[vi], path: cpath, oneOf: child})
+						cur, curPath = child.Variants[vi], cpath
+						continue
+					}
+				}
+			}
 			if !menuLeaf(child) {
 				stack = append(stack, &menuState{kind: menuKindFor(child),
 					node: child, path: cpath})

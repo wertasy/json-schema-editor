@@ -419,10 +419,11 @@ func TestRebuildStack(t *testing.T) {
 	if len(st) != 3 || st[2].kind != menuItems {
 		t.Fatalf("tags item stack = %+v", st)
 	}
-	// oneOf descent follows the current variant
+	// oneOf descent follows the current variant; an existing value edits it
+	// directly (oneOf carried for the ctrl+t type switch)
 	docAuth := tobj(tmem("auth", tobj(tmem("token", tstr("x")))))
 	st = rebuildStack(root, docAuth, []any{"auth", "token"})
-	if len(st) != 3 || st[1].kind != menuOneOf || st[2].node.Title != "Token" {
+	if len(st) != 2 || st[1].node == nil || st[1].node.Title != "Token" || st[1].oneOf == nil {
 		t.Fatalf("auth token stack = %+v", st)
 	}
 	// unset oneOf cannot descend past the picker

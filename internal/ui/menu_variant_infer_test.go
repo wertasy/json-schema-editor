@@ -241,12 +241,19 @@ func TestScalarVariantSelection(t *testing.T) {
 	if got := currentVariant(client, tstr("abc")); got != 0 {
 		t.Fatalf("currentVariant(string) = %d, want 0", got)
 	}
-	press(m, "enter") // → picker again
-	if m.top().kind != menuOneOf {
-		t.Fatalf("re-entering should show the picker, got kind=%v", m.top().kind)
+	// re-entering with a value skips the picker: the inline editor opens
+	// prefilled straight away
+	press(m, "enter")
+	if m.top().kind != menuObject {
+		t.Fatalf("re-entering must stay in the list, got kind=%v", m.top().kind)
 	}
-	if v := m.View(); !contains(v, "● variant 1") {
-		t.Fatalf("current mark missing:\n%s", v)
+	if m.edit == nil || m.edit.ti.Value() != "abc" {
+		t.Fatalf("editor should open prefilled directly, got %+v", m.edit)
+	}
+	// ctrl+t offers the type switch: the picker opens on the current variant
+	press(m, "ctrl+t")
+	if m.top().kind != menuOneOf {
+		t.Fatalf("ctrl+t must open the variant picker, got %d", m.top().kind)
 	}
 	if m.top().cursor != 0 {
 		t.Fatalf("picker must open on the current (string) variant, cursor = %d", m.top().cursor)
@@ -260,9 +267,10 @@ func TestScalarVariantSelection(t *testing.T) {
 	}
 	press(m, "esc")
 
-	// switching to the object variant still asks before replacing
-	press(m, "enter") // picker
-	m.top().cursor = 1
+	// switching to the object variant still asks before replacing: re-enter
+	// (direct inline editor), then offer the type switch with ctrl+t
+	press(m, "enter", "ctrl+t") // enter → direct editor; ctrl+t → picker
+	press(m, "down")            // cursor on the object variant
 	press(m, "enter")
 	if m.confirm == nil || !contains(m.View(), "Replace current value?") {
 		t.Fatal("switching variants should confirm")
@@ -278,7 +286,8 @@ func TestScalarVariantSelection(t *testing.T) {
 
 func TestVariantPickerCursorOnCurrentValue(t *testing.T) {
 	// sing-box ip_cidr style: scalar vs list-of-string variant; the current
-	// value is a list, so the picker must open on the list row (the ● row)
+	// value is a list, so enter edits the list variant directly and ctrl+t
+	// offers the type picker, which opens on the ● row (index 1)
 	client := &smodel.FormNode{Key: "ip_cidr", Title: "IP CIDR", Kind: smodel.KOneOf, Variants: []*smodel.FormNode{
 		{Key: "ip_cidr", Kind: smodel.KScalar, JSONType: "string"},
 		{Key: "ip_cidr", Kind: smodel.KArray,
@@ -288,9 +297,16 @@ func TestVariantPickerCursorOnCurrentValue(t *testing.T) {
 		Children: []*smodel.FormNode{client}}
 	m := newListModel(root, tobj(tmem("ip_cidr", tarr(tstr("1.2.3.4")))), Options{})
 	m.Update(tea.WindowSizeMsg{Width: 100, Height: 30})
-	press(m, "enter") // IP CIDR row → variant picker
+	press(m, "enter") // IP CIDR row → straight into the list variant editor
+	if m.top().kind != menuItems {
+		t.Fatalf("enter with a list value must edit the list variant, got kind=%v", m.top().kind)
+	}
+	if m.top().oneOf == nil {
+		t.Fatal("the variant editor must carry its oneOf for the type switch")
+	}
+	press(m, "ctrl+t")
 	if m.top().kind != menuOneOf {
-		t.Fatalf("expected the picker, got kind=%v", m.top().kind)
+		t.Fatalf("ctrl+t must open the variant picker, got %d", m.top().kind)
 	}
 	if m.top().cursor != 1 {
 		t.Fatalf("picker cursor = %d, want 1 (current value is a list)", m.top().cursor)
@@ -299,7 +315,7 @@ func TestVariantPickerCursorOnCurrentValue(t *testing.T) {
 		t.Fatalf("current list variant should be marked:\n%s", v)
 	}
 
-	// no value: picker opens on the first row
+	// no value: the pick-a-type-first flow keeps the picker on row 0
 	m2 := newListModel(root, tobj(), Options{})
 	m2.Update(tea.WindowSizeMsg{Width: 100, Height: 30})
 	press(m2, "enter")
@@ -307,14 +323,19 @@ func TestVariantPickerCursorOnCurrentValue(t *testing.T) {
 		t.Fatalf("unset picker: kind=%v cursor=%d, want menuOneOf/0", m2.top().kind, m2.top().cursor)
 	}
 
-	// search-jump reaches the picker through rebuildStack: same seeding.
-	// The hit is the container row itself, so cursorForRow yields no match
-	// and the rebuilt stack's cursor must survive.
+	// search jump reaches the variant editor through rebuildStack with the
+	// same rule: an existing value edits directly, oneOf carried for ctrl+t
 	m3 := newListModel(root, tobj(tmem("ip_cidr", tarr(tstr("1.2.3.4")))), Options{})
 	m3.Update(tea.WindowSizeMsg{Width: 100, Height: 30})
 	press(m3, "/", "c", "i", "d", "r", "enter")
+	if m3.top().kind != menuItems || m3.top().oneOf == nil {
+		t.Fatalf("search jump: kind=%v oneOf=%v, want the list variant editor",
+			m3.top().kind, m3.top().oneOf != nil)
+	}
+	press(m3, "ctrl+t")
 	if m3.top().kind != menuOneOf || m3.top().cursor != 1 {
-		t.Fatalf("search jump: kind=%v cursor=%d, want menuOneOf/1", m3.top().kind, m3.top().cursor)
+		t.Fatalf("search-jump ctrl+t: kind=%v cursor=%d, want menuOneOf/1",
+			m3.top().kind, m3.top().cursor)
 	}
 }
 
