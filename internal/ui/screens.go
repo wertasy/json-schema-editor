@@ -236,7 +236,7 @@ func (a *app) editItem(items *smodel.FormNode, parentPath []any, idx int) {
 func (a *app) variant(node *smodel.FormNode, path []any) result {
 	opts := make([]navOpt, 0, len(node.Variants))
 	for i, v := range node.Variants {
-		opts = append(opts, navOpt{key: "v:" + itoa(i), label: v.Title})
+		opts = append(opts, navOpt{key: "v:" + itoa(i), label: displayTitle(v)})
 	}
 	choice, ok := a.choose(node.Title, "choose a variant", opts, opts[0].key)
 	if !ok {
@@ -372,7 +372,7 @@ func (a *app) variantRoot(node *smodel.FormNode) result {
 		}
 		opts := make([]navOpt, 0, len(node.Variants))
 		for i, v := range node.Variants {
-			opts = append(opts, navOpt{key: "v:" + itoa(i), label: v.Title})
+		opts = append(opts, navOpt{key: "v:" + itoa(i), label: displayTitle(v)})
 		}
 		choice, ok := a.choose(node.Title, "choose a variant", opts, opts[0].key)
 		if !ok {

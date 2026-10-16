@@ -145,6 +145,14 @@ func TestSummaryRules(t *testing.T) {
 	if got := summary(lm3, auth, []any{"auth"}); got != "Token token=secret123" {
 		t.Errorf("oneOf object value = %q, want Token token=secret123", got)
 	}
+	// untitled object variant: members only, no synthesized fallback label
+	untitled := &smodel.FormNode{Key: "rules", Kind: smodel.KOneOf, Variants: []*smodel.FormNode{
+		{Kind: smodel.KObject, Children: []*smodel.FormNode{{Key: "action"}}},
+	}}
+	lm3b := lmAt(tobj(tmem("rules", tobj(tmem("action", tstr("sniff"))))))
+	if got := summary(lm3b, untitled, []any{"rules"}); got != "action=sniff" {
+		t.Errorf("untitled oneOf object value = %q, want action=sniff", got)
+	}
 	// empty and long arrays
 	lm4 := lmAt(tobj(tmem("mounts", tarr())))
 	if got := summary(lm4, mounts, []any{"mounts"}); got != "empty" {

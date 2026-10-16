@@ -260,8 +260,12 @@ func summary(lm *listModel, fn *smodel.FormNode, path []any) string {
 		variant := fn.Variants[idx]
 		switch variant.Kind {
 		case smodel.KObject:
-			// the variant title gives the object context
-			return variant.Title + " " + objectSummary(v)
+			// a real title gives the object context; untitled variants
+			// show the members alone (no meaningless fallback label)
+			if variant.Title != "" {
+				return variant.Title + " " + objectSummary(v)
+			}
+			return objectSummary(v)
 		case smodel.KEnum:
 			enc := smodel.EncodeValue(v)
 			for _, o := range variant.Enum {
@@ -292,7 +296,10 @@ func summary(lm *listModel, fn *smodel.FormNode, path []any) string {
 				return valueClip(s)
 			}
 		}
-		return variant.Title
+		if variant.Title != "" {
+			return variant.Title
+		}
+		return "—"
 	default: // KRaw
 		return "json " + clipRunes(smodel.EncodeValue(v), 20)
 	}
@@ -425,6 +432,16 @@ func currentVariant(node *smodel.FormNode, val *jsondoc.Node) int {
 		}
 	}
 	return -1
+}
+
+// displayTitle is the header/label for a node whose schema gave it no title
+// (untitled oneOf variants): the structural signature stands in, matching
+// what variant rows already show.
+func displayTitle(fn *smodel.FormNode) string {
+	if fn.Title != "" {
+		return fn.Title
+	}
+	return VariantSignature(fn)
 }
 
 // dynamicVariants flattens oneOf variant groups (nested oneOfs, as in

@@ -329,10 +329,12 @@ func (p *parser) buildVariants(combo []*jsondoc.Node, ctx *refCtx, key string, d
 		return KEnum, opts, nil
 	}
 	variants = nil
-	for i, vn := range combo {
+	for _, vn := range combo {
 		fn := p.schema(vn, ctx, key, false, depth+1)
 		if titleOf(vn) == "" {
-			fn.Title = fmt.Sprintf("variant %d", i+1)
+			// no schema title: clear the key fallback too — the UI shows
+			// the structural signature instead of a meaningless "variant N"
+			fn.Title = ""
 		}
 		variants = append(variants, fn)
 	}

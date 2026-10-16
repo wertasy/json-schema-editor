@@ -425,7 +425,7 @@ func clipLeft(s string, max int) string {
 func (m *listModel) listView() string {
 	var b strings.Builder
 	st := m.top()
-	b.WriteString(mTitle.Render(st.node.Title))
+	b.WriteString(mTitle.Render(displayTitle(st.node)))
 	if m.dirty() {
 		b.WriteString(" " + mDiff.Render("●"))
 	}
@@ -671,7 +671,10 @@ func (m *listModel) rowLine(r row, cursor bool) string {
 		if cur >= 0 && m.top().node.Variants[cur] == r.variant {
 			mark, markStyle = "●", mAccent
 		}
-		left = markStyle.Render(mark) + " " + r.variant.Title
+		left = markStyle.Render(mark)
+		if r.variant.Title != "" {
+			left += " " + r.variant.Title
+		}
 		right = mTail.Render(VariantSignature(r.variant))
 		if mark == "●" {
 			if v, ok := m.doc.Get(r.path); ok && v != nil && !v.Null {
@@ -1104,7 +1107,7 @@ func (m *listModel) selView() string {
 	if v, ok := m.doc.Get(m.sel.path); ok && v != nil && !v.Null {
 		curEnc = smodel.EncodeValue(v)
 	}
-	b.WriteString(mTitle.Render(m.sel.fn.Title))
+	b.WriteString(mTitle.Render(displayTitle(m.sel.fn)))
 	b.WriteByte('\n')
 	cut := lipgloss.NewStyle().MaxWidth(m.width)
 	for i, o := range m.sel.opts {

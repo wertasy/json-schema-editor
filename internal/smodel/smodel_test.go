@@ -329,7 +329,7 @@ func TestVariantTagReference(t *testing.T) {
 	}
 }
 
-func TestVariantTitleFallback(t *testing.T) {
+func TestVariantUntitledCarriesNoLabel(t *testing.T) {
 	fn := mustLoad(t, `{
   "type": "object",
   "properties": {
@@ -340,8 +340,10 @@ func TestVariantTitleFallback(t *testing.T) {
 	if v.Kind != KOneOf || len(v.Variants) != 2 {
 		t.Fatalf("v = %+v", v)
 	}
-	if v.Variants[0].Title != "variant 1" || v.Variants[1].Title != "variant 2" {
-		t.Fatalf("fallback titles = %q %q", v.Variants[0].Title, v.Variants[1].Title)
+	// no synthesized "variant N": the UI shows the structural signature
+	if v.Variants[0].Title != "" || v.Variants[1].Title != "" {
+		t.Fatalf("untitled variant titles = %q %q, want empty",
+			v.Variants[0].Title, v.Variants[1].Title)
 	}
 }
 
