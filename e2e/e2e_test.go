@@ -608,8 +608,10 @@ func TestPtySearchReplace(t *testing.T) {
 		t.Fatal(err)
 	}
 	// the shipped example carries mode "quic", illegal for the schema enum:
-	// fix it so ctrl+s can actually save after the replace
-	fixed := strings.Replace(string(src), `"mode": "quic"`, `"mode": "tcp"`, 1)
+	// fix it so ctrl+s can actually save after the replace, and add a
+	// schema-unknown string key so the replace must reach it too
+	fixed := strings.Replace(string(src), `"mode": "quic"`,
+		`"mode": "tcp", "comment": "localhost box"`, 1)
 	if err := os.WriteFile(cfg, []byte(fixed), 0o644); err != nil {
 		t.Fatal(err)
 	}
@@ -673,7 +675,7 @@ func TestPtySearchReplace(t *testing.T) {
 	tty.Write([]byte("\t127.0.0.1")) // focus the replace input, type the text
 	_, off = waitFrame("replacement typed", off, "$/server/host  localhost → 127.0.0.1")
 	tty.Write([]byte("\x12")) // ctrl+r: replace all in scope
-	_, off = waitFrame("replace-all notice", off, "replaced 1 occurrence")
+	_, off = waitFrame("replace-all notice", off, "replaced 2 occurrence")
 	tty.Write([]byte("\x13")) // ctrl+s: persist
 	_, _ = waitFrame("saved", off, "Saved")
 	content, err := os.ReadFile(cfg)
@@ -682,6 +684,9 @@ func TestPtySearchReplace(t *testing.T) {
 	}
 	if !strings.Contains(string(content), `"host": "127.0.0.1"`) {
 		t.Errorf("replaced host missing after save:\n%s", content)
+	}
+	if !strings.Contains(string(content), "127.0.0.1 box") {
+		t.Errorf("unknown-key comment not replaced after save:\n%s", content)
 	}
 	if strings.Contains(string(content), "localhost") {
 		t.Errorf("old host still present after save:\n%s", content)

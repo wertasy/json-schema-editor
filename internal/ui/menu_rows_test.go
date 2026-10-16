@@ -532,3 +532,48 @@ func TestReplaceHits(t *testing.T) {
 		t.Errorf("duplicate variant paths = %d hits, want 1", len(got))
 	}
 }
+
+func TestSearchIndexUnknownKeys(t *testing.T) {
+	// schema-less document keys (with nested values) are indexed, matched
+	// and offered to replace like any other row
+	doc := testDoc()
+	doc.Set([]any{"extra"}, tobj(tmem("note", tstr("alpha")), tmem("tags", tarr(tstr("beta")))))
+	doc.Set([]any{"server", "legacy"}, tstr("gamma"))
+	lm := lmAt(doc)
+	all := searchIndex(lm, lm.top())
+
+	labels := map[string]bool{}
+	for _, r := range all {
+		if r.kind == rowUnknown {
+			labels[r.label] = true
+		}
+	}
+	for _, want := range []string{
+		"$/extra/note  alpha",
+		"$/extra/tags[0]  beta",
+		"$/server/legacy  gamma",
+	} {
+		if !labels[want] {
+			t.Errorf("unknown row %q missing from index: %v", want, labels)
+		}
+	}
+
+	// search matches the unknown key name and its value overview
+	for _, q := range []string{"legacy", "gamma", "extra"} {
+		if got := filterSearch(lm, all, q, true); len(got) == 0 {
+			t.Errorf("filter %q found no unknown row", q)
+		}
+	}
+
+	// replace previews target unknown string values, nested included
+	hits := replaceHits(lm, all, "a", "A", true)
+	paths := map[string]bool{}
+	for _, h := range hits {
+		paths[docPath(h.path)] = true
+	}
+	for _, want := range []string{"$/extra/note", "$/extra/tags[0]", "$/server/legacy"} {
+		if !paths[want] {
+			t.Errorf("replace hit %q missing: %v", want, paths)
+		}
+	}
+}

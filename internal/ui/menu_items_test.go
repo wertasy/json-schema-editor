@@ -713,3 +713,39 @@ func TestMenuSearchReplace(t *testing.T) {
 		t.Fatalf("jump cursor = %d, want the Name row (0)", c)
 	}
 }
+
+func TestSearchReplaceUnknownKey(t *testing.T) {
+	// strings under schema-undefined keys replace like any other value
+	doc := testDoc()
+	doc.Set([]any{"comment"}, tstr("hello world"))
+	m := newListModel(testModel(), doc, Options{})
+	m.Update(tea.WindowSizeMsg{Width: 100, Height: 30})
+
+	press(m, "r")
+	if !m.search.active || !m.search.replace {
+		t.Fatal("r should open search in replace mode")
+	}
+	for _, k := range "hello" {
+		press(m, string(k))
+	}
+	found := false
+	for _, r := range m.search.results {
+		if r.kind == rowUnknown && pathEq(r.path, []any{"comment"}) {
+			found = true
+		}
+	}
+	if !found {
+		t.Fatalf("unknown key missing from replace results: %+v", m.search.results)
+	}
+	press(m, "tab")
+	for _, k := range "goodbye" {
+		press(m, string(k))
+	}
+	press(m, "ctrl+r")
+	if s := strAt(t, doc, "comment"); s != "goodbye world" {
+		t.Fatalf("comment = %q, want goodbye world", s)
+	}
+	if !contains(m.notice, "replaced 1 occurrence") {
+		t.Fatalf("notice = %q", m.notice)
+	}
+}

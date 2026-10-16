@@ -752,29 +752,49 @@ func rebuildStack(root *smodel.FormNode, doc *jsondoc.Node, path []any) []*menuS
 
 // searchIndex walks the schema subtree below st — the menu the breadcrumb
 // points at — collecting object children, the actual array items and oneOf
-// variant subtrees. Labels are "<docPath>  <overview>" using the same value
-// column the menus show, so hits read as jump targets; variant rows carry
-// their structural signature instead of fallback titles like "variant 2",
-// which carry no meaning for the user.
+// variant subtrees, plus the document keys the schema does not define
+// (nested values included) so they stay searchable and replaceable. Labels
+// are "<docPath>  <overview>" using the same value column the menus show,
+// so hits read as jump targets; variant rows carry their structural
+// signature instead of fallback titles like "variant 2", which carry no
+// meaning for the user.
 func searchIndex(lm *listModel, st *menuState) []row {
 	var out []row
+	seen := map[string]bool{} // unknown doc paths, deduped across variants
 	var walk func(fn *smodel.FormNode, path []any)
 	walk = func(fn *smodel.FormNode, path []any) {
 		switch fn.Kind {
 		case smodel.KObject:
+			known := map[string]bool{}
 			for _, c := range fn.Children {
+				known[c.Key] = true
 				cpath := pathFor(path, c.Key)
 				out = append(out, row{kind: rowField, fn: c, path: cpath, idx: -1,
 					label: docPath(cpath) + "  " + summary(lm, c, cpath)})
 				walk(c, cpath)
 			}
+			out = append(out, unknownRows(lm, path, known, seen)...)
 		case smodel.KOneOf:
+			// first-definition field rows across variants (shared keys like
+			// a discriminator would otherwise repeat per variant), then the
+			// members no variant defines
+			known := map[string]bool{}
 			for _, v := range fn.Variants {
 				out = append(out, row{kind: rowVariant, fn: v, variant: v,
 					path: clonePath(path), idx: -1,
 					label: docPath(path) + "  " + VariantSignature(v)})
-				walk(v, clonePath(path))
+				for _, c := range v.Children {
+					if known[c.Key] {
+						continue
+					}
+					known[c.Key] = true
+					cpath := pathFor(path, c.Key)
+					out = append(out, row{kind: rowField, fn: c, path: cpath, idx: -1,
+						label: docPath(cpath) + "  " + summary(lm, c, cpath)})
+					walk(c, cpath)
+				}
 			}
+			out = append(out, unknownRows(lm, path, known, seen)...)
 		case smodel.KArray:
 			if fn.Items == nil || fn.Items.Kind == smodel.KEnum {
 				return
@@ -796,10 +816,75 @@ func searchIndex(lm *listModel, st *menuState) []row {
 	return out
 }
 
+// unknownRows indexes the members of the object at path that the schema
+// does not define (known), as rowUnknown with raw value overviews. seen
+// dedupes paths, e.g. a key unknown to one oneOf variant but defined in
+// another is indexed once.
+func unknownRows(lm *listModel, path []any, known map[string]bool, seen map[string]bool) []row {
+	if lm.doc == nil {
+		return nil
+	}
+	cur, ok := lm.doc.Get(path)
+	if !ok || cur == nil || cur.Object == nil {
+		return nil
+	}
+	var out []row
+	for _, mem := range *cur.Object {
+		if known[mem.Key] {
+			continue
+		}
+		p := pathFor(path, mem.Key)
+		if k := docPath(p); !seen[k] {
+			seen[k] = true
+			out = append(out, unknownRow(lm, p))
+			out = append(out, unknownValueRows(lm, p, mem.Val, seen)...)
+		}
+	}
+	return out
+}
+
+// unknownRow builds one schema-less index row.
+func unknownRow(lm *listModel, p []any) row {
+	return row{kind: rowUnknown, idx: -1, path: p,
+		label: docPath(p) + "  " + lm.rawValueSummary(p)}
+}
+
+// unknownValueRows indexes everything nested inside a schema-less value:
+// object members and array items are unknown in their own right, and
+// strings among them are replace targets like any other.
+func unknownValueRows(lm *listModel, path []any, v *jsondoc.Node, seen map[string]bool) []row {
+	if v == nil {
+		return nil
+	}
+	var out []row
+	if v.Object != nil {
+		for _, mem := range *v.Object {
+			p := pathFor(path, mem.Key)
+			if k := docPath(p); !seen[k] {
+				seen[k] = true
+				out = append(out, unknownRow(lm, p))
+				out = append(out, unknownValueRows(lm, p, mem.Val, seen)...)
+			}
+		}
+	}
+	if v.Array != nil {
+		for i, item := range *v.Array {
+			p := pathIdx(path, i)
+			if k := docPath(p); !seen[k] {
+				seen[k] = true
+				out = append(out, unknownRow(lm, p))
+				out = append(out, unknownValueRows(lm, p, item, seen)...)
+			}
+		}
+	}
+	return out
+}
+
 // filterSearch narrows the index to rows whose Title, Key or value overview
 // contains q; fold=true compares case-insensitively (the historic behavior),
 // fold=false requires an exact-case match. An empty query keeps everything.
-// Variant rows match schema identity only: their jump target is the picker row.
+// Variant rows match schema identity only: their jump target is the picker
+// row. Schema-less rows (unknown keys) match their key and value overview.
 func filterSearch(lm *listModel, all []row, q string, fold bool) []row {
 	if q == "" {
 		return all
@@ -809,13 +894,18 @@ func filterSearch(lm *listModel, all []row, q string, fold bool) []row {
 	}
 	var out []row
 	for _, r := range all {
+		var text string
 		if r.fn == nil {
-			continue
-		}
-		text := r.fn.Title + " " + r.fn.Key
-		if r.kind != rowVariant {
-			if s := summary(lm, r.fn, r.path); s != "—" {
-				text += " " + s
+			if r.kind != rowUnknown {
+				continue
+			}
+			text = unknownMatchText(r)
+		} else {
+			text = r.fn.Title + " " + r.fn.Key
+			if r.kind != rowVariant {
+				if s := summary(lm, r.fn, r.path); s != "—" {
+					text += " " + s
+				}
 			}
 		}
 		if fold {
@@ -826,6 +916,20 @@ func filterSearch(lm *listModel, all []row, q string, fold bool) []row {
 		}
 	}
 	return out
+}
+
+// unknownMatchText is the match text of a schema-less row: its key (the
+// last path segment) plus the value overview carried in the label.
+func unknownMatchText(r row) string {
+	key := ""
+	if n := len(r.path); n > 0 {
+		key = fmt.Sprint(r.path[n-1])
+	}
+	overview := r.label
+	if i := strings.Index(r.label, "  "); i >= 0 {
+		overview = r.label[i+2:]
+	}
+	return key + " " + overview
 }
 
 // replaceAll replaces every occurrence of old in s with rep, scanning left
