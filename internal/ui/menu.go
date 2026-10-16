@@ -180,7 +180,7 @@ func newListModel(model *smodel.FormNode, doc *jsondoc.Node, opts Options) *list
 	if doc != nil {
 		m.baseline = jsondoc.FromAny(doc.ToAny())
 	}
-	m.setIssues(issuesFrom(opts.LoadErrors))
+	m.setIssues(m.liveIssues(opts.LoadErrors))
 	return m
 }
 
@@ -198,12 +198,32 @@ func (m *listModel) setIssues(items []issue) {
 // refreshIssues re-validates the document after a write so fixed problems
 // leave the list, the counts and the row marks. Gated on a validator being
 // available and problems being known — a clean document is not re-validated
-// on every keypress (save-time validation remains the backstop).
+// on every keypress (save-time validation remains the backstop; without a
+// validator the load-time list stays as loaded).
 func (m *listModel) refreshIssues() {
 	if m.opts.Validate == nil || len(m.issuesNow) == 0 {
 		return
 	}
-	m.setIssues(issuesFrom(m.opts.Validate(m.doc)))
+	m.setIssues(m.liveIssues(m.opts.Validate(m.doc)))
+}
+
+// liveIssues combines validator messages with the editor's unknown-key
+// warnings for the live issue list. A key the validator already flags
+// (e.g. additionalProperties) is not warned about twice.
+func (m *listModel) liveIssues(msgs []string) []issue {
+	items := issuesFrom(msgs)
+	flagged := map[string]bool{}
+	for _, it := range items {
+		if it.path != nil {
+			flagged[docPath(it.path)] = true
+		}
+	}
+	for _, it := range unknownKeyIssues(m.model, m.doc) {
+		if !flagged[docPath(it.path)] {
+			items = append(items, it)
+		}
+	}
+	return items
 }
 
 // issuesFrom parses validator messages into jumpable issues.
@@ -843,7 +863,7 @@ func cursorByPath(rows []row, path []any) int {
 func (m *listModel) openIssues() {
 	items := m.issuesNow
 	if m.opts.Validate != nil {
-		items = issuesFrom(m.opts.Validate(m.doc))
+		items = m.liveIssues(m.opts.Validate(m.doc))
 		m.setIssues(items)
 	}
 	m.issuesBack = nil // reopening from the status row resets the parked list
@@ -857,7 +877,7 @@ func (m *listModel) issuesReturnTo() {
 	cur := m.issuesBack.cursor
 	items := m.issuesBack.items
 	if m.opts.Validate != nil {
-		items = issuesFrom(m.opts.Validate(m.doc))
+		items = m.liveIssues(m.opts.Validate(m.doc))
 		m.setIssues(items)
 	}
 	m.issuesBack = nil

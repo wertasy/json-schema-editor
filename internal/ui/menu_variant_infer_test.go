@@ -403,7 +403,7 @@ func TestCompletionDedup(t *testing.T) {
 		tobj(tmem("tag", tstr("c2"))))))
 	m2 := newListModel(root, doc2, Options{})
 	m2.Update(tea.WindowSizeMsg{Width: 100, Height: 30})
-	press(m2, "enter", "enter") // picker → string variant editor
+	press(m2, "down", "enter", "enter") // skip the unknown-key status row → picker → string variant
 	if got := m2.edit.cands; len(got) != 2 || got[0] != "c1" || got[1] != "c2" {
 		t.Fatalf("tag candidates = %v, want [c1 c2]", got)
 	}

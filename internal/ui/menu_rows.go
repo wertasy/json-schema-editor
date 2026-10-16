@@ -880,6 +880,102 @@ func unknownValueRows(lm *listModel, path []any, v *jsondoc.Node, seen map[strin
 	return out
 }
 
+// unknownKeyIssues collects the document keys no schema node defines —
+// the same keys the menus flag "(not in schema)" — as editor-level
+// warnings for the issues list. JSON Schema permits them (unless
+// additionalProperties: false), so they never gate saving. Only the
+// outermost unknown key is reported: everything nested inside shares its
+// fate and is edited as raw JSON. The walk is value-aware: under a oneOf
+// the matched variant's fields define what is known.
+func unknownKeyIssues(model *smodel.FormNode, doc *jsondoc.Node) []issue {
+	if model == nil || doc == nil {
+		return nil
+	}
+	var out []issue
+	warn := func(path []any, key string) {
+		p := pathFor(path, key)
+		ptr := ""
+		for _, seg := range p {
+			ptr += "/" + fmt.Sprint(seg)
+		}
+		out = append(out, issue{
+			msg:  fmt.Sprintf("at '%s': unknown key %q (not in the schema)", ptr, key),
+			path: p,
+		})
+	}
+	unknownOf := func(val *jsondoc.Node, known map[string]bool, path []any) {
+		if val == nil || val.Object == nil {
+			return
+		}
+		for _, mem := range *val.Object {
+			if len(path) == 0 && mem.Key == "$schema" {
+				continue // the editor's own schema pointer, not a user mistake
+			}
+			if !known[mem.Key] {
+				warn(path, mem.Key)
+			}
+		}
+	}
+	var walk func(fn *smodel.FormNode, path []any, val *jsondoc.Node)
+	walk = func(fn *smodel.FormNode, path []any, val *jsondoc.Node) {
+		if fn == nil || val == nil {
+			return
+		}
+		switch fn.Kind {
+		case smodel.KObject:
+			known := map[string]bool{}
+			for _, c := range fn.Children {
+				known[c.Key] = true
+				if m := memberOf(val, c.Key); m != nil {
+					walk(c, pathFor(path, c.Key), m)
+				}
+			}
+			unknownOf(val, known, path)
+		case smodel.KOneOf:
+			if cands := matchVariantList(fn.Variants, val); len(cands) == 1 {
+				walk(cands[0], path, val)
+				return
+			}
+			// value unset, ambiguous or unmatched: any key any variant
+			// defines counts as known
+			known := map[string]bool{}
+			for _, v := range fn.Variants {
+				for _, c := range v.Children {
+					if known[c.Key] {
+						continue
+					}
+					known[c.Key] = true
+					if m := memberOf(val, c.Key); m != nil {
+						walk(c, pathFor(path, c.Key), m)
+					}
+				}
+			}
+			unknownOf(val, known, path)
+		case smodel.KArray:
+			if fn.Items != nil && val.Array != nil {
+				for i, item := range *val.Array {
+					walk(fn.Items, pathIdx(path, i), item)
+				}
+			}
+		}
+	}
+	walk(model, nil, doc)
+	return out
+}
+
+// memberOf returns the value of key in an object node, nil when absent.
+func memberOf(n *jsondoc.Node, key string) *jsondoc.Node {
+	if n == nil || n.Object == nil {
+		return nil
+	}
+	for _, mem := range *n.Object {
+		if mem.Key == key {
+			return mem.Val
+		}
+	}
+	return nil
+}
+
 // filterSearch narrows the index to rows whose Title, Key or value overview
 // contains q; fold=true compares case-insensitively (the historic behavior),
 // fold=false requires an exact-case match. An empty query keeps everything.

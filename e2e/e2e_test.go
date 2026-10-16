@@ -666,7 +666,7 @@ func TestPtySearchReplace(t *testing.T) {
 		}
 	}
 
-	frame, off := waitFrame("root menu", 0, "Save and exit")
+	frame, off := waitFrame("root menu", 0, "Save and exit", "⚠ 2 validation errors")
 	_ = frame
 	tty.Write([]byte("r")) // open search-and-replace directly
 	_, off = waitFrame("replace view", off, "replace:", "case-insensitive")

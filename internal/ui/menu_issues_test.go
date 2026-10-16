@@ -10,6 +10,7 @@ import (
 	tea "github.com/charmbracelet/bubbletea"
 
 	"json-schema-editor/internal/jsondoc"
+	"json-schema-editor/internal/smodel"
 )
 
 func TestParseIssue(t *testing.T) {
@@ -193,12 +194,74 @@ func TestLoadIssuesRowAndJump(t *testing.T) {
 	}
 	m.top().cursor = 0
 	press(m, "enter")
-	if m.issues == nil || len(m.issues.items) != 1 || !contains(m.issues.items[0].msg, "/name") {
+	if m.issues == nil || len(m.issues.items) != 2 ||
+		!contains(m.issues.items[0].msg, "/name") ||
+		!contains(m.issues.items[1].msg, `unknown key "extra_key"`) {
 		t.Fatalf("overlay should recompute from the validator: %+v", m.issues)
 	}
 	press(m, "esc")
 	if m.issues != nil {
 		t.Fatal("esc should close the overlay")
+	}
+}
+
+func TestUnknownKeyIssuesListed(t *testing.T) {
+	doc := testDoc()
+	doc.Set([]any{"extra_key"}, tstr("x"))
+	doc.Set([]any{"server", "legacy"}, tnum("1"))
+	m := newListModel(testModel(), doc, Options{})
+	m.Update(tea.WindowSizeMsg{Width: 100, Height: 30})
+
+	// unknown keys warn in the live issue list, paths jump to their rows
+	if len(m.issuesNow) != 2 {
+		t.Fatalf("issues = %+v, want two unknown-key warnings", m.issuesNow)
+	}
+	if !pathEq(m.issuesNow[0].path, []any{"server", "legacy"}) ||
+		!pathEq(m.issuesNow[1].path, []any{"extra_key"}) {
+		t.Fatalf("warning paths = %v %v", m.issuesNow[0].path, m.issuesNow[1].path)
+	}
+	if v := m.View(); !contains(v, "⚠ 2 validation errors") {
+		t.Fatalf("status row missing:\n%s", v)
+	}
+
+	// validator output combines with the warnings without double-flagging
+	m.opts.Validate = func(d *jsondoc.Node) []string {
+		if _, ok := d.Get([]any{"extra_key"}); ok {
+			return []string{"at '': additional properties 'extra_key' not allowed"}
+		}
+		return nil
+	}
+	m.refreshIssues()
+	if len(m.issuesNow) != 2 || !contains(m.issuesNow[0].msg, "additional properties") ||
+		!contains(m.issuesNow[1].msg, `unknown key "legacy"`) {
+		t.Fatalf("combined issues = %+v", m.issuesNow)
+	}
+
+	// removing the keys clears their warnings
+	doc.Remove([]any{"extra_key"})
+	doc.Remove([]any{"server", "legacy"})
+	m.refreshIssues()
+	if len(m.issuesNow) != 0 {
+		t.Fatalf("warnings must clear after removal: %+v", m.issuesNow)
+	}
+}
+
+func TestUnknownKeyIssuesSchemaPointerExempt(t *testing.T) {
+	// the editor's own "$schema" write-back is bookkeeping, not a mistake
+	doc := tobj(tmem("$schema", tstr("mini.schema.json")), tmem("name", tstr("z")))
+	root := &smodel.FormNode{Key: "$", Title: "$", Kind: smodel.KObject, Children: []*smodel.FormNode{
+		{Key: "name", Title: "Name", Kind: smodel.KScalar, JSONType: "string"},
+	}}
+	if got := unknownKeyIssues(root, doc); len(got) != 0 {
+		t.Fatalf("$schema must not warn: %+v", got)
+	}
+	// a "$schema" key below the root is ordinary data and still warns
+	root2 := &smodel.FormNode{Key: "$", Title: "$", Kind: smodel.KObject, Children: []*smodel.FormNode{
+		{Key: "server", Title: "Server", Kind: smodel.KObject},
+	}}
+	doc2 := tobj(tmem("server", tobj(tmem("$schema", tstr("x")))))
+	if got := unknownKeyIssues(root2, doc2); len(got) != 1 || !pathEq(got[0].path, []any{"server", "$schema"}) {
+		t.Fatalf("nested $schema should warn: %+v", got)
 	}
 }
 
