@@ -181,6 +181,30 @@ func TestToFromAny(t *testing.T) {
 	}
 }
 
+func TestClone(t *testing.T) {
+	src := `{"b":1.0,"a":[true,null,"x"]}`
+	n, err := Parse(strings.NewReader(src))
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := n.String()
+	c := n.Clone()
+	if c.String() != want {
+		t.Fatalf("Clone reordered or changed literals: %s vs %s", c.String(), n.String())
+	}
+	if c == n || c.Object == n.Object {
+		t.Fatal("Clone aliases the original")
+	}
+	// Mutating the clone must not touch the original.
+	c.Set([]any{"b"}, FromAny("y"))
+	if n.String() != want {
+		t.Fatalf("original mutated: %s", n.String())
+	}
+	if got, ok := n.Get([]any{"b"}); !ok || got.Num == nil || got.Num.String() != "1.0" {
+		t.Fatalf("original b = %+v", got)
+	}
+}
+
 func TestSummary(t *testing.T) {
 	cases := []struct {
 		src  string

@@ -467,6 +467,43 @@ func FromAny(v any) *Node {
 	}
 }
 
+// Clone returns a deep copy of the node tree, preserving member order and
+// exact numeric literals. Snapshots (undo history) must not alias the live
+// document nor reorder it.
+func (n *Node) Clone() *Node {
+	if n == nil {
+		return nil
+	}
+	c := &Node{Null: n.Null}
+	if n.Object != nil {
+		obj := make([]Member, len(*n.Object))
+		for i, mem := range *n.Object {
+			obj[i] = Member{Key: mem.Key, Val: mem.Val.Clone()}
+		}
+		c.Object = &obj
+	}
+	if n.Array != nil {
+		arr := make([]*Node, len(*n.Array))
+		for i, v := range *n.Array {
+			arr[i] = v.Clone()
+		}
+		c.Array = &arr
+	}
+	if n.Str != nil {
+		s := *n.Str
+		c.Str = &s
+	}
+	if n.Num != nil {
+		v := *n.Num
+		c.Num = &v
+	}
+	if n.Bool != nil {
+		b := *n.Bool
+		c.Bool = &b
+	}
+	return c
+}
+
 // Summary renders a single-line description for array manager screens:
 // scalars verbatim, objects show their "title" member or "{…}", arrays show
 // "[N items]".
