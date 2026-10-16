@@ -79,7 +79,7 @@ func (m *listModel) activate(r row) tea.Cmd {
 			},
 		}
 	case rowSave:
-		return m.save()
+		return m.saveAndExit()
 	case rowRaw:
 		m.openRaw(nil)
 	case rowVariant:
@@ -472,7 +472,17 @@ func (m *listModel) enterVariantEditor(variant *smodel.FormNode, path []any) {
 
 // --- save ----------------------------------------------------------------
 
-func (m *listModel) save() tea.Cmd {
+// save handles ctrl+s: write the document and stay in the session. Change
+// markers clear against the fresh baseline; a notice confirms the write.
+func (m *listModel) save() tea.Cmd { return m.persist(false) }
+
+// saveAndExit handles the root "Save and exit" row: write, then end the
+// session.
+func (m *listModel) saveAndExit() tea.Cmd { return m.persist(true) }
+
+// persist validates first; validation errors open the overlay (with the
+// --force y/n path remembering whether the session should end afterwards).
+func (m *listModel) persist(exit bool) tea.Cmd {
 	if m.opts.Validate != nil {
 		if errs := m.opts.Validate(m.doc); len(errs) > 0 {
 			const maxShown = 15
@@ -490,13 +500,33 @@ func (m *listModel) save() tea.Cmd {
 				}
 				paths = append(paths, p)
 			}
-			m.errs = &errsState{lines: shown, paths: paths}
+			m.errs = &errsState{lines: shown, paths: paths, exit: exit}
 			return nil
 		}
 	}
+	return m.write(exit, false)
+}
+
+// write persists through opts.Save. A failed write surfaces as a notice and
+// the session continues; a successful one refreshes the change-mark baseline.
+func (m *listModel) write(exit, forced bool) tea.Cmd {
+	if m.opts.Save == nil {
+		m.notice = "save failed: no save target"
+		return nil
+	}
+	if err := m.opts.Save(m.doc); err != nil {
+		m.notice = "save failed: " + err.Error()
+		return nil
+	}
 	m.saved = true
+	m.withErrors = forced
 	m.baseline = jsondoc.FromAny(m.doc.ToAny()) // markers clear once saved
-	return tea.Quit
+	if exit {
+		m.exiting = true
+		return tea.Quit
+	}
+	m.notice = "Saved"
+	return nil
 }
 
 // --- overlay key handlers --------------------------------------------------
@@ -528,9 +558,9 @@ func (m *listModel) keyErrs(msg tea.KeyMsg) tea.Cmd {
 		}
 	case "y":
 		if m.opts.Force {
+			exit := m.errs.exit
 			m.errs = nil
-			m.saved, m.withErrors = true, true
-			return tea.Quit
+			return m.write(exit, true)
 		}
 	case "n", "esc":
 		m.errs = nil

@@ -321,8 +321,10 @@ func (a *app) rawEditor(path []any) {
 	}
 }
 
-// saveFlow validates and, if needed, shows the error list screen. Returns
-// resSaved when the document may be written.
+// saveFlow validates (error list → --force confirm) and writes the document
+// through opts.Save. Returns resSaved when the write succeeded — or when it
+// failed, after recording the error in a.saveErr (resSaved unwinds the
+// screen loop; Run surfaces the error).
 func (a *app) saveFlow() result {
 	if a.opts.Validate != nil {
 		errs := a.opts.Validate(a.doc)
@@ -352,6 +354,11 @@ func (a *app) saveFlow() result {
 				return resPop
 			}
 			a.savedWithErrors = true
+		}
+	}
+	if a.opts.Save != nil {
+		if err := a.opts.Save(a.doc); err != nil {
+			a.saveErr = fmt.Errorf("write: %w", err)
 		}
 	}
 	return resSaved

@@ -397,21 +397,32 @@ func TestPtySave(t *testing.T) {
 		tty.Write([]byte("\x13"))
 	}()
 
+	// ctrl+s must write the file and keep the session open: wait for the
+	// Saved notice instead of an exit
 	buf := make([]byte, 4096)
 	var all bytes.Buffer
+	saved := false
 	deadline := time.Now().Add(15 * time.Second)
 	for time.Now().Before(deadline) {
 		n, err := tty.Read(buf)
 		if n > 0 {
 			all.Write(buf[:n])
+			if strings.Contains(all.String(), "Saved") {
+				saved = true
+				break
+			}
 		}
 		if err != nil {
 			break
 		}
 	}
+	if !saved {
+		t.Fatalf("ctrl+s must save without exiting; screen:\n%s", all.String())
+	}
+	tty.Write([]byte("\x03")) // session continues after ctrl+s; abort now
 	waitErr := cmd.Wait()
-	if waitErr != nil {
-		t.Fatalf("exit after save keys: %v\nscreen:\n%s", waitErr, all.String())
+	if ee, ok := waitErr.(*exec.ExitError); !ok || ee.ExitCode() != 130 {
+		t.Fatalf("exit after abort = %v, want 130", waitErr)
 	}
 	content, err := os.ReadFile(outFile)
 	if err != nil {
@@ -453,21 +464,31 @@ func TestPtyMenuFlow(t *testing.T) {
 		tty.Write([]byte("\x13")) // ctrl+s save
 	}()
 
+	// ctrl+s writes and keeps the editor open; wait for the notice, then quit
 	buf := make([]byte, 4096)
 	var all bytes.Buffer
+	saved := false
 	deadline := time.Now().Add(15 * time.Second)
 	for time.Now().Before(deadline) {
 		n, err := tty.Read(buf)
 		if n > 0 {
 			all.Write(buf[:n])
+			if strings.Contains(all.String(), "Saved") {
+				saved = true
+				break
+			}
 		}
 		if err != nil {
 			break
 		}
 	}
+	if !saved {
+		t.Fatalf("ctrl+s must save without exiting; screen:\n%s", all.String())
+	}
+	tty.Write([]byte("\x03"))
 	waitErr := cmd.Wait()
-	if waitErr != nil {
-		t.Fatalf("exit after menu flow keys: %v\nscreen:\n%s", waitErr, all.String())
+	if ee, ok := waitErr.(*exec.ExitError); !ok || ee.ExitCode() != 130 {
+		t.Fatalf("exit after abort = %v, want 130", waitErr)
 	}
 	want := map[string]any{
 		"$schema": schema, // -s auto-fills the field

@@ -45,6 +45,12 @@ func press(m *listModel, keys ...string) {
 	}
 }
 
+// countSave returns Options whose Save counts write calls (a successful
+// no-op sink for save-path tests).
+func countSave(calls *int) Options {
+	return Options{Save: func(*jsondoc.Node) error { *calls++; return nil }}
+}
+
 func numAt(t *testing.T, doc *jsondoc.Node, path ...any) string {
 	t.Helper()
 	n, ok := doc.Get(path)
@@ -308,11 +314,15 @@ func TestMenuTextareaRaw(t *testing.T) {
 }
 
 func TestMenuSaveFlow(t *testing.T) {
-	// clean save
-	m := newListModel(testModel(), testDoc(), Options{})
-	press(m, "ctrl+s")
-	if !m.saved || m.withErrors {
+	// clean ctrl+s: writes through Save and stays in the session
+	var saves int
+	m := newListModel(testModel(), testDoc(), countSave(&saves))
+	_, cmd := m.Update(key("ctrl+s"))
+	if saves != 1 || !m.saved || m.withErrors {
 		t.Fatal("ctrl+s must save when validation passes (nil validator)")
+	}
+	if cmd != nil {
+		t.Fatal("ctrl+s must not quit; only the Save and exit row ends the session")
 	}
 
 	// validation errors block, then dismiss
@@ -330,15 +340,18 @@ func TestMenuSaveFlow(t *testing.T) {
 		t.Fatal("esc must dismiss the error overlay")
 	}
 
-	// force path: y saves with errors
-	m3 := newListModel(testModel(), testDoc(), Options{Validate: validate, Force: true})
+	// force path: y writes with errors and stays in the session
+	m3 := newListModel(testModel(), testDoc(), Options{Validate: validate, Force: true, Save: func(*jsondoc.Node) error { return nil }})
 	press(m3, "ctrl+s")
 	if v := m3.View(); !contains(v, "y save anyway · n back") {
 		t.Fatalf("force footer:\n%s", v)
 	}
-	press(m3, "y")
+	_, cmd = m3.Update(key("y"))
 	if !m3.saved || !m3.withErrors {
 		t.Fatal("force y must save with errors")
+	}
+	if cmd != nil {
+		t.Fatal("force ctrl+s must not quit")
 	}
 
 	// force path: n goes back
@@ -348,10 +361,15 @@ func TestMenuSaveFlow(t *testing.T) {
 		t.Fatal("force n must return to the list unsaved")
 	}
 
-	// the Save row behaves like ctrl+s
-	m5 := newListModel(testModel(), testDoc(), Options{})
-	press(m5, "down", "down", "down", "down", "down", "down", "enter") // Save and exit
-	if !m5.saved {
-		t.Fatal("Save and exit row must save")
+	// the Save and exit row writes through Save and quits
+	var exits int
+	m5 := newListModel(testModel(), testDoc(), countSave(&exits))
+	press(m5, "down", "down", "down", "down", "down", "down")
+	_, cmd = m5.Update(key("enter")) // Save and exit
+	if exits != 1 || !m5.saved {
+		t.Fatal("Save and exit row must write through Save")
+	}
+	if cmd == nil {
+		t.Fatal("Save and exit must quit")
 	}
 }

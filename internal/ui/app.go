@@ -20,6 +20,10 @@ type Options struct {
 	Force      bool
 	// Validate checks a config document; nil disables save-time validation.
 	Validate func(*jsondoc.Node) []string
+	// Save writes the document to its destination. Every save action goes
+	// through it (TUI ctrl+s, the Save-and-exit row, the accessible save);
+	// nil makes saving impossible.
+	Save func(*jsondoc.Node) error
 	// Status is a warning line shown on the root screen (e.g. compile
 	// failure).
 	Status string
@@ -30,11 +34,15 @@ type Options struct {
 
 // Outcome reports how the session ended.
 type Outcome struct {
+	// Saved is true when at least one write succeeded during the session.
 	Saved bool
-	// WithErrors is true when the document was saved via --force despite
+	// WithErrors is true when the last write went through --force despite
 	// validation errors.
 	WithErrors bool
-	Err        error
+	// Aborted is true when the session ended via ctrl+c/EOF abort rather
+	// than a save-and-exit.
+	Aborted bool
+	Err     error
 }
 
 // result is the internal outcome of a screen.
@@ -54,6 +62,9 @@ type app struct {
 	opts  Options
 	// savedWithErrors records a --force save that skipped validation errors.
 	savedWithErrors bool
+	// saveErr carries a failed Save write out of saveFlow (which must return
+	// resSaved to unwind the screen loop).
+	saveErr error
 	// in wraps stdin in accessible mode for one-line-at-a-time delivery.
 	in *lineReader
 }
@@ -85,10 +96,13 @@ func Run(model *smodel.FormNode, doc *jsondoc.Node, opts Options) (out Outcome) 
 	default: // KScalar / KEnum / KBoolean / KRaw root
 		r = a.simpleRoot(model)
 	}
+	if a.saveErr != nil {
+		return Outcome{Err: a.saveErr}
+	}
 	if r == resSaved {
 		return Outcome{Saved: true, WithErrors: a.savedWithErrors}
 	}
-	return Outcome{}
+	return Outcome{Aborted: true}
 }
 
 func (a *app) runForm(f *huh.Form) error {
@@ -111,8 +125,10 @@ func runMenu(model *smodel.FormNode, doc *jsondoc.Node, opts Options) (out Outco
 	if err != nil {
 		return Outcome{Err: err}
 	}
-	if lm, ok := fm.(*listModel); ok && lm.saved {
-		return Outcome{Saved: true, WithErrors: lm.withErrors}
+	if lm, ok := fm.(*listModel); ok {
+		// Aborted stays true even after a mid-session ctrl+s: the abort
+		// itself wrote nothing, but main must know a save already landed.
+		return Outcome{Saved: lm.saved, WithErrors: lm.withErrors, Aborted: lm.aborted}
 	}
 	return Outcome{}
 }

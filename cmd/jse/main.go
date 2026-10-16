@@ -201,10 +201,13 @@ func run() int {
 		}
 	}
 
+	// The UI writes on every save action (TUI ctrl+s stays open; the
+	// Save-and-exit row and the accessible save quit afterwards).
 	outcome := ui.Run(model, cfg, ui.Options{
 		Accessible: *accessible,
 		Force:      *force,
 		Validate:   check,
+		Save: func(d *jsondoc.Node) error { return atomicWrite(config, d) },
 		Status:     strings.Join(status, "\n"),
 		LoadErrors: loadErrors,
 	})
@@ -212,13 +215,19 @@ func run() int {
 		fmt.Fprintf(os.Stderr, "ui: %v\n", outcome.Err)
 		return 1
 	}
+	if outcome.Aborted {
+		if outcome.Saved {
+			// A ctrl+s during the session already wrote the file; edits
+			// made after that save are discarded.
+			fmt.Printf("Saved to %s; aborted (changes after the last save are lost)\n", config)
+		} else {
+			fmt.Println("Aborted, no changes written")
+		}
+		return 130
+	}
 	if !outcome.Saved {
 		fmt.Println("Aborted, no changes written")
 		return 130
-	}
-	if err := atomicWrite(config, cfg); err != nil {
-		fmt.Fprintf(os.Stderr, "write %s: %v\n", config, err)
-		return 1
 	}
 	if outcome.WithErrors {
 		fmt.Printf("Saved with validation errors (--force): %s\n", config)

@@ -43,7 +43,8 @@ func TestNodesEqual(t *testing.T) {
 
 func TestChangeMarkers(t *testing.T) {
 	doc := testDoc()
-	m := newListModel(testModel(), doc, Options{})
+	var saves int
+	m := newListModel(testModel(), doc, countSave(&saves))
 	m.Update(tea.WindowSizeMsg{Width: 100, Height: 30})
 
 	// freshly loaded: nothing marked, no dirty dot
@@ -96,13 +97,13 @@ func TestChangeMarkers(t *testing.T) {
 		t.Fatal("untouched sibling must stay clean")
 	}
 
-	// saving clears the baseline
+	// saving clears the baseline and keeps the session open
 	m.Update(key("ctrl+s"))
 	if m.confirm != nil {
 		press(m, "y")
 	}
-	if !m.saved {
-		t.Fatal("save should succeed")
+	if saves != 1 || !m.saved {
+		t.Fatal("ctrl+s must write through Save")
 	}
 	if m.dirty() || contains(m.View(), "●") {
 		t.Fatalf("markers must clear after save:\n%s", m.View())

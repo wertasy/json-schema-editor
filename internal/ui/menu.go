@@ -92,6 +92,7 @@ type errsState struct {
 	lines  []string
 	paths  [][]any
 	cursor int
+	exit   bool // end the session after the --force save (vs plain ctrl+s)
 }
 
 // confirmState is a y/n question overlay.
@@ -116,9 +117,10 @@ type listModel struct {
 	opts          Options
 	stack         []*menuState
 	width, height int
-	saved         bool
-	withErrors    bool
+	saved         bool // at least one successful write this session
+	withErrors    bool // the last successful write skipped validation errors (--force)
 	aborted       bool
+	exiting       bool // a save requested the session to end (Save and exit row)
 	edit          *editState
 	sel           *selState
 	text          *textState

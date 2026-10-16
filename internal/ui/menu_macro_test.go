@@ -129,12 +129,13 @@ func TestMacroLiteralInInput(t *testing.T) {
 }
 
 func TestMacroPlaybackStopsAtSessionEnd(t *testing.T) {
-	m := newListModel(testModel(), testDoc(), Options{})
+	var saves int
+	m := newListModel(testModel(), testDoc(), countSave(&saves))
 	m.macro = []tea.KeyMsg{key("ctrl+s"), key("j")}
 
 	_, cmd := m.Update(key("@"))
-	if !m.saved {
-		t.Fatal("ctrl+s in the macro should save the session")
+	if saves != 1 || !m.saved {
+		t.Fatal("ctrl+s in the macro must write through Save")
 	}
 	if got := m.top().cursor; got != 0 {
 		t.Fatalf("cursor = %d, want 0 (second key must not run)", got)
@@ -142,11 +143,8 @@ func TestMacroPlaybackStopsAtSessionEnd(t *testing.T) {
 	if !contains(m.notice, "stopped at key 1/2") {
 		t.Fatalf("notice = %q", m.notice)
 	}
-	if cmd == nil {
-		t.Fatal("playback must keep the quit command")
-	}
-	if _, ok := cmd().(tea.QuitMsg); !ok {
-		t.Fatalf("cmd = %T, want tea.QuitMsg", cmd())
+	if cmd != nil {
+		t.Fatal("a plain ctrl+s writes and does not quit")
 	}
 }
 
