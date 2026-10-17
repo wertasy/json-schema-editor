@@ -470,6 +470,11 @@ func (m *listModel) insertItemAt(idx int, splice bool) {
 	default: // scalar / enum / raw item
 		ins(&jsondoc.Node{Null: true})
 		m.openField(items, ipath, true)
+		if splice {
+			// the placeholder row carries the inline editor: keep the
+			// cursor there (rows[0] is the < Add item > row)
+			st.cursor = idx + 1
+		}
 	}
 }
 

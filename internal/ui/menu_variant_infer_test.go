@@ -1018,16 +1018,16 @@ func TestMapNullSeedListAddConvertsCleanly(t *testing.T) {
 	doc := tobj(tmem("headers", tobj()))
 	m := newListModel(root, doc, Options{})
 	m.Update(tea.WindowSizeMsg{Width: 100, Height: 30})
-	press(m, "enter")                         // headers menu
-	press(m, "a")                             // add key
-	m.add.ti.SetValue("Host")                 //
-	m.keyAdd(tea.KeyMsg{Type: tea.KeyEnter})  // seeds null + opens the value picker
-	press(m, "down")                          // list variant
-	press(m, "enter")                         // (null value: no confirm)
-	press(m, "enter")                         // < Add item >
-	m.edit.ti.SetValue("8.8.8.8")             //
-	press(m, "enter")                         // commit
-	press(m, "esc", "esc")                    // back out
+	press(m, "enter")                        // headers menu
+	press(m, "a")                            // add key
+	m.add.ti.SetValue("Host")                //
+	m.keyAdd(tea.KeyMsg{Type: tea.KeyEnter}) // seeds null + opens the value picker
+	press(m, "down")                         // list variant
+	press(m, "enter")                        // (null value: no confirm)
+	press(m, "enter")                        // < Add item >
+	m.edit.ti.SetValue("8.8.8.8")            //
+	press(m, "enter")                        // commit
+	press(m, "esc", "esc")                   // back out
 
 	v, ok := doc.Get([]any{"headers", "Host"})
 	if !ok || v == nil || v.Null {

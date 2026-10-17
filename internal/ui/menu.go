@@ -82,10 +82,10 @@ type editState struct {
 	path   []any
 	ti     textinput.Model
 	err    string
-	isNew  bool     // editing a not-yet-appended array item; esc writes nothing
-	cands  []string // existing same-key values in the document (fixed at open)
-	sugs   []string // cands filtered by the current input prefix
-	sugIdx int      // tab cycle position (-1 = none)
+	isNew  bool             // editing a not-yet-appended array item; esc writes nothing
+	cands  []string         // existing same-key values in the document (fixed at open)
+	sugs   []string         // cands filtered by the current input prefix
+	sugIdx int              // tab cycle position (-1 = none)
 	oneOf  *smodel.FormNode // set for scalar variant edits: ctrl+t type switch
 }
 
@@ -703,9 +703,12 @@ func (m *listModel) writeRows(b *strings.Builder, rows []row, height int) {
 	for i := st.offset; i < len(rows) && i < st.offset+height; i++ {
 		m.writeCut(b, m.rowLine(rows[i], i == st.cursor))
 	}
-	// in-place input for a brand-new array item (row not in the list yet)
-	if m.edit != nil && m.edit.isNew {
-		m.writeCut(b, m.editLines(m.titleCol("New item")))
+	// in-place input for a brand-new array item renders on its own row when
+	// that row is already in the document (a/A splice the placeholder in);
+	// the append-only < Add item > flow has no row yet, so it gets a line
+	// labeled with the element index it will take
+	if m.edit != nil && m.edit.isNew && !hasInlineEditRow(m, rows) {
+		m.writeCut(b, m.editLines(m.titleCol(m.newItemTitle())))
 	}
 	// key-name input for a schema-less member (a)
 	if m.add != nil {
@@ -830,24 +833,59 @@ func (m *listModel) titleCol(left string) string {
 	}
 }
 
+// inlineEditRow reports whether the active in-place editor renders on r: the
+// edited field's own row, or the enclosing oneOf field row when a leaf
+// variant is being edited. Rows compare by path, so shared value nodes (map
+// members, array items) match by position; a new item spliced by a/A already
+// has its placeholder row, and edits inline there.
+func (m *listModel) inlineEditRow(r row) bool {
+	if m.edit == nil || !pathEq(r.path, m.edit.path) {
+		return false
+	}
+	if r.kind == rowField && r.fn == m.edit.fn {
+		return true
+	}
+	return (r.kind == rowField || r.kind == rowDrill) && r.fn != nil &&
+		r.fn.Kind == smodel.KOneOf && variantContains(r.fn, m.edit.fn)
+}
+
+// hasInlineEditRow reports whether any row renders the active editor
+// (writeRows then skips the separate new-item line).
+func hasInlineEditRow(m *listModel, rows []row) bool {
+	for _, r := range rows {
+		if m.inlineEditRow(r) {
+			return true
+		}
+	}
+	return false
+}
+
+// newItemTitle labels the standalone input of the append-only < Add item >
+// flow: the element address it will take once committed (key[append index]),
+// mirroring itemRow's labels. The document key is the last path segment (the
+// array's key in its parent), falling back to the node's key.
+func (m *listModel) newItemTitle() string {
+	st := m.top()
+	key := st.node.Key
+	if n := len(st.path); n > 0 {
+		if s, ok := st.path[n-1].(string); ok {
+			key = s
+		}
+	}
+	return fmt.Sprintf("%s[%d]", key, docArrayLen(m.doc, st.path))
+}
+
 func (m *listModel) rowLine(r row, cursor bool) string {
 	// in-place input replaces the edited row: the field's own row, or the
 	// oneOf field row when a leaf variant is being edited (the picker pops
-	// back to the parent menu for leaf variants)
-	if m.edit != nil && !m.edit.isNew && pathEq(r.path, m.edit.path) {
-		title := r.fn.Title
-		if r.label != "" {
-			// map/array rows: the label is the document key (Host, Host[0]…);
-			// the shared value node carries no per-key title
-			title = r.label
+	// back to the parent menu for leaf variants). A spliced (a/A) new item
+	// has its placeholder row already in the document and edits there too.
+	if m.inlineEditRow(r) {
+		title := r.label
+		if title == "" {
+			title = r.fn.Title
 		}
-		switch {
-		case r.kind == rowField && r.fn == m.edit.fn:
-			return m.editLines(m.titleCol(title))
-		case (r.kind == rowField || r.kind == rowDrill) && r.fn != nil &&
-			r.fn.Kind == smodel.KOneOf && variantContains(r.fn, m.edit.fn):
-			return m.editLines(m.titleCol(title))
-		}
+		return m.editLines(m.titleCol(title))
 	}
 	var left, right string
 	switch r.kind {
