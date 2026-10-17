@@ -6,6 +6,8 @@ import (
 	"strings"
 	"testing"
 
+	tea "github.com/charmbracelet/bubbletea"
+
 	"json-schema-editor/internal/jsondoc"
 	"json-schema-editor/internal/smodel"
 )
@@ -207,6 +209,62 @@ func TestSummaryRules(t *testing.T) {
 	lm7 := lmAt(tobj(tmem("extra", tobj(tmem("a", tnum("1"))))))
 	if got := summary(lm7, raw, []any{"extra"}); got != `json {"a":1}` {
 		t.Errorf("raw summary = %q", got)
+	}
+}
+
+// TestSummaryNestedOneOfGroups covers the sing-box DNSRule shape: the item
+// schema is a oneOf over nested oneOf groups, so the summary must descend to
+// the matched leaf instead of falling through to "—".
+func TestSummaryNestedOneOfGroups(t *testing.T) {
+	rules := &smodel.FormNode{Key: "rules", Kind: smodel.KOneOf, Variants: []*smodel.FormNode{
+		{Key: "rules", Kind: smodel.KOneOf, Variants: []*smodel.FormNode{
+			{Key: "rules", Kind: smodel.KObject, Children: []*smodel.FormNode{
+				{Key: "type", Kind: smodel.KEnum, Enum: tenum("default"), Required: true},
+				{Key: "domain_suffix", Kind: smodel.KArray,
+					Items: &smodel.FormNode{Key: "domain_suffix", Kind: smodel.KScalar, JSONType: "string"}},
+				{Key: "server", Kind: smodel.KScalar, JSONType: "string"},
+			}},
+		}},
+		{Key: "rules", Kind: smodel.KOneOf, Variants: []*smodel.FormNode{
+			{Key: "rules", Kind: smodel.KObject, Children: []*smodel.FormNode{
+				{Key: "type", Kind: smodel.KEnum, Enum: tenum("logical"), Required: true},
+				{Key: "mode", Kind: smodel.KEnum, Enum: tenum("and", "or"), Required: true},
+				{Key: "rules", Kind: smodel.KArray, Required: true},
+			}},
+		}},
+	}}
+	doc := tobj(tmem("rules", tarr(
+		tobj(tmem("type", tstr("default")),
+			tmem("domain_suffix", tarr(tstr("a.com"), tstr("b.com"))),
+			tmem("server", tstr("dns-local"))),
+		tobj(tmem("type", tstr("logical")), tmem("mode", tstr("or")), tmem("rules", tarr())),
+	)))
+	lm := lmAt(doc)
+	if got := summary(lm, rules, []any{"rules", 0}); got != "type=default domain_suffix=[2] +1" {
+		t.Errorf("matcher group summary = %q", got)
+	}
+	if got := summary(lm, rules, []any{"rules", 1}); got != "type=logical mode=or +1" {
+		t.Errorf("logical group summary = %q", got)
+	}
+	// classic picker rows: a nested group variant shows its matched leaf's value
+	logical, _ := doc.Get([]any{"rules", 1})
+	if got := lm.variantValueSummary(rules.Variants[1], logical); got != "type=logical mode=or +1" {
+		t.Errorf("group variant value summary = %q", got)
+	}
+
+	// the array screen renders the summaries on the element rows
+	root := &smodel.FormNode{Key: "$", Kind: smodel.KObject, Children: []*smodel.FormNode{
+		{Key: "rules", Title: "Rules", Kind: smodel.KArray, Items: rules},
+	}}
+	m := newListModel(root, doc, Options{})
+	m.Update(tea.WindowSizeMsg{Width: 100, Height: 30})
+	press(m, "enter")
+	v := m.View()
+	if !contains(v, "rules[0]") || !contains(v, "type=default domain_suffix=[2]") {
+		t.Fatalf("element row summary missing:\n%s", v)
+	}
+	if !contains(v, "type=logical mode=or") {
+		t.Fatalf("logical element row summary missing:\n%s", v)
 	}
 }
 

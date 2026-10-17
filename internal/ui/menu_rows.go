@@ -287,13 +287,14 @@ func summary(lm *listModel, fn *smodel.FormNode, path []any) string {
 	case smodel.KArray:
 		return arraySummary(v)
 	case smodel.KOneOf:
-		idx := currentVariant(fn, v)
-		if idx < 0 {
+		// sing-box nests oneOf groups (e.g. DNSRule: matcher rules beside
+		// logical rules): descend to the matched leaf, not the group
+		variant := matchedLeafVariant(fn, v)
+		if variant == nil {
 			return "—"
 		}
-		variant := fn.Variants[idx]
 		switch variant.Kind {
-		case smodel.KObject:
+		case smodel.KObject, smodel.KMap:
 			// a real title gives the object context; untitled variants
 			// show the members alone (no meaningless fallback label)
 			if variant.Title != "" {
@@ -538,6 +539,20 @@ func currentVariant(node *smodel.FormNode, val *jsondoc.Node) int {
 		}
 	}
 	return -1
+}
+
+// matchedLeafVariant resolves the variant matching val, following nested
+// oneOf groups (sing-box rule schemas nest matcher and logical groups) down
+// to the leaf; nil when no level matches.
+func matchedLeafVariant(node *smodel.FormNode, val *jsondoc.Node) *smodel.FormNode {
+	for node != nil && node.Kind == smodel.KOneOf {
+		idx := currentVariant(node, val)
+		if idx < 0 {
+			return nil
+		}
+		node = node.Variants[idx]
+	}
+	return node
 }
 
 // seedVariantCursor points a freshly built oneOf picker state at the variant

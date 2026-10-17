@@ -1204,8 +1204,8 @@ func (m *listModel) valueStyle(fn *smodel.FormNode, path []any) lipgloss.Style {
 	}
 	eff := fn
 	if fn.Kind == smodel.KOneOf {
-		if idx := currentVariant(fn, v); idx >= 0 {
-			eff = fn.Variants[idx]
+		if leaf := matchedLeafVariant(fn, v); leaf != nil {
+			eff = leaf
 		}
 	}
 	switch eff.Kind {
@@ -1230,8 +1230,15 @@ func (m *listModel) valueStyle(fn *smodel.FormNode, path []any) lipgloss.Style {
 // variantValueSummary is the short value hint shown next to the signature
 // of the current variant.
 func (m *listModel) variantValueSummary(v *smodel.FormNode, val *jsondoc.Node) string {
+	if v.Kind == smodel.KOneOf {
+		// nested variant group (classic picker): show the matched leaf's value
+		if leaf := matchedLeafVariant(v, val); leaf != nil {
+			return m.variantValueSummary(leaf, val)
+		}
+		return ""
+	}
 	switch v.Kind {
-	case smodel.KObject:
+	case smodel.KObject, smodel.KMap:
 		if val.Object != nil {
 			return objectSummary(v, val)
 		}
