@@ -11,17 +11,20 @@ import (
 	tea "github.com/charmbracelet/bubbletea"
 )
 
-// TestConfirmEnterSpaceYes: enter and space mean Yes in the quit confirm and
+// TestConfirmEnterSpaceYes: enter and space mean Yes in the save confirm and
 // the remove-item confirm.
 func TestConfirmEnterSpaceYes(t *testing.T) {
-	m := newListModel(testModel(), testDoc(), Options{})
-	press(m, "esc") // root: asks to quit
-	if m.confirm == nil || !contains(m.View(), "Quit without saving?") {
-		t.Fatalf("esc at the root must ask to quit:\n%s", m.View())
+	var saves int
+	m := newListModel(testModel(), testDoc(), countSave(&saves))
+	press(m, "enter", "ctrl+u", "x", "enter") // make the document dirty
+	press(m, "esc")                           // root: asks whether to save
+	if m.confirm == nil || !contains(m.View(), "Save changes?") {
+		t.Fatalf("esc at the root must ask to save:\n%s", m.View())
 	}
 	press(m, "enter")
-	if m.confirm != nil || !m.aborted {
-		t.Fatalf("enter must confirm the quit, confirm=%v aborted=%v", m.confirm != nil, m.aborted)
+	if m.confirm != nil || saves != 1 || !m.exiting || m.aborted {
+		t.Fatalf("enter must save and quit, confirm=%v saves=%d exiting=%v aborted=%v",
+			m.confirm != nil, saves, m.exiting, m.aborted)
 	}
 
 	// fresh model: remove a mounts item via the confirm, answered with space

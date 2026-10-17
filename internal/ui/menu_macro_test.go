@@ -279,17 +279,24 @@ func TestMacroCap(t *testing.T) {
 	}
 }
 
-// TestQIsEscapeAlias pins q ≡ esc outside text inputs — quit confirm at the
-// root, pop a menu — while inside an input q is an ordinary character and
-// esc cancels; q never touches macro state in non-typing contexts: it is
-// recorded as esc and replays as esc.
+// TestQIsEscapeAlias pins q ≡ esc outside text inputs — clean quit / save
+// prompt at the root, pop a menu — while inside an input q is an ordinary
+// character and esc cancels; q never touches macro state in non-typing
+// contexts: it is recorded as esc and replays as esc.
 func TestQIsEscapeAlias(t *testing.T) {
 	m := newListModel(testModel(), testDoc(), Options{})
 	press(m, "q")
-	if m.confirm == nil || !contains(m.View(), "Quit without saving?") {
-		t.Fatalf("q at the root must ask to quit like esc:\n%s", m.View())
+	if m.confirm != nil || !m.exiting || m.aborted {
+		t.Fatalf("q at a clean root must quit like esc: confirm=%v exiting=%v aborted=%v",
+			m.confirm != nil, m.exiting, m.aborted)
 	}
-	press(m, "n") // stay
+
+	// a changed document makes q open the same save prompt as esc
+	dirty := newListModel(testModel(), testDoc(), Options{})
+	press(dirty, "enter", "ctrl+u", "x", "enter", "q")
+	if dirty.confirm == nil || !contains(dirty.View(), "Save changes?") {
+		t.Fatalf("q at a changed root must ask to save like esc:\n%s", dirty.View())
+	}
 
 	press(m, "enter") // in-place editor on Name
 	if m.edit == nil {
@@ -327,9 +334,10 @@ func TestQIsEscapeAlias(t *testing.T) {
 		t.Fatalf("recording = %v, macro = %v, want false/[esc]", m.recording, m.macro)
 	}
 
-	// the recorded q replays as esc: at the root it asks to quit
+	// the recorded q replays as esc: at the clean root it quits directly
 	press(m, ".")
-	if m.confirm == nil || !contains(m.View(), "Quit without saving?") {
-		t.Fatalf("replayed q must act as esc:\n%s", m.View())
+	if m.confirm != nil || !m.exiting || m.aborted {
+		t.Fatalf("replayed q must act as esc: confirm=%v exiting=%v aborted=%v",
+			m.confirm != nil, m.exiting, m.aborted)
 	}
 }

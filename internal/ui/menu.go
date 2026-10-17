@@ -28,7 +28,8 @@ var helpLines = []string{
 	"gg / G       jump to first / last row (Home/End too)",
 	"enter / → / l   edit field · open submenu",
 	"← / h        back one level",
-	"esc / q      cancel / back — q is a full alias outside text inputs",
+	"esc / q      cancel / back — q is a full alias outside text inputs;",
+	"             at the root: quit, asking to save when the doc changed",
 	"space        toggle boolean / enum member",
 	"d / delete   delete the selected pair (required keys refused)",
 	"a / A        add a schema-less key before / after the cursor",
@@ -140,10 +141,13 @@ type errsState struct {
 	exit   bool // end the session after the --force save (vs plain ctrl+s)
 }
 
-// confirmState is a y/n question overlay.
+// confirmState is a y/n question overlay. onNo is optional: without it n is
+// a plain dismissal; with it n performs an action (esc always dismisses).
 type confirmState struct {
 	title string
+	hint  string // optional footer override
 	onYes func(m *listModel) tea.Cmd
+	onNo  func(m *listModel) tea.Cmd
 }
 
 // searchState is the "/" filter mode, scoped to the subtree below the
@@ -178,7 +182,7 @@ type listModel struct {
 	saved         bool // at least one successful write this session
 	withErrors    bool // the last successful write skipped validation errors (--force)
 	aborted       bool
-	exiting       bool // a save requested the session to end (Save and exit row)
+	exiting       bool // the session ended cleanly (root quit or Save and exit)
 	edit          *editState
 	add           *addState // key-name input for a schema-less member (a)
 	sel           *selState
@@ -1291,8 +1295,12 @@ func (m *listModel) clampCursor(rows []row) {
 // --- overlay views -------------------------------------------------------
 
 func (m *listModel) confirmView() string {
+	hint := "y/enter/space yes · n/esc no"
+	if m.confirm.hint != "" {
+		hint = m.confirm.hint
+	}
 	return mTitle.Render(m.confirm.title) + "\n\n" +
-		mHelp.Render("y/enter/space yes · n/esc no") + "\n"
+		mHelp.Render(hint) + "\n"
 }
 
 // issuesView lists the load-time validation issues; enter jumps to the field.

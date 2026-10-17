@@ -397,6 +397,132 @@ func TestPtySmoke(t *testing.T) {
 	}
 }
 
+// TestPtyQuitSavePrompt drives the root esc exit path on a real terminal:
+// an unchanged document quits immediately (exit 0, no write), a changed one
+// asks whether to save, y writes and exits 0, n discards and exits 130.
+func TestPtyQuitSavePrompt(t *testing.T) {
+	dir := t.TempDir()
+	schema := filepath.Join(dir, "mini.schema.json")
+	outFile := filepath.Join(dir, "o.json")
+	writeFile(t, schema, `{"type":"object","properties":{"name":{"type":"string","title":"Name"}}}`)
+
+	start := func() (*exec.Cmd, *os.File, func(string, int, ...string) (string, int)) {
+		cmd := exec.Command(jseBin, "-s", schema, outFile)
+		cmd.Dir = ".."
+		cmd.Env = append(os.Environ(), "TERM=xterm-256color")
+		tty, err := pty.StartWithSize(cmd, &pty.Winsize{Rows: 30, Cols: 120})
+		if err != nil {
+			t.Skipf("no pty available: %v", err)
+		}
+		frames := make(chan string, 64)
+		go func() {
+			buf := make([]byte, 4096)
+			var acc bytes.Buffer
+			for {
+				n, err := tty.Read(buf)
+				if n > 0 {
+					acc.Write(buf[:n])
+					frames <- acc.String()
+				}
+				if err != nil {
+					close(frames)
+					return
+				}
+			}
+		}()
+		waitFrame := func(what string, offset int, want ...string) (string, int) {
+			t.Helper()
+			deadline := time.After(15 * time.Second)
+			for {
+				select {
+				case frame, ok := <-frames:
+					if !ok {
+						t.Fatalf("pty closed while waiting for %s", what)
+					}
+					ready := true
+					for _, w := range want {
+						if !strings.Contains(frame[offset:], w) {
+							ready = false
+							break
+						}
+					}
+					if ready {
+						return frame, len(frame)
+					}
+				case <-deadline:
+					t.Fatalf("timed out waiting for %s", what)
+				}
+			}
+		}
+		return cmd, tty, waitFrame
+	}
+
+	waitExit := func(cmd *exec.Cmd, want int) {
+		t.Helper()
+		done := make(chan error, 1)
+		go func() { done <- cmd.Wait() }()
+		select {
+		case err := <-done:
+			code := 0
+			if ee, ok := err.(*exec.ExitError); ok {
+				code = ee.ExitCode()
+			} else if err != nil {
+				t.Fatalf("wait: %v", err)
+			}
+			if code != want {
+				t.Fatalf("exit = %d, want %d", code, want)
+			}
+		case <-time.After(15 * time.Second):
+			cmd.Process.Kill()
+			t.Fatal("timed out waiting for exit")
+		}
+	}
+
+	// unchanged: esc quits at once, nothing written, no prompt
+	cmd, tty, waitFrame := start()
+	_, off := waitFrame("root menu", 0, "Save and exit")
+	tty.Write([]byte("\x1b"))
+	all, _ := waitFrame("clean exit", off, "No changes, nothing written")
+	if strings.Contains(all, "Save changes?") {
+		t.Fatalf("clean quit must not prompt:\n%s", all)
+	}
+	waitExit(cmd, 0)
+	if _, err := os.Stat(outFile); !os.IsNotExist(err) {
+		t.Fatalf("clean quit wrote the file: %v", err)
+	}
+	tty.Close()
+
+	// changed: esc asks whether to save; y writes and exits 0
+	cmd, tty, waitFrame = start()
+	_, off = waitFrame("root menu", 0, "Save and exit")
+	tty.Write([]byte("\rhello\r"))
+	_, off = waitFrame("edited name", off, "●")
+	tty.Write([]byte("\x1b"))
+	_, off = waitFrame("save prompt", off, "Save changes?", "n discard & exit")
+	tty.Write([]byte("y"))
+	_, _ = waitFrame("saved exit", off, "Saved to")
+	waitExit(cmd, 0)
+	if got := readJSON(t, outFile).(map[string]any)["name"]; got != "hello" {
+		t.Fatalf("name = %#v, want hello", got)
+	}
+	tty.Close()
+
+	// changed: esc then n discards the edit and exits 130
+	cmd, tty, waitFrame = start()
+	_, off = waitFrame("root menu", 0, "Save and exit")
+	tty.Write([]byte("\r\x15bye\r"))
+	_, off = waitFrame("edited name", off, "●")
+	tty.Write([]byte("\x1b"))
+	_, off = waitFrame("save prompt", off, "Save changes?")
+	tty.Write([]byte("n"))
+	_, _ = waitFrame("discard exit", off, "Aborted, no changes written")
+	waitExit(cmd, 130)
+	if got := readJSON(t, outFile).(map[string]any)["name"]; got != "hello" {
+		t.Fatalf("discard rewrote the file: name = %#v", got)
+	}
+	tty.Close()
+}
+
 func TestPtySave(t *testing.T) {
 	dir := t.TempDir()
 	schema := filepath.Join(dir, "mini.schema.json")

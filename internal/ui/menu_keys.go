@@ -47,9 +47,9 @@ func (m *listModel) keyList(msg tea.KeyMsg) tea.Cmd {
 			m.cycleEnum(r, -1)
 			return nil
 		}
-		m.back()
+		return m.back()
 	case "esc":
-		m.back()
+		return m.back()
 	case " ":
 		return m.space(r)
 	case "d":
@@ -139,30 +139,38 @@ func (m *listModel) space(r row) tea.Cmd {
 	return nil
 }
 
-// back pops one menu level; on the root screen it asks for confirmation.
+// back pops one menu level; on the root screen it ends the session directly
+// when the document is unchanged and otherwise asks whether to save first.
 // At the depth a search jump landed on, it reopens the parked search overlay
 // instead; at the depth a validation-issue jump landed on, it returns to the
 // issue list (both overlays are parked while the user works on the field).
-func (m *listModel) back() {
+func (m *listModel) back() tea.Cmd {
 	if m.search.parked && len(m.stack) == m.search.returnDepth {
 		m.searchReturnTo()
-		return
+		return nil
 	}
 	if m.issuesBack != nil && len(m.stack) == m.issuesReturn {
 		m.issuesReturnTo()
-		return
+		return nil
 	}
 	if len(m.stack) > 1 {
 		m.stack = m.stack[:len(m.stack)-1]
-		return
+		return nil
+	}
+	if !m.dirty() {
+		m.exiting = true
+		return tea.Quit
 	}
 	m.confirm = &confirmState{
-		title: "Quit without saving? (y/n)",
-		onYes: func(m *listModel) tea.Cmd {
+		title: "Save changes? (y/n)",
+		hint:  "y/enter/space save & exit · n discard & exit · esc stay",
+		onYes: func(m *listModel) tea.Cmd { return m.saveAndExit() },
+		onNo: func(m *listModel) tea.Cmd {
 			m.aborted = true
 			return tea.Quit
 		},
 	}
+	return nil
 }
 
 // push drills into fn's menu. A classic oneOf picker opens on the variant
@@ -811,7 +819,13 @@ func (m *listModel) keyConfirm(msg tea.KeyMsg) tea.Cmd {
 		onYes := m.confirm.onYes
 		m.confirm = nil
 		return onYes(m)
-	case "n", "esc":
+	case "n":
+		onNo := m.confirm.onNo
+		m.confirm = nil
+		if onNo != nil {
+			return onNo(m)
+		}
+	case "esc":
 		m.confirm = nil
 	}
 	return nil

@@ -259,19 +259,74 @@ func pathKey(path []any) string {
 	return s
 }
 
-func TestMenuRootEscQuitConfirm(t *testing.T) {
-	m := newListModel(testModel(), testDoc(), Options{})
-	press(m, "esc")
-	if m.confirm == nil || !contains(m.View(), "Quit without saving?") {
-		t.Fatalf("root esc must ask:\n%s", m.View())
+func TestMenuRootEscQuit(t *testing.T) {
+	// unchanged: root esc ends the session immediately, without a prompt
+	clean := newListModel(testModel(), testDoc(), Options{})
+	_, cmd := clean.Update(key("esc"))
+	if clean.confirm != nil || !clean.exiting || clean.aborted || clean.saved {
+		t.Fatalf("clean root esc must quit directly: confirm=%v exiting=%v aborted=%v saved=%v",
+			clean.confirm != nil, clean.exiting, clean.aborted, clean.saved)
 	}
-	press(m, "n")
-	if m.confirm != nil || m.aborted {
-		t.Fatal("n must dismiss without quitting")
+	if cmd == nil {
+		t.Fatal("clean root esc must return a quit command")
 	}
-	press(m, "esc", "y")
-	if !m.aborted {
-		t.Fatal("y must abort")
+	if _, ok := cmd().(tea.QuitMsg); !ok {
+		t.Fatalf("clean root esc cmd = %T, want tea.QuitMsg", cmd())
+	}
+
+	// changed: esc asks whether to save instead of whether to quit unsaved
+	var saves int
+	discardDoc := testDoc()
+	discard := newListModel(testModel(), discardDoc, countSave(&saves))
+	press(discard, "enter", "ctrl+u", "x", "enter")
+	if !discard.dirty() {
+		t.Fatal("editing Name must dirty the document")
+	}
+	discard.Update(key("esc"))
+	if discard.confirm == nil || !contains(discard.View(), "Save changes?") {
+		t.Fatalf("dirty root esc must ask to save:\n%s", discard.View())
+	}
+	if !contains(discard.View(), "n discard & exit") {
+		t.Fatalf("save prompt must explain n:\n%s", discard.View())
+	}
+	_, cmd = discard.Update(key("n"))
+	if discard.confirm != nil || !discard.aborted || discard.exiting || saves != 0 {
+		t.Fatalf("n must discard and exit: confirm=%v aborted=%v exiting=%v saves=%d",
+			discard.confirm != nil, discard.aborted, discard.exiting, saves)
+	}
+	if cmd == nil {
+		t.Fatal("n must return a quit command")
+	}
+	if _, ok := cmd().(tea.QuitMsg); !ok {
+		t.Fatalf("n cmd = %T, want tea.QuitMsg", cmd())
+	}
+
+	// changed: esc dismisses the prompt and stays in the session
+	stay := newListModel(testModel(), testDoc(), Options{})
+	press(stay, "enter", "ctrl+u", "x", "enter", "esc")
+	if stay.confirm == nil {
+		t.Fatal("esc on a dirty root must open the save prompt")
+	}
+	press(stay, "esc")
+	if stay.confirm != nil || stay.aborted || stay.exiting {
+		t.Fatalf("esc must dismiss the prompt and stay: confirm=%v aborted=%v exiting=%v",
+			stay.confirm != nil, stay.aborted, stay.exiting)
+	}
+
+	// changed: y saves and exits
+	saves = 0
+	save := newListModel(testModel(), testDoc(), countSave(&saves))
+	press(save, "enter", "ctrl+u", "x", "enter", "esc")
+	_, cmd = save.Update(key("y"))
+	if saves != 1 || !save.saved || !save.exiting || save.aborted || save.dirty() {
+		t.Fatalf("y must save and exit: saves=%d saved=%v exiting=%v aborted=%v dirty=%v",
+			saves, save.saved, save.exiting, save.aborted, save.dirty())
+	}
+	if cmd == nil {
+		t.Fatal("y must return a quit command")
+	}
+	if _, ok := cmd().(tea.QuitMsg); !ok {
+		t.Fatalf("y cmd = %T, want tea.QuitMsg", cmd())
 	}
 }
 

@@ -40,9 +40,12 @@ type Outcome struct {
 	// validation errors.
 	WithErrors bool
 	// Aborted is true when the session ended via ctrl+c/EOF abort rather
-	// than a save-and-exit.
+	// than a save-and-exit or a clean quit.
 	Aborted bool
-	Err     error
+	// Unchanged is true when the session ended cleanly without writing:
+	// the document matched the loaded/last-saved state when the user quit.
+	Unchanged bool
+	Err       error
 }
 
 // result is the internal outcome of a screen.
@@ -128,7 +131,14 @@ func runMenu(model *smodel.FormNode, doc *jsondoc.Node, opts Options) (out Outco
 	if lm, ok := fm.(*listModel); ok {
 		// Aborted stays true even after a mid-session ctrl+s: the abort
 		// itself wrote nothing, but main must know a save already landed.
-		return Outcome{Saved: lm.saved, WithErrors: lm.withErrors, Aborted: lm.aborted}
+		// A clean root quit is neither an abort nor a write: Unchanged tells
+		// main to exit 0 when nothing was saved during the session.
+		return Outcome{
+			Saved:      lm.saved,
+			WithErrors: lm.withErrors,
+			Aborted:    lm.aborted,
+			Unchanged:  lm.exiting && !lm.saved,
+		}
 	}
 	return Outcome{}
 }
