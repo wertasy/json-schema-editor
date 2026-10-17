@@ -587,6 +587,33 @@ func TestMenuSearchJumpReturn(t *testing.T) {
 	}
 }
 
+func TestMenuSearchSecondJumpReturn(t *testing.T) {
+	// a jump made after a full park→return cycle must still close back at the
+	// entry menu: every park re-captures the return point
+	m := newListModel(testModel(), testDoc(), Options{})
+	m.Update(tea.WindowSizeMsg{Width: 100, Height: 30})
+	press(m, "/", "8", "0", "8", "0", "enter") // jump to $/server/port
+	if len(m.stack) != 2 {
+		t.Fatalf("first jump stack = %d, want 2", len(m.stack))
+	}
+	press(m, "esc") // back at the root, the search list reopens
+	if !m.search.active || len(m.stack) != 1 {
+		t.Fatalf("first return: active %v, stack %d", m.search.active, len(m.stack))
+	}
+	press(m, "ctrl+u", "0", ".", "0", ".", "0", ".", "0", "enter") // jump to $/server/host
+	if len(m.stack) != 2 {
+		t.Fatalf("second jump stack = %d, want 2", len(m.stack))
+	}
+	press(m, "esc") // the list reopens, the stack is back at the entry menu
+	if !m.search.active || len(m.stack) != 1 {
+		t.Fatalf("second return: active %v, stack %d", m.search.active, len(m.stack))
+	}
+	press(m, "esc") // close the list
+	if m.search.active || len(m.stack) != 1 || !contains(m.View(), "> Name*") {
+		t.Fatalf("close should restore the entry menu:\n%s", m.View())
+	}
+}
+
 func TestEditCompletion(t *testing.T) {
 	// two mounts already carry src values; a third item should suggest them
 	doc := tobj(tmem("mounts", tarr(

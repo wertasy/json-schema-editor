@@ -188,16 +188,16 @@ func TestLoadIssuesRowAndJump(t *testing.T) {
 		t.Fatalf("cursor should sit on the port row, got %v", r.path)
 	}
 
-	// jumping to a schema-unknown key lands on its row at the root; the first
-	// esc returns to the issue list, the second closes it, the third pops
+	// the first esc returns to the issue list, the second closes it back at
+	// the menu the list was opened from — the jump never becomes the context
 	press(m, "esc")
 	if m.issues == nil {
 		t.Fatal("esc at the jump target should return to the issues list")
 	}
 	press(m, "esc") // close the list
-	press(m, "esc") // pop to the root menu
-	if len(m.stack) != 1 {
-		t.Fatalf("stack = %d, want the root menu", len(m.stack))
+	if m.issues != nil || m.confirm != nil || len(m.stack) != 1 {
+		t.Fatalf("close should restore the entry menu: issues %v, confirm %v, stack %d",
+			m.issues != nil, m.confirm != nil, len(m.stack))
 	}
 	m.top().cursor = 0
 	press(m, "enter", "down", "enter") // status row → issues → second entry → jump
