@@ -8,6 +8,7 @@ import (
 
 	"json-schema-editor/internal/icons"
 	"json-schema-editor/internal/jsondoc"
+	"json-schema-editor/internal/smodel"
 )
 
 // Model-level tests for the menuconfig TUI: key-message injection plus
@@ -35,6 +36,10 @@ func key(k string) tea.KeyMsg {
 		return tea.KeyMsg{Type: tea.KeyShiftTab}
 	case "ctrl+c":
 		return tea.KeyMsg{Type: tea.KeyCtrlC}
+	case "ctrl+j":
+		return tea.KeyMsg{Type: tea.KeyCtrlJ}
+	case "ctrl+k":
+		return tea.KeyMsg{Type: tea.KeyCtrlK}
 	case "ctrl+s":
 		return tea.KeyMsg{Type: tea.KeyCtrlS}
 	case "ctrl+r":
@@ -84,7 +89,7 @@ func TestMenuRootView(t *testing.T) {
 		"Server", "port=8080 host=0.0.0.0 +1", "—",
 		"Name*", "Server*", // required star shows regardless of a set value
 		"Mounts", "1 item", "Auth", "Save and exit", "Edit raw JSON",
-		"↑/↓ · gg/G · enter edit/open · space · del delete · J/K move item · a/A add · u undo · ctrl+r redo · esc · ctrl+s save · / search · r replace · ? help · ctrl+c quit",
+		"↑/↓ move · enter edit/open · esc back · ctrl+s save · / search · ? help",
 	} {
 		if !contains(v, want) {
 			t.Errorf("root view missing %q:\n%s", want, v)
@@ -102,6 +107,33 @@ func TestMenuRootView(t *testing.T) {
 	press(m2, "down", "down", "enter")
 	if v := m2.View(); contains(v, "validation errors") {
 		t.Error("status line must not render below the root screen")
+	}
+}
+
+func TestMenuHelpPinnedToBottom(t *testing.T) {
+	m := newListModel(testModel(), testDoc(), Options{})
+	m.Update(tea.WindowSizeMsg{Width: 100, Height: 30})
+	lines := strings.Split(m.View(), "\n")
+	if len(lines) != 30 {
+		t.Fatalf("view has %d lines, want 30 with the help on the last row", len(lines))
+	}
+	if !contains(lines[len(lines)-1], "? help") {
+		t.Fatalf("last row is not the help bar:\n%s", m.View())
+	}
+
+	// a short menu pads the gap instead of floating the bar under the rows
+	root := &smodel.FormNode{Key: "$", Title: "Tiny", Kind: smodel.KObject,
+		Children: []*smodel.FormNode{
+			{Key: "a", Title: "A", Kind: smodel.KScalar, JSONType: "string"},
+		}}
+	short := newListModel(root, tobj(), Options{})
+	short.Update(tea.WindowSizeMsg{Width: 100, Height: 12})
+	lines = strings.Split(short.View(), "\n")
+	if len(lines) != 12 {
+		t.Fatalf("short view has %d lines, want 12", len(lines))
+	}
+	if !contains(lines[len(lines)-1], "? help") {
+		t.Fatalf("short view help bar not pinned:\n%s", short.View())
 	}
 }
 
@@ -565,5 +597,102 @@ func TestJumpKeysOverlays(t *testing.T) {
 	press(m2, "end")
 	if m2.errs.cursor != 2 {
 		t.Fatalf("errs End: cursor = %d, want 2", m2.errs.cursor)
+	}
+}
+
+func TestMenuNextPrevNonNull(t *testing.T) {
+	doc := testDoc()
+	m := newListModel(testModel(), doc, Options{})
+	m.Update(tea.WindowSizeMsg{Width: 100, Height: 30})
+	cursor := func() int { return m.top().cursor }
+
+	// rows: Name(0) Mode(1, unset) Server(2) Logging(3, unset)
+	//       Mounts(4) Auth(5, unset) Save and exit(6) Edit raw JSON(7)
+	press(m, "n")
+	if cursor() != 2 {
+		t.Fatalf("n from Name = %d, want Server (2)", cursor())
+	}
+	press(m, "n")
+	if cursor() != 4 {
+		t.Fatalf("n from Server = %d, want Mounts (4)", cursor())
+	}
+	press(m, "n") // wraps past the action rows to the first value
+	if cursor() != 0 {
+		t.Fatalf("n from Mounts should wrap to Name (0), got %d", cursor())
+	}
+	press(m, "p") // wraps backwards to the last value
+	if cursor() != 4 {
+		t.Fatalf("p from Name should wrap to Mounts (4), got %d", cursor())
+	}
+
+	// explicit null and schema-less null keys are skipped; a set unknown key
+	// is a value like any other
+	doc.Set([]any{"mode"}, tnull())
+	doc.Set([]any{"null_extra"}, tnull())
+	doc.Set([]any{"extra"}, tnum("1"))
+	m = newListModel(testModel(), doc, Options{})
+	m.Update(tea.WindowSizeMsg{Width: 100, Height: 30})
+	// the two unknown keys add a warning row at index 0:
+	// issues(0) Name(1) Mode(2,null) Server(3) Logging(4) Mounts(5)
+	// Auth(6) null_extra(7,null) extra(8) Save(9) Raw(10)
+	press(m, "n") // issues row → Name
+	if cursor() != 1 {
+		t.Fatalf("n from the issues row = %d, want Name (1)", cursor())
+	}
+	press(m, "n") // Name → Server: Mode is explicit null
+	if cursor() != 3 {
+		t.Fatalf("n must skip an explicit null, cursor = %d", cursor())
+	}
+	press(m, "n") // Server → Mounts: Logging/Auth are unset
+	if cursor() != 5 {
+		t.Fatalf("n from Server = %d, want Mounts (5)", cursor())
+	}
+	press(m, "n") // Mounts → extra: null_extra is skipped
+	if r := rowAtCursor(m); r.kind != rowUnknown || !pathEq(r.path, []any{"extra"}) {
+		t.Fatalf("n from Mounts should land on the set unknown key, got %+v", r)
+	}
+	press(m, "n") // wraps past the action rows to Name
+	if cursor() != 1 {
+		t.Fatalf("n from the last value should wrap to Name, got %d", cursor())
+	}
+
+	// no non-null key: n/p leave the cursor where it is
+	root := &smodel.FormNode{Key: "$", Title: "$", Kind: smodel.KObject,
+		Children: []*smodel.FormNode{
+			{Key: "a", Title: "A", Kind: smodel.KScalar, JSONType: "string"},
+			{Key: "b", Title: "B", Kind: smodel.KScalar, JSONType: "string"},
+		}}
+	empty := newListModel(root, tobj(), Options{})
+	empty.Update(tea.WindowSizeMsg{Width: 100, Height: 30})
+	press(empty, "n")
+	if empty.top().cursor != 0 {
+		t.Fatalf("n without values moved the cursor to %d", empty.top().cursor)
+	}
+	press(empty, "p")
+	if empty.top().cursor != 0 {
+		t.Fatalf("p without values moved the cursor to %d", empty.top().cursor)
+	}
+
+	// array items are entries too: null placeholders are skipped
+	itemsRoot := &smodel.FormNode{Key: "$", Title: "$", Kind: smodel.KObject,
+		Children: []*smodel.FormNode{{Key: "items", Title: "Items", Kind: smodel.KArray,
+			Items: &smodel.FormNode{Key: "items", Kind: smodel.KObject,
+				Children: []*smodel.FormNode{
+					{Key: "x", Title: "X", Kind: smodel.KScalar, JSONType: "string"}}}}}}
+	im := newListModel(itemsRoot, tobj(tmem("items", tarr(tnull(),
+		tobj(tmem("x", tstr("v"))), tobj(tmem("x", tstr("w")))))), Options{})
+	im.Update(tea.WindowSizeMsg{Width: 100, Height: 30})
+	press(im, "enter") // items menu: Add(0), item0 null(1), item1(2), item2(3)
+	press(im, "n")     // Add → item1, skipping the null placeholder
+	if im.top().cursor != 2 {
+		t.Fatalf("n must skip a null array item, cursor = %d", im.top().cursor)
+	}
+	press(im, "n")
+	if im.top().cursor != 3 {
+		t.Fatalf("n from item1 = %d, want item2 (3)", im.top().cursor)
+	}
+	press(im, "p")
+	if im.top().cursor != 2 {
+		t.Fatalf("p from item2 = %d, want item1 (2)", im.top().cursor)
 	}
 }

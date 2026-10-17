@@ -461,7 +461,11 @@ func TestPtyIssuesUseDocumentPaths(t *testing.T) {
 
 	_, off := waitFrame("root issues row", 0, "Save and exit", "validation error")
 	tty.Write([]byte("\r")) // the issues row is first at the root
-	waitFrame("issues overlay", off, "at '$.port'", "at '$.items[0].tag'")
+	_, off = waitFrame("issues overlay", off, "at '$.port'", "at '$.items[0].tag'")
+	tty.Write([]byte("\n")) // ctrl+j: move down
+	_, off = waitFrame("ctrl+j moves down", off, "> at '$.items[0].tag'")
+	tty.Write([]byte("\x0b")) // ctrl+k: move up
+	waitFrame("ctrl+k moves up", off, "> at '$.port'")
 	tty.Write([]byte("\x03"))
 
 	waitErr := cmd.Wait()

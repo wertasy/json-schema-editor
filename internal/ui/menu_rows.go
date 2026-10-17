@@ -194,6 +194,40 @@ func menuRowsFor(lm *listModel, st *menuState) []row {
 	return rows
 }
 
+// valueRow reports whether r is a document entry whose value is present and
+// not JSON null. Fields, containers, map members and schema-less unknown
+// keys qualify; synthetic action rows, oneOf variant choices and enum-array
+// toggles are not keys and never do.
+func (m *listModel) valueRow(r row) bool {
+	switch r.kind {
+	case rowField, rowDrill, rowUnknown:
+	default:
+		return false
+	}
+	if m.doc == nil {
+		return false
+	}
+	v, ok := m.doc.Get(r.path) // a nil path is the root scalar itself
+	return ok && v != nil && !v.Null
+}
+
+// moveToValue moves the cursor to the next (delta > 0) or previous
+// (delta < 0) row with a non-null value, wrapping at both ends. Rows without
+// such a value are skipped; the cursor stays put when the menu has none.
+func (m *listModel) moveToValue(rows []row, delta int) {
+	if len(rows) == 0 {
+		return
+	}
+	cur := m.top().cursor
+	for step := 1; step <= len(rows); step++ {
+		i := wrapCursor(cur, delta*step, len(rows))
+		if m.valueRow(rows[i]) {
+			m.top().cursor = i
+			return
+		}
+	}
+}
+
 // childRow maps one object child to a field or drill row.
 func childRow(st *menuState, c *smodel.FormNode) row {
 	p := pathFor(st.path, c.Key)

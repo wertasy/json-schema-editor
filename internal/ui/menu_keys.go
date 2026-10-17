@@ -36,6 +36,10 @@ func (m *listModel) keyList(msg tea.KeyMsg) tea.Cmd {
 		st.cursor = wrapCursor(st.cursor, -1, len(rows))
 	case "down", "j":
 		st.cursor = wrapCursor(st.cursor, 1, len(rows))
+	case "n":
+		m.moveToValue(rows, 1)
+	case "p":
+		m.moveToValue(rows, -1)
 	case "enter", "right", "l":
 		if (msg.String() == "right" || msg.String() == "l") && r.kind == rowField && r.fn.Kind == smodel.KEnum {
 			m.cycleEnum(r, 1)
@@ -876,9 +880,9 @@ func (m *listModel) keyIssues(msg tea.KeyMsg) tea.Cmd {
 		return nil
 	}
 	switch msg.String() {
-	case "up", "k":
+	case "up", "k", "ctrl+k":
 		m.issues.cursor = wrapCursor(m.issues.cursor, -1, len(m.issues.items))
-	case "down", "j":
+	case "down", "j", "ctrl+j":
 		m.issues.cursor = wrapCursor(m.issues.cursor, 1, len(m.issues.items))
 	case "enter":
 		if m.issues.cursor < len(m.issues.items) {
@@ -1319,10 +1323,10 @@ func (m *listModel) refilter() {
 
 func (m *listModel) keySearch(msg tea.KeyMsg) tea.Cmd {
 	switch msg.String() {
-	case "up":
+	case "up", "ctrl+k":
 		m.search.cursor = wrapCursor(m.search.cursor, -1, len(m.search.results))
 		return nil
-	case "down":
+	case "down", "ctrl+j":
 		m.search.cursor = wrapCursor(m.search.cursor, 1, len(m.search.results))
 		return nil
 	case "tab", "shift+tab":

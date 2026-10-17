@@ -358,6 +358,18 @@ func TestCursorWrap(t *testing.T) {
 	if m2.search.cursor != 0 {
 		t.Fatalf("search down wrap: cursor = %d, want 0", m2.search.cursor)
 	}
+	// ctrl+k/ctrl+j move the result cursor without editing the query
+	press(m2, "ctrl+k")
+	if m2.search.cursor != len(m2.search.results)-1 {
+		t.Fatalf("search ctrl+k: cursor = %d, want %d", m2.search.cursor, len(m2.search.results)-1)
+	}
+	press(m2, "ctrl+j")
+	if m2.search.cursor != 0 {
+		t.Fatalf("search ctrl+j: cursor = %d, want 0", m2.search.cursor)
+	}
+	if q := m2.search.ti.Value(); q != "e" {
+		t.Fatalf("ctrl+j/k must not edit the query, got %q", q)
+	}
 
 	// issues overlay: two entries wrap as well
 	doc := testDoc()
@@ -377,6 +389,14 @@ func TestCursorWrap(t *testing.T) {
 	press(m3, "down")
 	if m3.issues.cursor != 0 {
 		t.Fatalf("issues down wrap: cursor = %d, want 0", m3.issues.cursor)
+	}
+	press(m3, "ctrl+j")
+	if m3.issues.cursor != 1 {
+		t.Fatalf("issues ctrl+j: cursor = %d, want 1", m3.issues.cursor)
+	}
+	press(m3, "ctrl+k")
+	if m3.issues.cursor != 0 {
+		t.Fatalf("issues ctrl+k: cursor = %d, want 0", m3.issues.cursor)
 	}
 }
 

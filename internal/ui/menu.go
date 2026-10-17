@@ -20,11 +20,12 @@ import (
 	"json-schema-editor/internal/smodel"
 )
 
-const menuHelp = "↑/↓ · gg/G · enter edit/open · space · del delete · J/K move item · a/A add · u undo · ctrl+r redo · esc · ctrl+s save · / search · r replace · ? help · ctrl+c quit"
+const menuHelp = "↑/↓ move · enter edit/open · esc back · ctrl+s save · / search · ? help"
 
 // helpLines is the full key reference shown by the "?" overlay.
 var helpLines = []string{
-	"↑/↓/j/k      move (wraps at both ends)",
+	"↑/↓/j/k      move (wraps at both ends; ctrl+j/k in search and issues)",
+	"n / p        next / previous key with a non-null value",
 	"gg / G       jump to first / last row (Home/End too)",
 	"enter / → / l   edit field · open submenu",
 	"← / h        back one level",
@@ -594,7 +595,7 @@ func (m *listModel) listView() string {
 		if m.search.regex {
 			modeTxt = "regex"
 		}
-		b.WriteString(mHelp.Render(clipRunes("enter jump/replace · tab replace · alt+i "+caseTxt+" · alt+x "+modeTxt+" · ctrl+r replace all · esc close", m.width)))
+		b.WriteString(mHelp.Render(clipRunes("↑/↓ or ctrl+j/k move · enter jump/replace · tab replace · alt+i "+caseTxt+" · alt+x "+modeTxt+" · ctrl+r replace all · esc close", m.width)))
 		b.WriteByte('\n')
 		return b.String()
 	}
@@ -618,8 +619,16 @@ func (m *listModel) listView() string {
 		b.WriteString(mErr.Render(clipRunes(m.notice, m.width)))
 		b.WriteByte('\n')
 	}
+	// pin the hint bar to the last terminal row: fill the gap below the rows
+	// instead of letting the bar float right under a short menu. No trailing
+	// newline, or the renderer would treat it as an extra line and scroll the
+	// title out of view.
+	lines := strings.Count(b.String(), "\n")
+	for lines < m.height-1 {
+		b.WriteByte('\n')
+		lines++
+	}
 	b.WriteString(m.helpLine())
-	b.WriteByte('\n')
 	return b.String()
 }
 
@@ -1346,7 +1355,7 @@ func (m *listModel) issuesView() string {
 		b.WriteString(mErr.Render(clipRunes(m.notice, m.width)))
 		b.WriteByte('\n')
 	}
-	b.WriteString(m.recHint("↑/↓ move · enter jump to the field · esc close"))
+	b.WriteString(m.recHint("↑/↓ or ctrl+j/k move · enter jump to the field · esc close"))
 	b.WriteByte('\n')
 	return b.String()
 }
