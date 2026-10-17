@@ -136,9 +136,16 @@ func scalarText(n *jsondoc.Node) string {
 }
 
 // omitOrSet applies the empty-input omission rule and sets the value.
+// An empty input removes the key only when it holds a value: a null
+// placeholder (a key seeded by a, a null in the source JSON) stays null —
+// there is nothing to omit, and clearing must not delete the key the user
+// just created (d removes it explicitly).
 func omitOrSet(doc *jsondoc.Node, path []any, empty bool, fn *smodel.FormNode, val func() *jsondoc.Node) {
 	if empty {
 		if ShouldOmit(empty, fn.Required, fn.Default != nil) {
+			if cur, ok := doc.Get(path); ok && cur != nil && cur.Null {
+				return
+			}
 			doc.Remove(path)
 			return
 		}
