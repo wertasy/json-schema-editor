@@ -225,6 +225,122 @@ func TestLoadIssuesRowAndJump(t *testing.T) {
 	}
 }
 
+func TestAdditionalPropertiesDedupesAllNames(t *testing.T) {
+	doc := testDoc()
+	doc.Set([]any{"server", "legacy"}, tnum("1"))
+	doc.Set([]any{"server", "other"}, tnum("2"))
+	m := newListModel(testModel(), doc, Options{})
+	m.Update(tea.WindowSizeMsg{Width: 100, Height: 30})
+
+	// The validator lists additional properties in map order. Every name in
+	// the message must suppress its unknown-key warning, whatever the order.
+	for _, msg := range []string{
+		"at '$.server': additional properties 'legacy', 'other' not allowed",
+		"at '$.server': additional properties 'other', 'legacy' not allowed",
+		"at '$.server': additional properties 'other', 'legacy', 'x' not allowed",
+	} {
+		for _, it := range m.liveIssues([]string{msg}) {
+			if it.warn {
+				t.Fatalf("%q: warning %q was not deduped", msg, it.msg)
+			}
+		}
+	}
+
+	// A key the message does not list still warns.
+	warned := false
+	for _, it := range m.liveIssues([]string{
+		"at '$.server': additional properties 'legacy' not allowed",
+	}) {
+		if it.warn && contains(it.msg, `unknown key "other"`) {
+			warned = true
+		}
+	}
+	if !warned {
+		t.Fatal("unlisted unknown key should keep its warning")
+	}
+}
+
+func TestAdditionalPropertiesMarksRealUnknownsOnly(t *testing.T) {
+	doc := testDoc()
+	doc.Set([]any{"server", "legacy"}, tnum("1"))
+	doc.Set([]any{"server", "other"}, tnum("2"))
+	m := newListModel(testModel(), doc, Options{})
+	m.Update(tea.WindowSizeMsg{Width: 100, Height: 30})
+
+	// A failed oneOf branch lists valid fields (port/host) next to the real
+	// unknown key. Only the unknown key (and its ancestors) may be marked.
+	m.setIssues(m.liveIssues([]string{
+		"at '$.server': additional properties 'port', 'host', 'legacy' not allowed",
+	}))
+	if m.hasErr([]any{"server", "port"}) || m.hasErr([]any{"server", "host"}) {
+		t.Fatalf("valid fields must not carry the error mark: err=%v", m.errPaths)
+	}
+	if !m.hasErr([]any{"server", "legacy"}) || !m.hasErr([]any{"server"}) {
+		t.Fatalf("the real unknown key and its object must be marked: err=%v", m.errPaths)
+	}
+
+	// Reordered names produce the same marks.
+	m.setIssues(m.liveIssues([]string{
+		"at '$.server': additional properties 'legacy', 'host', 'port' not allowed",
+	}))
+	if m.hasErr([]any{"server", "port"}) || !m.hasErr([]any{"server", "legacy"}) {
+		t.Fatalf("marks depend on message order: err=%v", m.errPaths)
+	}
+
+	// Only valid names (a non-matching branch): mark the object itself, never
+	// the valid siblings.
+	m.setIssues(m.liveIssues([]string{
+		"at '$.server': additional properties 'port', 'host' not allowed",
+	}))
+	if m.hasErr([]any{"server", "port"}) || m.hasErr([]any{"server", "host"}) {
+		t.Fatalf("valid fields marked: err=%v", m.errPaths)
+	}
+	if !m.hasErr([]any{"server"}) {
+		t.Fatalf("the object itself should be marked: err=%v", m.errPaths)
+	}
+
+	// A root-level message with no actual unknown key must not mark every row
+	// through a nil prefix.
+	m.setIssues(m.liveIssues([]string{
+		"at '$': additional properties 'name' not allowed",
+	}))
+	if len(m.errPaths) != 0 {
+		t.Fatalf("root-level mark leaked to rows: %v", m.errPaths)
+	}
+}
+
+func TestUnknownRowsAlwaysCarryWarningMark(t *testing.T) {
+	doc := testDoc()
+	doc.Set([]any{"extra_key"}, tnum("1"))
+	m := newListModel(testModel(), doc, Options{})
+	m.Update(tea.WindowSizeMsg{Width: 100, Height: 30})
+
+	unknownLine := func() string {
+		t.Helper()
+		for _, r := range menuRows(m) {
+			if r.kind == rowUnknown {
+				return m.rowLine(r, false)
+			}
+		}
+		t.Fatal("unknown row missing")
+		return ""
+	}
+
+	// The variant-aware warning set can miss a row the current menu shows as
+	// unknown; the "(not in schema)" label must still carry the yellow mark.
+	m.warnPaths = nil
+	m.errPaths = nil
+	if line := unknownLine(); !contains(line, icons.Warn) || contains(line, icons.Err) {
+		t.Fatalf("unknown row mark = %q, want the warning glyph", line)
+	}
+
+	// A validator error outranks the fallback warning.
+	m.errPaths = [][]any{{"extra_key"}}
+	if line := unknownLine(); !contains(line, icons.Err) || contains(line, icons.Warn) {
+		t.Fatalf("error-marked unknown row = %q, want the error glyph", line)
+	}
+}
+
 func TestUnknownKeyIssuesListed(t *testing.T) {
 	doc := testDoc()
 	doc.Set([]any{"extra_key"}, tstr("x"))
@@ -246,7 +362,7 @@ func TestUnknownKeyIssuesListed(t *testing.T) {
 	if v := m.View(); !contains(v, icons.Warn+" 2 warnings") {
 		t.Fatalf("status row missing:\n%s", v)
 	}
-	if !m.hasWarn([]any{"server", "legacy"}) || !m.hasIssue([]any{"extra_key"}) {
+	if !m.hasWarn([]any{"server", "legacy"}) || !m.hasWarn([]any{"extra_key"}) {
 		t.Fatalf("warning marks missing: err=%v warn=%v", m.errPaths, m.warnPaths)
 	}
 

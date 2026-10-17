@@ -1518,42 +1518,120 @@ func replaceHits(lm *listModel, all []row, q, rep string, fold bool, re *regexp.
 	return out
 }
 
-// parseIssue extracts the instance location from a validator message like
-// "at '$.inner.x': got number, want string": the document path, extended by
-// the property name for "missing property 'p'" and by the first name of
-// "additional properties 'p', … not allowed". ok is false when the message
-// carries no location or the location is not a document path.
-func parseIssue(msg string) (path []any, ok bool) {
+// splitIssue extracts the quoted document location from a validator message
+// like "at '$.inner.x': got number, want string" and returns the detail after
+// it.
+func splitIssue(msg string) (loc []any, detail string, ok bool) {
 	const at = "at '"
 	i := strings.Index(msg, at)
 	if i < 0 {
-		return nil, false
+		return nil, "", false
 	}
 	rest := msg[i+len(at):]
 	j := strings.Index(rest, "'")
 	if j < 0 {
+		return nil, "", false
+	}
+	loc, ok = jsondoc.ParsePath(rest[:j])
+	if !ok {
+		return nil, "", false
+	}
+	return loc, rest[j:], true
+}
+
+// parseIssue extracts the jump target from a validator message: the location
+// itself, extended by the property name for "missing property 'p'" and by the
+// first name of "additional properties 'p', … not allowed". ok is false when
+// the message carries no location or the location is not a document path.
+func parseIssue(msg string) (path []any, ok bool) {
+	loc, detail, ok := splitIssue(msg)
+	if !ok {
 		return nil, false
 	}
-	if path, ok = jsondoc.ParsePath(rest[:j]); !ok {
-		return nil, false
+	if name, ok := issuePropName(detail, "missing property '"); ok {
+		return pathFor(loc, name), true
 	}
-	detail := rest[j:]
-	for _, marker := range []string{"missing property '", "additional propert"} {
-		k := strings.Index(detail, marker)
-		if k < 0 {
+	if name, ok := issuePropName(detail, "additional properties '"); ok {
+		return pathFor(loc, name), true
+	}
+	return loc, true
+}
+
+// issueFlagPaths returns every location a validator message refers to.
+// additionalProperties errors list all offending keys in the validator's map
+// iteration order; flagging only the first made unknown-key warning counts
+// depend on that order and flicker between refreshes.
+func issueFlagPaths(msg string) [][]any {
+	loc, detail, ok := splitIssue(msg)
+	if !ok {
+		return nil
+	}
+	if i := strings.Index(detail, "additional propert"); i >= 0 {
+		if names := quotedNames(detail[i:]); len(names) > 0 {
+			out := make([][]any, 0, len(names))
+			for _, name := range names {
+				out = append(out, pathFor(loc, name))
+			}
+			return out
+		}
+	}
+	if name, ok := issuePropName(detail, "missing property '"); ok {
+		return [][]any{pathFor(loc, name)}
+	}
+	return [][]any{loc}
+}
+
+// issuePropName reads the property name after marker (which includes its
+// opening quote) up to the closing unescaped quote.
+func issuePropName(detail, marker string) (string, bool) {
+	k := strings.Index(detail, marker)
+	if k < 0 {
+		return "", false
+	}
+	s := detail[k+len(marker):]
+	var b strings.Builder
+	for i := 0; i < len(s); i++ {
+		switch {
+		case s[i] == '\\' && i+1 < len(s) && s[i+1] == '\'':
+			b.WriteByte('\'')
+			i++
+		case s[i] == '\'':
+			return b.String(), true
+		default:
+			b.WriteByte(s[i])
+		}
+	}
+	return "", false
+}
+
+// quotedNames returns every single-quoted token in s, resolving the \'
+// escape the library uses inside property names.
+func quotedNames(s string) []string {
+	var out []string
+	for i := 0; i < len(s); i++ {
+		if s[i] != '\'' {
 			continue
 		}
-		sub := detail[k:]
-		if q := strings.Index(sub, "'"); q >= 0 {
-			if r := strings.Index(sub[q+1:], "'"); r >= 0 {
-				if name := sub[q+1 : q+1+r]; name != "" {
-					return pathFor(path, name), true
-				}
+		var b strings.Builder
+		j := i + 1
+		for ; j < len(s); j++ {
+			if s[j] == '\\' && j+1 < len(s) && s[j+1] == '\'' {
+				b.WriteByte('\'')
+				j++
+				continue
 			}
+			if s[j] == '\'' {
+				break
+			}
+			b.WriteByte(s[j])
 		}
-		return path, true
+		if j >= len(s) {
+			break
+		}
+		out = append(out, b.String())
+		i = j
 	}
-	return path, true
+	return out
 }
 
 func clonePath(p []any) []any {

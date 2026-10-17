@@ -15,6 +15,7 @@ import (
 	"github.com/charmbracelet/bubbles/textinput"
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
+	"github.com/charmbracelet/x/ansi"
 	"json-schema-editor/internal/icons"
 	"json-schema-editor/internal/jsondoc"
 	"json-schema-editor/internal/smodel"
@@ -131,7 +132,16 @@ type issuesState struct {
 type issue struct {
 	msg  string
 	path []any
-	warn bool // editor-level warning (schema-unknown key), not a validator error
+	// flagged lists every location the message refers to. additionalProperties
+	// messages name several keys in map iteration order; deduping only path
+	// (the first name) made unknown-key warnings flicker in and out.
+	flagged [][]any
+	// marks lists the rows that carry the severity icon for this issue. It is
+	// narrower than flagged for additionalProperties messages: names that are
+	// valid fields in the edited value (errors from other oneOf branches) must
+	// not be marked, and the selected names must not depend on map order.
+	marks [][]any
+	warn  bool // editor-level warning (schema-unknown key), not a validator error
 }
 
 // errsState is the save-time validation error overlay.
@@ -261,13 +271,19 @@ func (m *listModel) setIssues(items []issue) {
 	m.errPaths = m.errPaths[:0]
 	m.warnPaths = m.warnPaths[:0]
 	for _, it := range items {
-		if it.path == nil {
-			continue
+		marks := it.marks
+		if len(marks) == 0 && it.path != nil {
+			marks = [][]any{it.path}
 		}
-		if it.warn {
-			m.warnPaths = append(m.warnPaths, it.path)
-		} else {
-			m.errPaths = append(m.errPaths, it.path)
+		for _, p := range marks {
+			if p == nil { // document root: the status row carries the count
+				continue
+			}
+			if it.warn {
+				m.warnPaths = append(m.warnPaths, p)
+			} else {
+				m.errPaths = append(m.errPaths, p)
+			}
 		}
 	}
 }
@@ -289,15 +305,55 @@ func (m *listModel) refreshIssues() {
 // (e.g. additionalProperties) is not warned about twice.
 func (m *listModel) liveIssues(msgs []string) []issue {
 	items := issuesFrom(msgs)
+	warnings := unknownKeyIssues(m.model, m.doc)
+
+	// An additionalProperties message names keys in map iteration order, and
+	// a failed oneOf branch also names fields that are valid in the matched
+	// variant. Mark only the names that really are schema-unknown keys in the
+	// edited value; when none are, mark the object itself. Otherwise valid
+	// siblings acquire error icons that move/disappear between validations.
+	for i := range items {
+		it := &items[i]
+		if it.warn || !strings.Contains(it.msg, "additional properties ") {
+			continue
+		}
+		loc, _, ok := splitIssue(it.msg)
+		if !ok {
+			continue
+		}
+		listed := map[string]bool{}
+		for _, p := range it.flagged {
+			listed[jsondoc.PathString(p)] = true
+		}
+		var actual [][]any
+		for _, w := range warnings { // document order: stable
+			if listed[jsondoc.PathString(w.path)] {
+				actual = append(actual, w.path)
+			}
+		}
+		if len(actual) == 0 {
+			it.path = loc
+			it.flagged = [][]any{loc}
+			it.marks = [][]any{loc}
+			continue
+		}
+		it.path = actual[0]
+		it.flagged = actual
+		it.marks = actual
+	}
+
 	flagged := map[string]bool{}
 	for _, it := range items {
+		for _, p := range it.flagged {
+			flagged[jsondoc.PathString(p)] = true
+		}
 		if it.path != nil {
 			flagged[jsondoc.PathString(it.path)] = true
 		}
 	}
-	for _, it := range unknownKeyIssues(m.model, m.doc) {
-		if !flagged[jsondoc.PathString(it.path)] {
-			items = append(items, it)
+	for _, w := range warnings {
+		if !flagged[jsondoc.PathString(w.path)] {
+			items = append(items, w)
 		}
 	}
 	return items
@@ -314,7 +370,7 @@ func issuesFrom(msgs []string) []issue {
 		if !ok {
 			path = nil
 		}
-		out = append(out, issue{msg: s, path: path})
+		out = append(out, issue{msg: s, path: path, flagged: issueFlagPaths(s)})
 	}
 	return out
 }
@@ -556,16 +612,17 @@ func clipLeft(s string, max int) string {
 func (m *listModel) listView() string {
 	var b strings.Builder
 	st := m.top()
-	b.WriteString(mTitle.Render(displayTitle(st.node)))
+	title := mTitle.Render(displayTitle(st.node))
 	if m.dirty() {
-		b.WriteString(" " + mDiff.Render("●"))
+		title += " " + mDiff.Render("●")
 	}
+	b.WriteString(clipDisplay(title, m.width-1))
 	b.WriteByte('\n')
-	b.WriteString(mCrumb.Render(clipRunes(m.breadcrumb(), m.width)))
+	b.WriteString(clipDisplay(mCrumb.Render(clipRunes(m.breadcrumb(), m.width)), m.width-1))
 	b.WriteByte('\n')
 	header := 2
 	if len(m.stack) == 1 && m.opts.Status != "" {
-		b.WriteString(mStatus.Render(clipRunes(m.opts.Status, m.width)))
+		b.WriteString(clipDisplay(mStatus.Render(clipRunes(m.opts.Status, m.width)), m.width-1))
 		b.WriteByte('\n')
 		header++
 	}
@@ -576,10 +633,10 @@ func (m *listModel) listView() string {
 			h--
 		}
 		m.writeSearchRows(&b, h)
-		b.WriteString(mHelp.Render("search: ") + m.search.ti.View())
+		b.WriteString(clipDisplay(mHelp.Render("search: ")+m.search.ti.View(), m.width-1))
 		b.WriteByte('\n')
 		if m.search.replace {
-			b.WriteString(mHelp.Render("replace: ") + m.search.rti.View())
+			b.WriteString(clipDisplay(mHelp.Render("replace: ")+m.search.rti.View(), m.width-1))
 			b.WriteByte('\n')
 		}
 		caseTxt := "case-insensitive"
@@ -587,7 +644,7 @@ func (m *listModel) listView() string {
 			caseTxt = "case-sensitive"
 		}
 		if m.search.reErr != "" {
-			b.WriteString(mErr.Render(clipRunes("invalid regex: "+m.search.reErr+" · esc close", m.width)))
+			b.WriteString(clipDisplay(mErr.Render(clipRunes("invalid regex: "+m.search.reErr+" · esc close", m.width)), m.width-1))
 			b.WriteByte('\n')
 			return b.String()
 		}
@@ -595,7 +652,7 @@ func (m *listModel) listView() string {
 		if m.search.regex {
 			modeTxt = "regex"
 		}
-		b.WriteString(mHelp.Render(clipRunes("↑/↓ or ctrl+j/k move · enter jump/replace · tab replace · alt+i "+caseTxt+" · alt+x "+modeTxt+" · ctrl+r replace all · esc close", m.width)))
+		b.WriteString(clipDisplay(mHelp.Render("↑/↓ ctrl+j/k · enter jump/replace · tab replace · alt+i "+caseTxt+" · alt+x "+modeTxt), m.width-1))
 		b.WriteByte('\n')
 		return b.String()
 	}
@@ -603,20 +660,21 @@ func (m *listModel) listView() string {
 	rows := menuRows(m)
 	m.clampCursor(rows)
 	desc := m.focusedDesc(rows)
-	h := m.height - header - 1
+	var descLines []string
 	if desc != "" {
-		h--
+		descLines = wrapText(desc, m.width-1)
 	}
+	h := m.height - header - 1 - len(descLines)
 	if m.notice != "" {
 		h--
 	}
 	m.writeRows(&b, rows, h)
-	if desc != "" {
-		b.WriteString(mHelp.Render(clipRunes(desc, m.width)))
+	for _, line := range descLines {
+		b.WriteString(clipDisplay(mHelp.Render(line), m.width-1))
 		b.WriteByte('\n')
 	}
 	if m.notice != "" {
-		b.WriteString(mErr.Render(clipRunes(m.notice, m.width)))
+		b.WriteString(clipDisplay(mErr.Render(clipRunes(m.notice, m.width)), m.width-1))
 		b.WriteByte('\n')
 	}
 	// pin the hint bar to the last terminal row: fill the gap below the rows
@@ -632,6 +690,61 @@ func (m *listModel) listView() string {
 	return b.String()
 }
 
+// wrapText wraps s to max display cells per line, preserving explicit
+// newlines. It breaks at the last space when that leaves a non-empty prefix;
+// otherwise (CJK text, a single long token) it breaks between runes. A wide
+// rune wider than max stays whole rather than producing an empty line.
+func wrapText(s string, max int) []string {
+	if max < 1 {
+		return []string{s}
+	}
+	var out []string
+	for _, para := range strings.Split(s, "\n") {
+		line := ""
+		for _, r := range para {
+			cand := line + string(r)
+			if displayWidth(cand) <= max {
+				line = cand
+				continue
+			}
+			if line == "" {
+				line = string(r)
+				continue
+			}
+			if i := strings.LastIndexByte(line, ' '); i > 0 {
+				out = append(out, line[:i])
+				line = line[i+1:] + string(r)
+				continue
+			}
+			out = append(out, line)
+			line = string(r)
+		}
+		out = append(out, line)
+	}
+	return out
+}
+
+// displayWidth returns the terminal cell width of s. It uses wcwidth
+// semantics (go-runewidth, which honours the locale's East-Asian ambiguous
+// setting) instead of the grapheme width lipgloss.Width reports: Nerd Font
+// private-use glyphs and "●" are ambiguous, and a CJK terminal gives them two
+// cells while uniseg sees one. The mismatch made the renderer's end-of-line
+// erase land on half a glyph, which showed up as flicker while the cursor
+// moved.
+func displayWidth(s string) int { return ansi.StringWidthWc(s) }
+
+// clipDisplay truncates s to max terminal cells, ANSI-aware. A reset closes
+// any style left open by the cut.
+func clipDisplay(s string, max int) string {
+	if max < 1 {
+		return ""
+	}
+	if displayWidth(s) <= max {
+		return s
+	}
+	return ansi.TruncateWc(s, max, "") + "\x1b[0m"
+}
+
 // helpLine renders the bottom hint row via recHint.
 func (m *listModel) helpLine() string {
 	return m.recHint(menuHelp)
@@ -643,7 +756,7 @@ func (m *listModel) helpView() string {
 	b.WriteString(mTitle.Render("Keyboard help"))
 	b.WriteString("\n\n")
 	for _, l := range helpLines {
-		b.WriteString(mHelp.Render(clipRunes(l, m.width)))
+		b.WriteString(clipDisplay(mHelp.Render(l), m.width-1))
 		b.WriteByte('\n')
 	}
 	b.WriteString(m.recHint("esc/? close"))
@@ -673,12 +786,13 @@ func (m *listModel) focusedDesc(rows []row) string {
 // stays visible on every surface that renders hints.
 func (m *listModel) recHint(hints string) string {
 	rec := fmt.Sprintf("● REC %d", len(m.recBuf))
-	w := lipgloss.Width(rec)
+	w := displayWidth(rec)
+	limit := m.width - 1
 	if !m.recording || m.width < w+8 {
-		return mHelp.Render(clipRunes(hints, m.width))
+		return mHelp.Render(clipDisplay(hints, limit))
 	}
-	left := clipRunes(hints, m.width-w-1)
-	pad := m.width - lipgloss.Width(left) - w
+	left := clipDisplay(hints, limit-w-1)
+	pad := limit - displayWidth(left) - w
 	if pad < 1 {
 		pad = 1
 	}
@@ -688,9 +802,11 @@ func (m *listModel) recHint(hints string) string {
 // writeCut clips s to the terminal width line by line (multiline row content:
 // in-place input + completion hint + error) and writes it out.
 func (m *listModel) writeCut(b *strings.Builder, s string) {
-	cut := lipgloss.NewStyle().MaxWidth(m.width)
 	for _, line := range strings.Split(s, "\n") {
-		b.WriteString(cut.Render(line))
+		// Leave one cell of slack: the renderer measures with grapheme widths
+		// and appends its end-of-line erase when it thinks the line is short,
+		// so a line that fills the terminal exactly can lose the last cell.
+		b.WriteString(clipDisplay(line, m.width-1))
 		b.WriteByte('\n')
 	}
 }
@@ -839,7 +955,7 @@ func (m *listModel) dirty() bool {
 
 // titleCol pads the left column to 24 cells.
 func (m *listModel) titleCol(left string) string {
-	if w := lipgloss.Width(left); w >= 24 {
+	if w := displayWidth(left); w >= 24 {
 		return left + " "
 	} else {
 		return left + strings.Repeat(" ", 24-w)
@@ -960,8 +1076,14 @@ func (m *listModel) rowLine(r row, cursor bool) string {
 		line += " " + mAccent.Render("--->")
 	}
 	if r.kind == rowField || r.kind == rowDrill || r.kind == rowUnknown {
-		if m.hasIssue(r.path) {
-			line += " " + m.issueMark(r.path)
+		switch {
+		case m.hasErr(r.path):
+			line += " " + mErr.Render(icons.Err)
+		case r.kind == rowUnknown || m.hasWarn(r.path):
+			// Every row labelled "(not in schema)" is a warning by definition;
+			// the warning set is variant-aware and can miss rows the current
+			// (pinned) menu shows as unknown. Errors still outrank warnings.
+			line += " " + mWarn.Render(icons.Warn)
 		}
 		line += m.changeMark(r.path)
 	}
@@ -1036,20 +1158,6 @@ func (m *listModel) hasWarn(path []any) bool {
 		}
 	}
 	return false
-}
-
-// hasIssue reports whether any problem (error or warning) touches path.
-func (m *listModel) hasIssue(path []any) bool {
-	return m.hasErr(path) || m.hasWarn(path)
-}
-
-// issueMark renders the severity row mark for path: the error glyph in red
-// for validation errors, the warning glyph in yellow for unknown-key warnings.
-func (m *listModel) issueMark(path []any) string {
-	if m.hasErr(path) {
-		return mErr.Render(icons.Err)
-	}
-	return mWarn.Render(icons.Warn)
 }
 
 // worstIssueIcon picks the severity glyph for a set of issues: any real
@@ -1308,14 +1416,14 @@ func (m *listModel) confirmView() string {
 	if m.confirm.hint != "" {
 		hint = m.confirm.hint
 	}
-	return mTitle.Render(m.confirm.title) + "\n\n" +
-		mHelp.Render(hint) + "\n"
+	return clipDisplay(mTitle.Render(m.confirm.title), m.width-1) + "\n\n" +
+		clipDisplay(mHelp.Render(hint), m.width-1) + "\n"
 }
 
 // issuesView lists the load-time validation issues; enter jumps to the field.
 func (m *listModel) issuesView() string {
 	var b strings.Builder
-	b.WriteString(mTitle.Render(fmt.Sprintf("%s Validation issues (%d)", worstIssueIcon(m.issues.items), len(m.issues.items))))
+	b.WriteString(clipDisplay(mTitle.Render(fmt.Sprintf("%s Validation issues (%d)", worstIssueIcon(m.issues.items), len(m.issues.items))), m.width-1))
 	b.WriteByte('\n')
 	if len(m.issues.items) == 0 {
 		b.WriteString(mDim.Render("( no issues )"))
@@ -1341,18 +1449,17 @@ func (m *listModel) issuesView() string {
 	if off < 0 {
 		off = 0
 	}
-	cut := lipgloss.NewStyle().MaxWidth(m.width)
 	for i := off; i < len(m.issues.items) && i < off+height; i++ {
 		it := m.issues.items[i]
 		line := "  " + m.severityStyle(it).Render(it.msg)
 		if i == m.issues.cursor {
 			line = mSel.Render("> " + it.msg)
 		}
-		b.WriteString(cut.Render(line))
+		b.WriteString(clipDisplay(line, m.width-1))
 		b.WriteByte('\n')
 	}
 	if m.notice != "" {
-		b.WriteString(mErr.Render(clipRunes(m.notice, m.width)))
+		b.WriteString(clipDisplay(mErr.Render(clipRunes(m.notice, m.width)), m.width-1))
 		b.WriteByte('\n')
 	}
 	b.WriteString(m.recHint("↑/↓ or ctrl+j/k move · enter jump to the field · esc close"))
@@ -1362,7 +1469,7 @@ func (m *listModel) issuesView() string {
 
 func (m *listModel) errsView() string {
 	var b strings.Builder
-	b.WriteString(mTitle.Render(icons.Err + " Cannot save: validation errors"))
+	b.WriteString(clipDisplay(mTitle.Render(icons.Err+" Cannot save: validation errors"), m.width-1))
 	b.WriteByte('\n')
 	height := m.height - 3
 	if height < 1 {
@@ -1378,19 +1485,18 @@ func (m *listModel) errsView() string {
 	if off < 0 {
 		off = 0
 	}
-	cut := lipgloss.NewStyle().MaxWidth(m.width)
 	for i := off; i < len(m.errs.lines) && i < off+height; i++ {
 		line := "  " + m.errs.lines[i]
 		if i == m.errs.cursor {
 			line = mSel.Render("> " + m.errs.lines[i])
 		}
-		b.WriteString(cut.Render(line))
+		b.WriteString(clipDisplay(line, m.width-1))
 		b.WriteByte('\n')
 	}
 	if m.opts.Force {
-		b.WriteString(mHelp.Render("enter jump to field · y save anyway · n back"))
+		b.WriteString(clipDisplay(mHelp.Render("enter jump to field · y save anyway · n back"), m.width-1))
 	} else {
-		b.WriteString(mHelp.Render("enter jump to field · fix fields and save again, or rerun with --force"))
+		b.WriteString(clipDisplay(mHelp.Render("enter jump to field · fix fields and save again, or rerun with --force"), m.width-1))
 	}
 	b.WriteByte('\n')
 	return b.String()
@@ -1405,7 +1511,7 @@ func (m *listModel) textView() string {
 	b.WriteString(mTitle.Render(title))
 	b.WriteByte('\n')
 	if m.text.fn == nil && len(m.text.path) > 0 {
-		b.WriteString(mErr.Render("not in schema — edit the JSON, or esc and press delete to remove the field"))
+		b.WriteString(clipDisplay(mErr.Render("not in schema — edit the JSON, or esc and press delete to remove the field"), m.width-1))
 		b.WriteByte('\n')
 	}
 	b.WriteString(m.text.ta.View())
@@ -1425,9 +1531,8 @@ func (m *listModel) selView() string {
 	if v, ok := m.doc.Get(m.sel.path); ok && v != nil && !v.Null {
 		curEnc = smodel.EncodeValue(v)
 	}
-	b.WriteString(mTitle.Render(displayTitle(m.sel.fn)))
+	b.WriteString(clipDisplay(mTitle.Render(displayTitle(m.sel.fn)), m.width-1))
 	b.WriteByte('\n')
-	cut := lipgloss.NewStyle().MaxWidth(m.width)
 	for i, o := range m.sel.opts {
 		mark, markStyle := "○", mDim
 		if o.Encoded == curEnc {
@@ -1437,10 +1542,10 @@ func (m *listModel) selView() string {
 		if i == m.sel.cursor {
 			line = mSel.Render(line)
 		}
-		b.WriteString(cut.Render(line))
+		b.WriteString(clipDisplay(line, m.width-1))
 		b.WriteByte('\n')
 	}
-	b.WriteString(mHelp.Render(overlayHelp))
+	b.WriteString(clipDisplay(mHelp.Render(overlayHelp), m.width-1))
 	b.WriteByte('\n')
 	return b.String()
 }

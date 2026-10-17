@@ -633,7 +633,7 @@ func TestIssuesLiveRefresh(t *testing.T) {
 	if !contains(m.View(), icons.Err+" 2 validation errors") {
 		t.Fatalf("status row should count 2:\n%s", m.View())
 	}
-	if !m.hasIssue([]any{"server", "port"}) || !m.hasIssue([]any{"name"}) {
+	if !m.hasErr([]any{"server", "port"}) || !m.hasErr([]any{"name"}) {
 		t.Fatal("both fields should be marked")
 	}
 
@@ -653,7 +653,7 @@ func TestIssuesLiveRefresh(t *testing.T) {
 	if len(m.issuesNow) != 1 {
 		t.Fatalf("issues after fix = %d, want 1", len(m.issuesNow))
 	}
-	if m.hasIssue([]any{"server", "port"}) {
+	if m.hasErr([]any{"server", "port"}) {
 		t.Fatal("the fixed row must lose its mark")
 	}
 	press(m, "esc") // back to the root

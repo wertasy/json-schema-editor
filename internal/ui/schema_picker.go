@@ -110,6 +110,7 @@ func modifiesText(msg tea.KeyMsg) bool {
 func (m pickerModel) Init() tea.Cmd { return nil }
 
 func (m pickerModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
+	changed := false
 	switch msg := msg.(type) {
 	case tea.WindowSizeMsg:
 		m.width, m.height = msg.Width, msg.Height
@@ -119,10 +120,10 @@ func (m pickerModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		case "ctrl+c", "esc":
 			m.aborted = true
 			return m, tea.Quit
-		case "up":
+		case "up", "ctrl+k":
 			m.cursor = wrapCursor(m.cursor, -1, len(m.filtered))
 			return m, nil
-		case "down":
+		case "down", "ctrl+j":
 			m.cursor = wrapCursor(m.cursor, 1, len(m.filtered))
 			return m, nil
 		case "enter":
@@ -138,11 +139,18 @@ func (m pickerModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			// starts a fresh search over it instead of appending to it.
 			m.stale = false
 			m.ti.SetValue("")
+			changed = true
 		}
 	}
 	var cmd tea.Cmd
+	before := m.ti.Value()
 	m.ti, cmd = m.ti.Update(msg)
-	m.refilter()
+	// Only a query change re-filters (and resets the cursor). Other messages
+	// — cursor blink ticks, key presses that merely move inside the input —
+	// must leave the selection where the user put it.
+	if changed || before != m.ti.Value() {
+		m.refilter()
+	}
 	return m, cmd
 }
 
@@ -184,7 +192,7 @@ func (m pickerModel) View() string {
 		b.WriteByte('\n')
 	}
 	b.WriteString(mHelp.Render("search: ") + m.ti.View() + "\n")
-	b.WriteString(mHelp.Render("type to search · ↑/↓ move · enter select · esc cancel"))
+	b.WriteString(mHelp.Render("type to search · ↑/↓ or ctrl+j/k move · enter select · esc cancel"))
 	return b.String()
 }
 

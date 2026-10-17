@@ -47,6 +47,14 @@ func pkey(s string) tea.KeyMsg {
 		return tea.KeyMsg{Type: tea.KeyUp}
 	case "down":
 		return tea.KeyMsg{Type: tea.KeyDown}
+	case "ctrl+j":
+		return tea.KeyMsg{Type: tea.KeyCtrlJ}
+	case "ctrl+k":
+		return tea.KeyMsg{Type: tea.KeyCtrlK}
+	case "left":
+		return tea.KeyMsg{Type: tea.KeyLeft}
+	case "right":
+		return tea.KeyMsg{Type: tea.KeyRight}
 	case "backspace":
 		return tea.KeyMsg{Type: tea.KeyBackspace}
 	default:
@@ -99,6 +107,46 @@ func TestPickerTUICursorWraps(t *testing.T) {
 	m = update(m, "down", "down")
 	if m.cursor != 2 {
 		t.Fatalf("two downs = %d, want 2", m.cursor)
+	}
+	// ctrl+j/ctrl+k move like j/k-style list navigation and wrap
+	m = update(m, "ctrl+j")
+	if m.cursor != 0 {
+		t.Fatalf("ctrl+j from bottom = %d, want wrap to 0", m.cursor)
+	}
+	m = update(m, "ctrl+k")
+	if m.cursor != len(m.filtered)-1 {
+		t.Fatalf("ctrl+k from top = %d, want wrap to %d", m.cursor, len(m.filtered)-1)
+	}
+	if m.ti.Value() != "" {
+		t.Fatalf("ctrl+j/k must not edit the query, got %q", m.ti.Value())
+	}
+}
+
+func TestPickerTUICursorSurvivesNonKeyMessages(t *testing.T) {
+	m := update(newPickerModel(pickEntries(), PickOptions{}), "e") // two matches
+	if len(m.filtered) != 2 {
+		t.Fatalf("filtered = %v, want two entries", m.filtered)
+	}
+	m = update(m, "down")
+	if m.cursor != 1 {
+		t.Fatalf("cursor = %d, want 1", m.cursor)
+	}
+	// A cursor-blink tick (or any other non-key message) must not re-filter
+	// and snap the selection back to the top.
+	nm, _ := m.Update(struct{}{})
+	m = nm.(pickerModel)
+	if m.cursor != 1 {
+		t.Fatalf("non-key message reset the cursor to %d", m.cursor)
+	}
+	// Keys that only move inside the input likewise keep the selection.
+	m = update(m, "left", "right")
+	if m.cursor != 1 {
+		t.Fatalf("input cursor keys reset the selection to %d", m.cursor)
+	}
+	// Editing the query still restarts at the top.
+	m = update(m, "backspace")
+	if m.cursor != 0 || len(m.filtered) != 3 {
+		t.Fatalf("query change must reset the cursor, got cursor=%d filtered=%v", m.cursor, m.filtered)
 	}
 }
 

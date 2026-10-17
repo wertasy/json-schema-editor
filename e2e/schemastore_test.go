@@ -166,8 +166,31 @@ func TestPtySchemaPicker(t *testing.T) {
 	}
 
 	off := waitFrame("picker opens", 0, "Select a schema")
-	tty.Write([]byte("serv\r"))
-	off = waitFrame("search hit", off, "Server Config")
+	tty.Write([]byte("e")) // replace the filename-stem preset; both entries match
+	off = waitFrame("filtered list", off, "Server Config", "Decoy")
+	tty.Write([]byte("\x1b[B")) // ↓ to Decoy
+	off = waitFrame("cursor moved", off, "> Decoy")
+	// The search input's caret blinks every ~530ms. A blink must not re-filter
+	// and snap the cursor back to the first row (the old bug).
+	blink := time.After(1200 * time.Millisecond)
+waitBlink:
+	for {
+		select {
+		case frame, ok := <-frames:
+			if !ok {
+				t.Fatal("pty closed while waiting for the blink")
+			}
+			if strings.Contains(frame[off:], "> Server Config") {
+				t.Fatalf("blink reset the picker cursor:\n%s", frame)
+			}
+		case <-blink:
+			break waitBlink
+		}
+	}
+	tty.Write([]byte("\x0b")) // ctrl+k: up to Server Config
+	off = waitFrame("ctrl+k moves up", off, "> Server Config")
+	tty.Write([]byte("\n")) // ctrl+j: down to Decoy
+	off = waitFrame("ctrl+j moves down", off, "> Decoy")
 	tty.Write([]byte("\r"))
 	waitFrame("form after pick", off, "Save and exit")
 	tty.Write([]byte("\x03")) // ctrl+c abort
