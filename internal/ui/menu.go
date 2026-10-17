@@ -162,7 +162,8 @@ type searchState struct {
 	reErr    string         // regexp.Compile error message; "" when ok
 	// A search jump parks the overlay instead of closing it: esc at the
 	// landing depth (returnDepth) reopens it, and closing it always returns to
-	// the menu the search was opened from (origin).
+	// the menu the search was opened from (origin, captured when the jump
+	// parks the overlay so every park cycle gets a fresh return point).
 	parked      bool
 	returnDepth int
 	origin      []*menuState
@@ -201,6 +202,7 @@ type listModel struct {
 	issues        *issuesState    // open issues overlay
 	issuesBack    *issuesState    // parked overlay: esc at the jump target returns here
 	issuesReturn  int             // stack depth of the jump target
+	issuesOrigin  []*menuState    // stack captured when the jump parked the list
 }
 
 // newMenuTextarea builds the raw-JSON editor sized for the current screen.
@@ -881,6 +883,11 @@ func (m *listModel) rowLine(r row, cursor bool) string {
 		left = m.issuesSeverity().Render(r.label)
 	default: // rowField / rowDrill
 		title := r.fn.Title
+		if r.label != "" {
+			// map rows (KMap): the label is the document key, the value
+			// node is shared across rows and carries no per-key title
+			title = r.label
+		}
 		if m.fieldRequired(r) {
 			title += mStar.Render("*")
 		}
@@ -1087,7 +1094,8 @@ func (m *listModel) openIssues() {
 
 // issuesReturnTo reopens the parked issue list at the jump target, refreshing
 // its content against the current document (fixed entries disappear) while
-// keeping the cursor position.
+// keeping the cursor position. The stack goes back to where the list was
+// opened from, so closing it never leaves the user at the jump target.
 func (m *listModel) issuesReturnTo() {
 	cur := m.issuesBack.cursor
 	items := m.issuesBack.items
@@ -1096,6 +1104,10 @@ func (m *listModel) issuesReturnTo() {
 		m.setIssues(items)
 	}
 	m.issuesBack = nil
+	if origin := m.issuesOrigin; origin != nil {
+		m.stack = origin
+		m.issuesOrigin = nil
+	}
 	if cur > len(items)-1 {
 		cur = len(items) - 1
 	}
@@ -1157,7 +1169,7 @@ func (m *listModel) valueStyle(fn *smodel.FormNode, path []any) lipgloss.Style {
 		return mValEnum
 	case smodel.KBoolean:
 		return mValBool
-	case smodel.KObject, smodel.KArray, smodel.KOneOf:
+	case smodel.KObject, smodel.KArray, smodel.KMap, smodel.KOneOf:
 		return mValObj
 	default:
 		switch {

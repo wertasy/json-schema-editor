@@ -104,9 +104,10 @@ $
 | 数值约束 | `minimum` `maximum` `exclusiveMinimum` `exclusiveMaximum` `multipleOf` | 输入校验 |
 | 字符串约束 | `minLength` `maxLength` `pattern` | 输入校验 |
 | 对象 | `properties` `required` | 字段按 schema 顺序；required 空值拦截 |
+| 对象映射 | `additionalProperties` | 键为文档成员（`a` 添加、`d` 删除），值按子 schema 编辑（如 sing-box HTTPHeader：字符串或字符串数组） |
 | 数组 | `items` `minItems` `maxItems` | items.enum→多选；标量条目→逐条输入；对象条目→逐条表单 |
 | 组合 | `oneOf` `anyOf` | 变体选择后进入子编辑器；全 const/单值 enum 变体合并为一个枚举选择 |
-| 组合 | `allOf` | 浅合并（properties 拼接、required 并集、约束取更严者） |
+| 组合 | `allOf` | 浅合并（properties 拼接、required 并集、约束取更严者）；其中的 `oneOf`/`anyOf` 按分配律展开为嵌套变体（sing-box rule = 匹配字段 allOf action） |
 | 引用 | `$ref` | 本地指针与远端 ref 均支持（缓存 + 环保护，深度上限 32） |
 
 ## 降级规则

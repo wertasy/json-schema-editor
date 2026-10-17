@@ -852,3 +852,152 @@ func TestNestedOneOfGroupFlatten(t *testing.T) {
 		t.Fatalf("vless should pin with its flow field, got %d children", len(m.top().node.Children))
 	}
 }
+
+func TestAllOfComboUnknownKeysAndMenu(t *testing.T) {
+	// sing-box Rule shape: oneOf over allOf[matchers, {$ref: oneOf actions}]
+	root := mustSchema(t, `{
+	  "type": "object",
+	  "properties": {
+	    "rules": {"type": "array", "items": {
+	      "oneOf": [
+	        {"type": "object", "allOf": [
+	          {"properties": {"domain": {"type": "string"}}},
+	          {"$ref": "#/$defs/act"}]},
+	        {"type": "object", "properties": {"mode": {"type": "string"}}, "required": ["mode"]}
+	      ]
+	    }}
+	  },
+	  "$defs": {"act": {"oneOf": [
+	    {"type": "object", "properties": {"action": {"const": "route"}, "outbound": {"type": "string"}}, "required": ["action"]},
+	    {"type": "object", "properties": {"action": {"const": "reject"}}, "required": ["action"]}
+	  ]}}
+	}`)
+	doc := tobj(tmem("rules", tarr(tobj(
+		tmem("domain", tstr("a.com")),
+		tmem("action", tstr("route")),
+		tmem("outbound", tstr("o1")),
+		tmem("bogus", tstr("x"))))))
+
+	// the unknown-key walk must see through the nested variants
+	issues := unknownKeyIssues(root, doc)
+	if len(issues) != 1 || !strings.Contains(issues[0].msg, "bogus") {
+		t.Fatalf("issues = %+v", issues)
+	}
+
+	// the item menu pins the route leaf: outbound is a schema field,
+	// bogus the only "(not in schema)" row
+	m := newListModel(root, doc, Options{})
+	m.Update(tea.WindowSizeMsg{Width: 100, Height: 30})
+	press(m, "down", "enter") // skip the issues row, drill into rules
+	press(m, "down", "enter") // skip < Add item >, open item 0
+	v := m.View()
+	if !contains(v, "outbound") {
+		t.Fatalf("item menu lost the action fields:\n%s", v)
+	}
+	if strings.Count(v, "(not in schema)") != 1 || !contains(v, "bogus") {
+		t.Fatalf("exactly bogus should be unknown:\n%s", v)
+	}
+}
+
+func TestMapKeysKnownAndEditable(t *testing.T) {
+	// sing-box HTTPHeader shape: string-keyed map, values string or []string
+	headers := &smodel.FormNode{Key: "headers", Title: "Headers", Kind: smodel.KMap,
+		Items: &smodel.FormNode{Key: "headers", Title: "Header", Kind: smodel.KOneOf, Variants: []*smodel.FormNode{
+			{Key: "headers", Title: "string", Kind: smodel.KScalar, JSONType: "string"},
+			{Key: "headers", Title: "list", Kind: smodel.KArray,
+				Items: &smodel.FormNode{Key: "headers", Kind: smodel.KScalar, JSONType: "string"}},
+		}}}
+	root := &smodel.FormNode{Key: "$", Title: "$", Kind: smodel.KObject,
+		Children: []*smodel.FormNode{headers}}
+	doc := tobj(tmem("headers", tobj(tmem("Host", tstr("canhui.wang")))))
+
+	// the unknown-key walk recognizes map keys: no issues
+	if issues := unknownKeyIssues(root, doc); len(issues) != 0 {
+		t.Fatalf("issues = %+v, want none", issues)
+	}
+
+	// the menu renders the doc key as a row without the unknown tag, and
+	// the map summary shows its members
+	m := newListModel(root, doc, Options{})
+	m.Update(tea.WindowSizeMsg{Width: 100, Height: 30})
+	press(m, "enter") // drill into headers
+	v := m.View()
+	if !contains(v, "Host") || strings.Contains(v, "(not in schema)") {
+		t.Fatalf("headers menu =\n%s", v)
+	}
+	if strings.Count(v, "( nothing here )") != 0 {
+		t.Fatalf("headers menu empty:\n%s", v)
+	}
+
+	// d on the map row removes the key-value pair
+	rows := menuRowsFor(m, m.top())
+	var hostRow row
+	for _, r := range rows {
+		if r.label == "Host" {
+			hostRow = r
+			break
+		}
+	}
+	if hostRow.fn == nil {
+		t.Fatalf("Host row missing:\n%s", v)
+	}
+	m.deletePair(hostRow)
+	if cur, _ := doc.Get([]any{"headers"}); cur.Object != nil && len(*cur.Object) != 0 {
+		t.Fatalf("deletePair left %v", *cur.Object)
+	}
+
+	// a types a key name; the value seeds per the value schema (a null
+	// placeholder for the oneOf value, same as a fresh array item — the
+	// variant menu replaces it once a type is picked)
+	m.addKey(row{}, false)
+	m.add.ti.SetValue("X-Tag")
+	m.keyAdd(tea.KeyMsg{Type: tea.KeyEnter})
+	if cur, ok := doc.Get([]any{"headers", "X-Tag"}); !ok || cur == nil {
+		t.Fatal("addKey did not seed the map value")
+	}
+}
+
+func TestMapListValueAddElementAfterTypeSwitch(t *testing.T) {
+	// the user flow: a adds a key (the oneOf value schema seeds null), the
+	// list variant is picked, then the first element is added — the commit
+	// must replace the null placeholder with the array, not panic
+	headers := &smodel.FormNode{Key: "headers", Title: "Headers", Kind: smodel.KMap,
+		Items: &smodel.FormNode{Key: "headers", Title: "Header", Kind: smodel.KOneOf, Variants: []*smodel.FormNode{
+			{Key: "headers", Title: "string", Kind: smodel.KScalar, JSONType: "string"},
+			{Key: "headers", Title: "list", Kind: smodel.KArray,
+				Items: &smodel.FormNode{Key: "headers", Kind: smodel.KScalar, JSONType: "string"}},
+		}}}
+	root := &smodel.FormNode{Key: "$", Title: "$", Kind: smodel.KObject,
+		Children: []*smodel.FormNode{headers}}
+	doc := tobj(tmem("headers", tobj(tmem("Host", tnull()))))
+	m := newListModel(root, doc, Options{})
+	m.Update(tea.WindowSizeMsg{Width: 100, Height: 30})
+
+	// enter the headers menu, drill into the Host oneOf, pick the list
+	press(m, "enter")
+	oneOf := headers.Items
+	path := []any{"headers", "Host"}
+	m.push(oneOf, path)
+	list := oneOf.Variants[1]
+	m.enterVariant(row{kind: rowVariant, variant: list, path: clonePath(path), idx: -1})
+	if m.top().node != list {
+		t.Fatalf("top = %+v, want the pushed list variant", m.top().node)
+	}
+
+	// < Add item >, type the element, commit
+	m.insertItemAt(0, false)
+	if m.edit == nil {
+		t.Fatal("add item should open the element editor")
+	}
+	m.edit.ti.SetValue("8.8.8.8")
+	m.keyEdit(tea.KeyMsg{Type: tea.KeyEnter})
+
+	got, ok := doc.Get([]any{"headers", "Host", 0})
+	if !ok || got.Str == nil || *got.Str != "8.8.8.8" {
+		t.Fatalf("element write failed: ok=%v got=%+v", ok, got)
+	}
+	arr, _ := doc.Get([]any{"headers", "Host"})
+	if arr.Array == nil || len(*arr.Array) != 1 {
+		t.Fatalf("Host should be a 1-element array, got %+v", arr)
+	}
+}

@@ -534,7 +534,8 @@ func (m *listModel) moveItem(r row, delta int) {
 // toggles, variant pickers, scalar roots) refuse with a notice.
 func (m *listModel) addKey(r row, after bool) {
 	st := m.top()
-	if st.kind != menuObject || st.node.Kind != smodel.KObject {
+	if st.kind != menuObject ||
+		(st.node.Kind != smodel.KObject && st.node.Kind != smodel.KMap) {
 		m.notice = "a adds a custom key under an object menu"
 		return
 	}
@@ -599,7 +600,43 @@ func (m *listModel) keyAdd(msg tea.KeyMsg) tea.Cmd {
 		}
 		path := pathFor(m.add.path, k)
 		idx := m.add.idx
+		node := m.add.node
 		m.add = nil
+		if node.Kind == smodel.KMap {
+			// the new value edits against the map's value schema, like a
+			// fresh array item does; raw only when no value schema exists
+			items := node.Items
+			if items == nil || items.Kind == smodel.KRaw {
+				m.openRawAt(nil, path)
+				m.text.insertIdx = idx
+				return nil
+			}
+			switch items.Kind {
+			case smodel.KOneOf:
+				m.doc.Set(path, &jsondoc.Node{Null: true})
+				if dynamicVariants(items) != nil {
+					m.stack = append(m.stack, m.dynamicMenu(items, path))
+					return nil
+				}
+				m.push(items, path)
+			case smodel.KObject:
+				m.doc.Set(path, &jsondoc.Node{Object: &[]jsondoc.Member{}})
+				m.push(items, path)
+			case smodel.KArray:
+				m.doc.Set(path, &jsondoc.Node{Array: &[]*jsondoc.Node{}})
+				m.push(items, path)
+			case smodel.KBoolean:
+				b := false
+				if items.Default != nil && items.Default.Bool != nil {
+					b = *items.Default.Bool
+				}
+				m.doc.Set(path, &jsondoc.Node{Bool: &b})
+			default:
+				m.doc.Set(path, &jsondoc.Node{Null: true})
+				m.openField(items, path, true)
+			}
+			return nil
+		}
 		m.openRawAt(nil, path) // empty textarea; applyText parses + writes
 		m.text.insertIdx = idx
 		return nil
@@ -825,6 +862,9 @@ func (m *listModel) keyIssues(msg tea.KeyMsg) tea.Cmd {
 			if path != nil {
 				parked := m.issues
 				m.issues = nil
+				// closing the list (this park cycle or a later one) returns here
+				m.issuesOrigin = append([]*menuState(nil), m.stack...)
+				m.search.parked = false // a fresh jump replaces any parked search
 				m.jumpToPath(path)
 				// esc at the landing menu returns to the list, same cursor
 				m.issuesBack, m.issuesReturn = parked, len(m.stack)
@@ -1152,8 +1192,6 @@ func (m *listModel) openSearch(replace bool) {
 	m.search.reErr = ""
 	m.search.parked = false
 	m.search.returnDepth = 0
-	// closing the overlay returns here, whatever the search jumped to
-	m.search.origin = append([]*menuState(nil), m.stack...)
 	m.search.all = searchIndex(m, m.top())
 	ti := textinput.New()
 	ti.Prompt = ""
@@ -1299,6 +1337,8 @@ func (m *listModel) keySearch(msg tea.KeyMsg) tea.Cmd {
 		m.search.active = false // park the overlay: esc at the landing reopens it
 		m.search.parked = true
 		m.issuesBack = nil // a fresh jump replaces any parked issue list
+		// closing the overlay (this park cycle or a later one) returns here
+		m.search.origin = append([]*menuState(nil), m.stack...)
 		m.stack = rebuildStack(m.model, m.doc, res.path)
 		rows := menuRows(m)
 		m.clampCursor(rows)

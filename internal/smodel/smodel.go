@@ -26,6 +26,7 @@ const (
 	KBoolean             // confirm
 	KObject              // section form with children
 	KArray               // array manager
+	KMap                 // string-keyed map (additionalProperties): rows are doc keys
 	KOneOf               // variant picker
 	KRaw                 // raw JSON textarea fallback
 )
@@ -42,6 +43,8 @@ func (k Kind) String() string {
 		return "object"
 	case KArray:
 		return "array"
+	case KMap:
+		return "map"
 	case KOneOf:
 		return "oneOf"
 	}
@@ -72,7 +75,7 @@ type FormNode struct {
 	Placeholder                string
 	Required                   bool
 	Children                   []*FormNode // KObject, in schema order
-	Items                      *FormNode   // KArray
+	Items                      *FormNode   // KArray elements, KMap values
 	MinItems, MaxItems         int
 	Variants                   []*FormNode // KOneOf
 	TagRef                     string      // x-tag-reference: tag lookup domain (e.g. "http_client")
@@ -314,6 +317,7 @@ func (p *parser) build(n *jsondoc.Node, ctx *refCtx, key string, required bool, 
 	t, nullable := typeOf(n)
 	hasProps := field(n, "properties") != nil && field(n, "properties").Object != nil
 	hasItems := field(n, "items") != nil
+	hasAdditional := field(n, "additionalProperties") != nil
 	combo := arrayOf(n, "oneOf")
 	if len(combo) == 0 {
 		combo = arrayOf(n, "anyOf")
@@ -327,7 +331,14 @@ func (p *parser) build(n *jsondoc.Node, ctx *refCtx, key string, required bool, 
 		fn.Kind = KBoolean
 	case len(combo) > 0 && !hasProps && t == "":
 		fn.Kind, fn.Enum, fn.Variants = p.buildVariants(combo, ctx, key, depth)
-	case t == "object" || hasProps:
+	case t == "object" || hasProps || hasAdditional:
+		if !hasProps && hasAdditional && usableAdditional(n) {
+			// string-keyed map (sing-box HTTPHeader et al): rows come from
+			// the document, every value edits against the value schema
+			fn.Kind = KMap
+			fn.Items = p.schema(field(n, "additionalProperties"), ctx, key, false, depth+1)
+			break
+		}
 		fn.Kind = KObject
 		fn.Children = p.buildChildren(n, ctx, depth)
 	case t == "array" || hasItems:
@@ -352,6 +363,20 @@ func (p *parser) build(n *jsondoc.Node, ctx *refCtx, key string, required bool, 
 		fn.Desc = appendWarn(fn.Desc, "may be omitted")
 	}
 	return fn
+}
+
+// usableAdditional reports whether additionalProperties shapes a map: an
+// object schema (values built against it) or schema `true` (values of any
+// shape). `false` closes the object instead — no map semantics.
+func usableAdditional(n *jsondoc.Node) bool {
+	ap := field(n, "additionalProperties")
+	if ap == nil {
+		return false
+	}
+	if ap.Bool != nil {
+		return *ap.Bool
+	}
+	return ap.Object != nil
 }
 
 // buildVariants handles oneOf/anyOf: if every variant is a const or single
@@ -462,8 +487,12 @@ func (p *parser) applyConstraints(n *jsondoc.Node, fn *FormNode) {
 }
 
 // mergeAllOf shallow-merges the node's own keywords with every allOf sub
-// schema (sub $refs resolved first) into a synthetic schema node.
+// schema (sub $refs resolved first, nested allOf expanded) into one
+// synthetic schema node.
 func (p *parser) mergeAllOf(n *jsondoc.Node, subs []*jsondoc.Node, ctx *refCtx, depth int) *jsondoc.Node {
+	if depth > maxDepth {
+		return n
+	}
 	list := []*jsondoc.Node{n}
 	for _, sub := range subs {
 		cur, cctx := sub, ctx
@@ -483,10 +512,31 @@ func (p *parser) mergeAllOf(n *jsondoc.Node, subs []*jsondoc.Node, ctx *refCtx, 
 			cur, cctx = target, tctx
 		}
 		if cur != nil && cur.Object != nil {
+			if inner := arrayOf(cur, "allOf"); len(inner) > 0 {
+				cur = p.mergeAllOf(cur, inner, cctx, depth+1)
+			}
 			list = append(list, cur)
 		}
 	}
+	return p.mergeParts(list, depth)
+}
 
+// maxComboProduct caps the cartesian product of the oneOf/anyOf lists that
+// meet inside an allOf merge; beyond it the combo stays a plain member.
+const maxComboProduct = 128
+
+// mergeParts shallow-merges the member maps of object schemas: properties
+// concatenate (later parts win key conflicts), required unions, numeric
+// bounds keep the stricter side, enums intersect, every other keyword takes
+// the first non-empty value. oneOf/anyOf members are withheld from the
+// plain merge and distributed over their variants when the shapes are
+// object-compatible — rest ∧ (v1 ∨ v2 …) ≡ (rest ∧ v1) ∨ (rest ∧ v2) … —
+// which is how sing-box composes Rule = matchers allOf RuleAction; the UI
+// flattens the resulting nested variants (dynamicVariants). A combo that
+// cannot be distributed (scalar variant against an object rest, bare $ref
+// variant, cartesian explosion, depth cap) stays a plain member exactly as
+// before: save-time validation remains the backstop.
+func (p *parser) mergeParts(parts []*jsondoc.Node, depth int) *jsondoc.Node {
 	members := []jsondoc.Member{}
 	set := func(k string, v *jsondoc.Node) {
 		for i := range members {
@@ -511,11 +561,20 @@ func (p *parser) mergeAllOf(n *jsondoc.Node, subs []*jsondoc.Node, ctx *refCtx, 
 		}
 	}
 
-	for _, part := range list {
+	type combo struct {
+		key  string
+		vals []*jsondoc.Node
+	}
+	var combos []combo
+	for _, part := range parts {
 		for _, m := range *part.Object {
 			switch m.Key {
 			case "allOf", "$schema", "$id", "$comment":
 				// dropped
+			case "oneOf", "anyOf":
+				if m.Val.Array != nil && len(*m.Val.Array) > 0 {
+					combos = append(combos, combo{key: m.Key, vals: *m.Val.Array})
+				}
 			case "properties":
 				var base []jsondoc.Member
 				if old := get("properties"); old != nil && old.Object != nil {
@@ -584,7 +643,74 @@ func (p *parser) mergeAllOf(n *jsondoc.Node, subs []*jsondoc.Node, ctx *refCtx, 
 			}
 		}
 	}
-	return &jsondoc.Node{Object: &members}
+	base := &jsondoc.Node{Object: &members}
+	if len(combos) == 0 {
+		return base
+	}
+	keep := func() *jsondoc.Node {
+		setIfAbsent(combos[0].key, &jsondoc.Node{Array: &combos[0].vals})
+		return base
+	}
+	distributable := field(base, "properties") == nil // an unshaped rest merges into anything
+	if !distributable {
+		distributable = true
+		for _, c := range combos {
+			for _, v := range c.vals {
+				if !objectish(v) {
+					distributable = false
+				}
+			}
+		}
+	}
+	if depth >= maxDepth || !distributable {
+		return keep()
+	}
+	tuples := [][]*jsondoc.Node{{}}
+	for _, c := range combos {
+		var next [][]*jsondoc.Node
+		for _, t := range tuples {
+			for _, v := range c.vals {
+				next = append(next, append(append([]*jsondoc.Node{}, t...), v))
+			}
+		}
+		tuples = next
+		if len(tuples) > maxComboProduct {
+			return keep()
+		}
+	}
+	variants := make([]*jsondoc.Node, 0, len(tuples))
+	for _, t := range tuples {
+		variants = append(variants, p.mergeParts(append([]*jsondoc.Node{base}, t...), depth+1))
+	}
+	return &jsondoc.Node{Object: &[]jsondoc.Member{
+		{Key: combos[0].key, Val: &jsondoc.Node{Array: &variants}},
+	}}
+}
+
+// objectish reports whether n shapes an object value the way build's
+// object branch does: declared properties or an object type entry.
+func objectish(n *jsondoc.Node) bool {
+	if n == nil || n.Object == nil {
+		return false
+	}
+	if field(n, "properties") != nil {
+		return true
+	}
+	t := field(n, "type")
+	if t == nil {
+		return false
+	}
+	if t.Str != nil && *t.Str == "object" {
+		return true
+	}
+	if t.Array != nil {
+		for _, e := range *t.Array {
+			if e.Str != nil && *e.Str == "object" {
+				return true
+			}
+		}
+	}
+	return false
 }
 
 func isEmptyNode(n *jsondoc.Node) bool {

@@ -117,7 +117,17 @@ func menuRowsFor(lm *listModel, st *menuState) []row {
 	}
 	switch st.kind {
 	case menuObject:
-		if st.node.Kind == smodel.KObject {
+		if st.node.Kind == smodel.KMap {
+			// string-keyed map (additionalProperties): one row per document
+			// key, values edited against the map's value schema
+			if lm.doc != nil {
+				if cur, ok := lm.doc.Get(st.path); ok && cur != nil && cur.Object != nil {
+					for _, mem := range *cur.Object {
+						rows = append(rows, mapItemRow(st.node, st.path, mem.Key))
+					}
+				}
+			}
+		} else if st.node.Kind == smodel.KObject {
 			known := map[string]bool{}
 			for _, c := range st.node.Children {
 				known[c.Key] = true
@@ -194,6 +204,23 @@ func childRow(st *menuState, c *smodel.FormNode) row {
 	return row{kind: rowDrill, fn: c, path: p, idx: -1}
 }
 
+// mapItemRow maps one document key of a string-keyed map (KMap) to an
+// editable or drillable row against the map's value schema. The doc key
+// becomes the row label; the shared value node provides kind and editing.
+func mapItemRow(node *smodel.FormNode, parentPath []any, key string) row {
+	p := pathFor(parentPath, key)
+	items := node.Items
+	if items == nil {
+		// value schema unknown: fall back to raw editing of the value
+		items = &smodel.FormNode{Key: node.Key, Title: node.Title, Kind: smodel.KRaw}
+	}
+	label := key
+	if menuLeaf(items) {
+		return row{kind: rowField, fn: items, path: p, idx: -1, label: label}
+	}
+	return row{kind: rowDrill, fn: items, path: p, idx: -1, label: label}
+}
+
 // itemRow maps array element i to an editable or drillable row.
 func itemRow(node *smodel.FormNode, parentPath []any, i int) row {
 	p := pathIdx(parentPath, i)
@@ -246,7 +273,7 @@ func summary(lm *listModel, fn *smodel.FormNode, path []any) string {
 			return s
 		}
 		return "—"
-	case smodel.KObject:
+	case smodel.KObject, smodel.KMap:
 		return objectSummary(fn, v)
 	case smodel.KArray:
 		return arraySummary(v)
@@ -792,6 +819,11 @@ func rebuildStack(root *smodel.FormNode, doc *jsondoc.Node, path []any) []*menuS
 						break
 					}
 				}
+			} else if cur.Kind == smodel.KMap && cur.Items != nil {
+				// any doc key resolves against the map's value schema
+				if v, ok := doc.Get(pathFor(curPath, s)); ok && v != nil {
+					child = cur.Items
+				}
 			}
 			if child == nil {
 				continue // extra key without schema: skip the segment
@@ -895,6 +927,21 @@ func searchIndex(lm *listModel, st *menuState) []row {
 				}
 			}
 			out = append(out, unknownRows(lm, path, known, seen)...)
+		case smodel.KMap:
+			// every document key is a known member; values index against the
+			// map's value schema
+			if cur, ok := lm.doc.Get(path); ok && cur != nil && cur.Object != nil {
+				vn := fn.Items
+				if vn == nil {
+					vn = &smodel.FormNode{Key: fn.Key, Title: fn.Title, Kind: smodel.KRaw}
+				}
+				for _, mem := range *cur.Object {
+					cpath := pathFor(path, mem.Key)
+					out = append(out, row{kind: rowField, fn: vn, path: cpath, idx: -1,
+						label: docPath(cpath) + "  " + summary(lm, vn, cpath)})
+					walk(vn, cpath)
+				}
+			}
 		case smodel.KArray:
 			if fn.Items == nil || fn.Items.Kind == smodel.KEnum {
 				return
@@ -1038,9 +1085,15 @@ func unknownKeyIssues(model *smodel.FormNode, doc *jsondoc.Node) []issue {
 				return
 			}
 			// value unset, ambiguous or unmatched: any key any variant
-			// defines counts as known
+			// defines counts as known; nested oneOf groups (the allOf
+			// distribution builds them) flatten to their object leaves
+			// first — a leafless list keeps the raw variants
+			variants := dynamicVariants(fn)
+			if variants == nil {
+				variants = fn.Variants
+			}
 			known := map[string]bool{}
-			for _, v := range fn.Variants {
+			for _, v := range variants {
 				for _, c := range v.Children {
 					if known[c.Key] {
 						continue
@@ -1052,6 +1105,13 @@ func unknownKeyIssues(model *smodel.FormNode, doc *jsondoc.Node) []issue {
 				}
 			}
 			unknownOf(val, known, path)
+		case smodel.KMap:
+			// every document key is defined by the map's additionalProperties
+			if fn.Items != nil && val.Object != nil {
+				for _, mem := range *val.Object {
+					walk(fn.Items, pathFor(path, mem.Key), mem.Val)
+				}
+			}
 		case smodel.KArray:
 			if fn.Items != nil && val.Array != nil {
 				for i, item := range *val.Array {

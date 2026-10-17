@@ -542,3 +542,152 @@ func TestLoadErrors(t *testing.T) {
 		t.Fatal("invalid JSON should error")
 	}
 }
+
+func TestAllOfDistributesCombo(t *testing.T) {
+	fn := mustLoad(t, `{
+  "type": "object",
+  "properties": {
+    "rule": {
+      "allOf": [
+        {"type": "object", "properties": {"domain": {"type": "string"}, "invert": {"type": "boolean"}}},
+        {"$ref": "#/$defs/act"}
+      ]
+    }
+  },
+  "$defs": {"act": {"oneOf": [
+    {"type": "object", "properties": {"action": {"const": "route"}, "outbound": {"type": "string"}}, "required": ["action"]},
+    {"type": "object", "properties": {"action": {"const": "reject"}, "method": {"type": "integer"}}, "required": ["action"]}
+  ]}}
+}`)
+	r := child(t, fn, "rule")
+	if r.Kind != KOneOf || len(r.Variants) != 2 {
+		t.Fatalf("rule = %+v", r)
+	}
+	for i, want := range []string{"route", "reject"} {
+		v := r.Variants[i]
+		if v.Kind != KObject {
+			t.Fatalf("variant %d = %s, want object", i, v.Kind)
+		}
+		// matcher fields from the object part ride along on every variant
+		if child(t, v, "domain") == nil || child(t, v, "invert") == nil {
+			t.Fatalf("variant %d lost the allOf base fields", i)
+		}
+		a := child(t, v, "action")
+		if a == nil || a.Kind != KEnum || len(a.Enum) != 1 || a.Enum[0].Encoded != "\""+want+"\"" {
+			t.Fatalf("variant %d action = %+v", i, a)
+		}
+		if !a.Required {
+			t.Fatalf("variant %d action must stay required", i)
+		}
+	}
+	if child(t, r.Variants[0], "outbound") == nil {
+		t.Fatal("route variant lost outbound")
+	}
+	if child(t, r.Variants[1], "method") == nil {
+		t.Fatal("reject variant lost method")
+	}
+}
+
+func TestAllOfComboScalarFallback(t *testing.T) {
+	// a scalar combo against an object rest cannot distribute: the combo
+	// stays a plain member and build drops it, exactly as before
+	fn := mustLoad(t, `{
+  "type": "object",
+  "properties": {
+    "v": {"allOf": [
+      {"type": "object", "properties": {"a": {"type": "string"}}},
+      {"oneOf": [{"type": "string"}, {"type": "integer"}]}
+    ]}
+  }
+}`)
+	v := child(t, fn, "v")
+	if v.Kind != KObject || len(v.Variants) != 0 {
+		t.Fatalf("v = %+v", v)
+	}
+	if child(t, v, "a") == nil {
+		t.Fatal("object fields lost")
+	}
+}
+
+func TestAllOfPureCombo(t *testing.T) {
+	// nothing object-shaped outside the combo: the variants pass through
+	fn := mustLoad(t, `{
+  "type": "object",
+  "properties": {
+    "v": {"allOf": [{"oneOf": [{"type": "string"}, {"type": "integer"}]}]}
+  }
+}`)
+	v := child(t, fn, "v")
+	if v.Kind != KOneOf || len(v.Variants) != 2 {
+		t.Fatalf("v = %+v", v)
+	}
+}
+
+func TestAllOfNestedExpansion(t *testing.T) {
+	// an allOf nested inside another allOf sub merges instead of being dropped
+	fn := mustLoad(t, `{
+  "type": "object",
+  "properties": {
+    "v": {"allOf": [
+      {"allOf": [{"properties": {"a": {"type": "string"}}}, {"properties": {"b": {"type": "integer"}}}]},
+      {"properties": {"c": {"type": "boolean"}}}
+    ]}
+  }
+}`)
+	v := child(t, fn, "v")
+	if v.Kind != KObject {
+		t.Fatalf("v = %+v", v)
+	}
+	for _, k := range []string{"a", "b", "c"} {
+		if child(t, v, k) == nil {
+			t.Fatalf("field %q lost", k)
+		}
+	}
+}
+
+func TestAdditionalPropertiesMap(t *testing.T) {
+	// sing-box HTTPHeader: a string-keyed map whose values are string or
+	// []string; the map builds as KMap, the value schema as its Items
+	fn := mustLoad(t, `{
+  "type": "object",
+  "properties": {
+    "headers": {"$ref": "#/$defs/hdr"},
+    "free": {"type": "object", "additionalProperties": true},
+    "closed": {"type": "object", "additionalProperties": false},
+    "mixed": {"type": "object", "properties": {"a": {"type": "string"}}, "additionalProperties": {"type": "string"}}
+  },
+  "$defs": {"hdr": {"type": "object", "additionalProperties": {
+    "anyOf": [{"type": "string"}, {"type": "array", "items": {"type": "string"}}]
+  }}}
+}`)
+	h := child(t, fn, "headers")
+	if h == nil || h.Kind != KMap {
+		t.Fatalf("headers = %+v, want KMap", h)
+	}
+	items := h.Items
+	if items == nil || items.Kind != KOneOf || len(items.Variants) != 2 {
+		t.Fatalf("headers.Items = %+v, want oneOf with 2 variants", items)
+	}
+	if items.Variants[0].Kind != KScalar || items.Variants[0].JSONType != "string" {
+		t.Fatalf("string variant = %+v", items.Variants[0])
+	}
+	if items.Variants[1].Kind != KArray || items.Variants[1].Items == nil ||
+		items.Variants[1].Items.Kind != KScalar {
+		t.Fatalf("array variant = %+v", items.Variants[1])
+	}
+
+	f := child(t, fn, "free")
+	if f == nil || f.Kind != KMap || f.Items == nil || f.Items.Kind != KRaw {
+		t.Fatalf("free = %+v, want KMap with raw values", f)
+	}
+
+	c := child(t, fn, "closed")
+	if c == nil || c.Kind == KMap {
+		t.Fatalf("closed = %+v, want plain KObject (additionalProperties: false)", c)
+	}
+
+	m := child(t, fn, "mixed")
+	if m == nil || m.Kind == KMap {
+		t.Fatalf("mixed = %+v, want plain KObject (properties take precedence)", m)
+	}
+}
