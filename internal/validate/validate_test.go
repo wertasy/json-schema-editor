@@ -64,25 +64,48 @@ func TestConstraintViolations(t *testing.T) {
 	}
 	errs := v.Check(cfg(t, `{"server": {"port": 80}}`))
 	joined := strings.Join(errs, "\n")
-	if !strings.Contains(joined, "/server/port") || !strings.Contains(joined, "minimum") {
-		t.Fatalf("minimum error missing: %v", errs)
+	if !strings.Contains(joined, "at '$.server.port':") || !strings.Contains(joined, "minimum") {
+		t.Fatalf("minimum error missing or wrong path: %v", errs)
 	}
 
 	errs = v.Check(cfg(t, `{"server": {"host": "x"}}`))
 	joined = strings.Join(errs, "\n")
-	if !strings.Contains(joined, "missing property") {
-		t.Fatalf("required error missing: %v", errs)
+	if !strings.Contains(joined, "at '$.server': missing property 'port'") {
+		t.Fatalf("required error missing or wrong path: %v", errs)
 	}
 
 	errs = v.Check(cfg(t, `{"server": {"port": 8080, "extra": 1}}`))
 	joined = strings.Join(errs, "\n")
-	if !strings.Contains(joined, "additional") {
-		t.Fatalf("additionalProperties error missing: %v", errs)
+	if !strings.Contains(joined, "at '$.server': additional properties 'extra' not allowed") {
+		t.Fatalf("additionalProperties error missing or wrong path: %v", errs)
 	}
 
 	errs = v.Check(cfg(t, `{}`))
-	if len(errs) == 0 {
-		t.Fatal("missing required server should fail")
+	if len(errs) != 1 || !strings.Contains(errs[0], "at '$': missing property 'server'") {
+		t.Fatalf("root required error = %v, want the document-root path", errs)
+	}
+}
+
+func TestPathShapes(t *testing.T) {
+	dir := t.TempDir()
+	p := filepath.Join(dir, "shapes.schema.json")
+	src := `{"type":"object","properties":{` +
+		`"items":{"type":"array","items":{"type":"object","properties":` +
+		`{"port":{"type":"integer","minimum":1}}}},` +
+		`"123":{"type":"integer","minimum":10}}}`
+	if err := os.WriteFile(p, []byte(src), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	v, err := New(p)
+	if err != nil {
+		t.Fatal(err)
+	}
+	joined := strings.Join(v.Check(cfg(t, `{"items":[{"port":1},{"port":0}],"123":1}`)), "\n")
+	if !strings.Contains(joined, "at '$.items[1].port':") {
+		t.Fatalf("array index path missing: %q", joined)
+	}
+	if !strings.Contains(joined, "at '$.123':") {
+		t.Fatalf("numeric object key must stay a field: %q", joined)
 	}
 }
 

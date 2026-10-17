@@ -291,11 +291,11 @@ func (m *listModel) liveIssues(msgs []string) []issue {
 	flagged := map[string]bool{}
 	for _, it := range items {
 		if it.path != nil {
-			flagged[docPath(it.path)] = true
+			flagged[jsondoc.PathString(it.path)] = true
 		}
 	}
 	for _, it := range unknownKeyIssues(m.model, m.doc) {
-		if !flagged[docPath(it.path)] {
+		if !flagged[jsondoc.PathString(it.path)] {
 			items = append(items, it)
 		}
 	}
@@ -526,7 +526,7 @@ func (m *listModel) View() string {
 // --- list rendering ------------------------------------------------------
 
 // breadcrumb renders the navigation context as a document path
-// ("$/a/b/0"). Levels that do not extend the path — oneOf pickers and
+// ("$.a.b[0]"). Levels that do not extend the path — oneOf pickers and
 // variant editors — add no segment (the title line names them). Overlong
 // paths keep their tail, which is the informative end.
 func (m *listModel) breadcrumb() string {
@@ -534,7 +534,7 @@ func (m *listModel) breadcrumb() string {
 	if st == nil {
 		return "$"
 	}
-	return clipLeft(docPath(st.path), m.width)
+	return clipLeft(jsondoc.PathString(st.path), m.width)
 }
 
 // clipLeft keeps the tail of s within max runes, marking the cut with "…".

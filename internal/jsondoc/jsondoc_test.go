@@ -437,6 +437,40 @@ func TestResolveJSONPointer(t *testing.T) {
 	}
 }
 
+func TestPathStringAndParse(t *testing.T) {
+	cases := []struct {
+		path []any
+		s    string
+	}{
+		{nil, "$"},
+		{[]any{"server"}, "$.server"},
+		{[]any{"server", "port"}, "$.server.port"},
+		{[]any{"mounts", 0, "src"}, "$.mounts[0].src"},
+		{[]any{0, "x"}, "$[0].x"},
+		{[]any{"a/b", "m~n"}, "$.a/b.m~n"},
+		{[]any{"a[b]"}, "$.a[b]"},
+	}
+	for _, c := range cases {
+		if got := PathString(c.path); got != c.s {
+			t.Errorf("PathString(%v) = %q, want %q", c.path, got, c.s)
+			continue
+		}
+		got, ok := ParsePath(c.s)
+		if !ok {
+			t.Errorf("ParsePath(%q) failed", c.s)
+			continue
+		}
+		if rendered := PathString(got); rendered != c.s {
+			t.Errorf("ParsePath(%q) = %v (renders %q)", c.s, got, rendered)
+		}
+	}
+	for _, s := range []string{"", "server", "$.", "$..a", "$[0", "$[x]", "$[0]x", "$.a."} {
+		if p, ok := ParsePath(s); ok {
+			t.Errorf("ParsePath(%q) = %v, want failure", s, p)
+		}
+	}
+}
+
 func TestParseErrors(t *testing.T) {
 	for _, src := range []string{`{"a":}`, `[1,`, `{} {}`} {
 		if _, err := Parse(strings.NewReader(src)); err == nil {

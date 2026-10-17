@@ -657,6 +657,79 @@ func (n *Node) ResolveJSONPointer(ptr string) (*Node, bool) {
 	return cur, true
 }
 
+// PathString renders a document path in the editor's JSON-path style: "$"
+// for the root, object fields appended with ".", array indexes as "[N]" —
+// "$.server.port", "$.mounts[0].src", "$[0]".
+func PathString(path []any) string {
+	var b strings.Builder
+	b.WriteByte('$')
+	for _, seg := range path {
+		switch s := seg.(type) {
+		case string:
+			b.WriteByte('.')
+			b.WriteString(s)
+		case int:
+			fmt.Fprintf(&b, "[%d]", s)
+		}
+	}
+	return b.String()
+}
+
+// ParsePath parses the PathString form back into a path. ok is false unless
+// the whole string is "$", "$.field", or "$[N]" followed by more segments.
+// Keys are read up to the next "." or "[N]" index, so a key containing a dot
+// or a complete index suffix does not round-trip (the display does not quote
+// keys).
+func ParsePath(s string) (path []any, ok bool) {
+	if !strings.HasPrefix(s, "$") {
+		return nil, false
+	}
+	for i := 1; i < len(s); {
+		switch s[i] {
+		case '.':
+			i++
+			start := i
+			for i < len(s) && s[i] != '.' && !(s[i] == '[' && closesIndex(s, i) >= 0) {
+				i++
+			}
+			if i == start {
+				return nil, false // empty key
+			}
+			path = append(path, s[start:i])
+		case '[':
+			end := closesIndex(s, i)
+			if end < 0 {
+				return nil, false
+			}
+			n, err := strconv.Atoi(s[i+1 : end])
+			if err != nil {
+				return nil, false
+			}
+			path = append(path, n)
+			i = end + 1
+		default:
+			return nil, false
+		}
+	}
+	return path, true
+}
+
+// closesIndex returns the position of the "]" closing a "[digits]" array
+// index starting at i, or -1 when s[i:] does not begin a complete index.
+func closesIndex(s string, i int) int {
+	if i >= len(s) || s[i] != '[' {
+		return -1
+	}
+	j := i + 1
+	for j < len(s) && s[j] >= '0' && s[j] <= '9' {
+		j++
+	}
+	if j == i+1 || j >= len(s) || s[j] != ']' {
+		return -1
+	}
+	return j
+}
+
 // String renders the document to a string (2-space indent, trailing newline).
 func (n *Node) String() string {
 	var buf bytes.Buffer

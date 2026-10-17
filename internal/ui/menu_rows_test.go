@@ -509,14 +509,14 @@ func TestSearchIndexAndFilter(t *testing.T) {
 		return ""
 	}
 	// labels are breadcrumb-style paths plus the menu value overview
-	if l := find("Source"); l != "$/mounts/0/src  /data" {
+	if l := find("Source"); l != "$.mounts[0].src  /data" {
 		t.Errorf("Source label = %q", l)
 	}
-	if l := find("Server"); l != "$/server  port=8080 host=0.0.0.0 +1" {
+	if l := find("Server"); l != "$.server  port=8080 host=0.0.0.0 +1" {
 		t.Errorf("Server label = %q", l)
 	}
 	// variants show their structural overview, never fallback titles
-	if l := find("Token"); l != "$/auth  {token*}" {
+	if l := find("Token"); l != "$.auth  {token*}" {
 		t.Errorf("Token label = %q", l)
 	}
 	for _, r := range all {
@@ -535,7 +535,7 @@ func TestSearchIndexAndFilter(t *testing.T) {
 	if got := filterSearch(lm, all, "SRC", false, nil); len(got) != 0 {
 		t.Errorf("exact-case SRC = %d rows, want 0", len(got))
 	}
-	if got := filterSearch(lm, all, "src", false, nil); len(got) != 1 { // $/mounts/0/src
+	if got := filterSearch(lm, all, "src", false, nil); len(got) != 1 { // $.mounts[0].src
 		t.Errorf("exact-case src = %d rows, want 1", len(got))
 	}
 	if got := filterSearch(lm, all, "", true, nil); len(got) != len(all) {
@@ -544,19 +544,19 @@ func TestSearchIndexAndFilter(t *testing.T) {
 	// a row matches with its own value: the container above it only rolls its
 	// child values up, so the roll-up is no match target and the hit is not
 	// listed twice
-	if got := filterSearch(lm, all, "8080", true, nil); len(got) != 1 { // $/server/port
+	if got := filterSearch(lm, all, "8080", true, nil); len(got) != 1 { // $.server.port
 		t.Errorf("filter 8080 by value = %d rows, want 1", len(got))
 	}
 	if got := filterSearch(lm, all, "port=8080", true, nil); len(got) != 0 {
 		t.Errorf("container roll-up query = %d rows, want 0", len(got))
 	}
-	// "/mnt" is now a path query (contains "/") and matches no path; values
-	// with a slash are found via the slash-free keyword "mnt"
-	if got := filterSearch(lm, all, "mnt", true, nil); len(got) != 1 { // $/mounts/0/dst
+	// values with a slash stay ordinary text: only a "$" prefix switches to
+	// path mode
+	if got := filterSearch(lm, all, "mnt", true, nil); len(got) != 1 { // $.mounts[0].dst
 		t.Errorf("filter mnt by value = %d rows, want 1", len(got))
 	}
-	if got := filterSearch(lm, all, "/mnt", true, nil); len(got) != 0 {
-		t.Errorf("path query /mnt = %d rows, want 0", len(got))
+	if got := filterSearch(lm, all, "/mnt", true, nil); len(got) != 1 {
+		t.Errorf("slashed value query = %d rows, want 1", len(got))
 	}
 
 	// scope: searching from inside Server stays below the breadcrumb
@@ -576,7 +576,7 @@ func TestSearchRankAndPathQueries(t *testing.T) {
 	all := searchIndex(lm, lm.top())
 	paths := func(rows []row) (out []string) {
 		for _, r := range rows {
-			out = append(out, docPath(r.path))
+			out = append(out, jsondoc.PathString(r.path))
 		}
 		return out
 	}
@@ -589,42 +589,41 @@ func TestSearchRankAndPathQueries(t *testing.T) {
 
 	// exact-key priority: the row whose key IS the query outranks rows that
 	// merely mention it (parent overviews, values containing the word)
-	if got := filterSearch(lm, all, "port", true, nil); len(got) == 0 || paths(got)[0] != "$/server/port" {
-		t.Errorf("port first hit = %v, want $/server/port first", paths(got))
+	if got := filterSearch(lm, all, "port", true, nil); len(got) == 0 || paths(got)[0] != "$.server.port" {
+		t.Errorf("port first hit = %v, want $.server.port first", paths(got))
 	}
-	if got := filterSearch(lm, all, "src", true, nil); len(got) == 0 || paths(got)[0] != "$/mounts/0/src" {
-		t.Errorf("src first hit = %v, want $/mounts/0/src first", paths(got))
+	if got := filterSearch(lm, all, "src", true, nil); len(got) == 0 || paths(got)[0] != "$.mounts[0].src" {
+		t.Errorf("src first hit = %v, want $.mounts[0].src first", paths(got))
 	}
 	// a value only its own row carries matches that row alone — the container
 	// above it rolls the value up, which is no longer a match target
-	if got := filterSearch(lm, all, "8080", true, nil); len(got) != 1 || paths(got)[0] != "$/server/port" {
-		t.Errorf("8080 hits = %v, want exactly $/server/port", paths(got))
+	if got := filterSearch(lm, all, "8080", true, nil); len(got) != 1 || paths(got)[0] != "$.server.port" {
+		t.Errorf("8080 hits = %v, want exactly $.server.port", paths(got))
 	}
 	// the tier is stable: without an exact key the order is unchanged
-	eq(paths(filterSearch(lm, all, "0", true, nil)), "$/server/port", "$/server/host")
+	eq(paths(filterSearch(lm, all, "0", true, nil)), "$.server.port", "$.server.host")
 
-	// anchored path queries: prefix match from the document root
-	eq(paths(filterSearch(lm, all, "/server/port", true, nil)), "$/server/port")
-	anch := filterSearch(lm, all, "/server", true, nil)
+	// path queries: "$"-prefixed, literal prefix match from the document root
+	eq(paths(filterSearch(lm, all, "$.server.port", true, nil)), "$.server.port")
+	anch := filterSearch(lm, all, "$.server", true, nil)
 	for _, p := range paths(anch) {
-		if !strings.HasPrefix(p, "$/server") {
-			t.Errorf("anchored /server hit %q lacks the $/server prefix", p)
+		if !strings.HasPrefix(p, "$.server") {
+			t.Errorf("path hit %q lacks the $.server prefix", p)
 		}
 	}
-	eq(paths(anch)[:1], "$/server") // exact full path ranks first
-	eq(paths(filterSearch(lm, all, "$/server/port", true, nil)), "$/server/port")
+	eq(paths(anch)[:1], "$.server")                                       // exact full path ranks first
+	eq(paths(filterSearch(lm, all, "$.serv", true, nil))[:1], "$.server") // partial segment
+	// array indexes use the rendered [N] syntax
+	eq(paths(filterSearch(lm, all, "$.mounts[0]", true, nil)),
+		"$.mounts[0]", "$.mounts[0].src", "$.mounts[0].dst")
+	eq(paths(filterSearch(lm, all, "$.mounts[0].src", true, nil)), "$.mounts[0].src")
 
-	// non-anchored path queries: substring match anywhere in the path
-	eq(paths(filterSearch(lm, all, "server/port", true, nil)), "$/server/port")
-	eq(paths(filterSearch(lm, all, "mounts/0/src", true, nil)), "$/mounts/0/src")
-
-	// paths that do not exist
-	if got := filterSearch(lm, all, "/mnt", true, nil); len(got) != 0 {
-		t.Errorf("path query /mnt = %d rows, want 0", len(got))
+	// dotted and slashed values remain ordinary text queries
+	if got := filterSearch(lm, all, "0.0.0.0", true, nil); len(got) != 1 {
+		t.Errorf("dotted value query = %d rows, want 1", len(got))
 	}
-	// a bare "/" matches every row
-	if got := filterSearch(lm, all, "/", true, nil); len(got) != len(all) {
-		t.Errorf("bare / = %d rows, want all %d", len(got), len(all))
+	if got := filterSearch(lm, all, "/mnt", true, nil); len(got) != 1 {
+		t.Errorf("slashed value query = %d rows, want 1", len(got))
 	}
 }
 
@@ -635,7 +634,7 @@ func TestFilterSearchRegex(t *testing.T) {
 	all := searchIndex(lm, lm.top())
 	paths := func(rows []row) (out []string) {
 		for _, r := range rows {
-			out = append(out, docPath(r.path))
+			out = append(out, jsondoc.PathString(r.path))
 		}
 		return out
 	}
@@ -645,19 +644,27 @@ func TestFilterSearchRegex(t *testing.T) {
 			t.Errorf("paths = %v, want %v", got, want)
 		}
 	}
-	match := func(pat string) []string {
-		return paths(filterSearch(lm, all, pat, false, regexp.MustCompile(pat)))
+	match := func(q string) []string {
+		pat := q
+		if isPathQuery(q) {
+			pat = pathPattern(q) // as refilter compiles it
+		}
+		return paths(filterSearch(lm, all, q, false, regexp.MustCompile(pat)))
 	}
 
 	// the regex targets the same text literal mode matches: title/key plus the
 	// row's own scalar value; a full leaf-key match still ranks first
-	eq(match(`(?i)token`), "$/auth/token", "$/auth") // the field outranks its variant row
-	eq(match(`\bport\b`), "$/server/port")           // $/server's roll-up is no target
-	eq(match(`0\.0\.0\.0`), "$/server/host")
-	// a query containing "/" targets the document path, regex included
-	eq(match(`server/port$`), "$/server/port")
+	eq(match(`(?i)token`), "$.auth.token", "$.auth") // the field outranks its variant row
+	eq(match(`\bport\b`), "$.server.port")           // $.server's roll-up is no target
+	eq(match(`0\.0\.0\.0`), "$.server.host")
+	// a "$."-prefixed query targets the document path, regex included
+	eq(match(`$.server.port`), "$.server.port")
+	eq(match(`$.server`), "$.server", "$.server.port", "$.server.host", "$.server.debug", "$.server.ratio")
+	// [N] index brackets in a pasted path stay literal in regex mode
+	eq(match(`$.mounts[0].src`), "$.mounts[0].src")
+	eq(match(`$.mounts\[0\].src`), "$.mounts[0].src") // an explicit escape still works
 	// the pattern matches original-case text: folding is the caller's (?i)
-	eq(paths(filterSearch(lm, all, `(?i)SRC`, false, regexp.MustCompile(`(?i)SRC`))), "$/mounts/0/src")
+	eq(paths(filterSearch(lm, all, `(?i)SRC`, false, regexp.MustCompile(`(?i)SRC`))), "$.mounts[0].src")
 	if got := match(`SRC`); len(got) != 0 {
 		t.Errorf("exact-case SRC = %v, want no regex hit", got)
 	}
@@ -722,12 +729,12 @@ func TestReplaceHits(t *testing.T) {
 	// non-empty query: only string values containing q, relabeled as previews
 	hits := replaceHits(lm, all, "/data", "/opt", true, nil)
 	if len(hits) != 1 {
-		t.Fatalf("hits = %d, want 1 ($/mounts/0/src)", len(hits))
+		t.Fatalf("hits = %d, want 1 ($.mounts[0].src)", len(hits))
 	}
 	if hits[0].path == nil || len(hits[0].path) != 3 {
-		t.Fatalf("hit path = %v, want $/mounts/0/src", hits[0].path)
+		t.Fatalf("hit path = %v, want $.mounts[0].src", hits[0].path)
 	}
-	if hits[0].label != "$/mounts/0/src  /data → /opt" {
+	if hits[0].label != "$.mounts[0].src  /data → /opt" {
 		t.Errorf("preview label = %q", hits[0].label)
 	}
 
@@ -786,9 +793,9 @@ func TestSearchIndexUnknownKeys(t *testing.T) {
 		}
 	}
 	for _, want := range []string{
-		"$/extra/note  alpha",
-		"$/extra/tags/0  beta",
-		"$/server/legacy  gamma",
+		"$.extra.note  alpha",
+		"$.extra.tags[0]  beta",
+		"$.server.legacy  gamma",
 	} {
 		if !labels[want] {
 			t.Errorf("unknown row %q missing from index: %v", want, labels)
@@ -806,9 +813,9 @@ func TestSearchIndexUnknownKeys(t *testing.T) {
 	hits := replaceHits(lm, all, "a", "A", true, nil)
 	paths := map[string]bool{}
 	for _, h := range hits {
-		paths[docPath(h.path)] = true
+		paths[jsondoc.PathString(h.path)] = true
 	}
-	for _, want := range []string{"$/extra/note", "$/extra/tags/0", "$/server/legacy"} {
+	for _, want := range []string{"$.extra.note", "$.extra.tags[0]", "$.server.legacy"} {
 		if !paths[want] {
 			t.Errorf("replace hit %q missing: %v", want, paths)
 		}

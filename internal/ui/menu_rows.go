@@ -8,7 +8,6 @@ import (
 	"fmt"
 	"regexp"
 	"sort"
-	"strconv"
 	"strings"
 	"unicode"
 
@@ -910,7 +909,7 @@ func rebuildStack(root *smodel.FormNode, doc *jsondoc.Node, path []any) []*menuS
 // points at — collecting object children, the actual array items and oneOf
 // variant subtrees, plus the document keys the schema does not define
 // (nested values included) so they stay searchable and replaceable. Labels
-// are "<docPath>  <overview>" using the same value column the menus show,
+// are "<path>  <overview>" using the same value column the menus show,
 // so hits read as jump targets; variant rows carry their structural
 // signature instead of fallback titles like "variant 2", which carry no
 // meaning for the user.
@@ -926,7 +925,7 @@ func searchIndex(lm *listModel, st *menuState) []row {
 				known[c.Key] = true
 				cpath := pathFor(path, c.Key)
 				out = append(out, row{kind: rowField, fn: c, path: cpath, idx: -1,
-					label: docPath(cpath) + "  " + summary(lm, c, cpath)})
+					label: jsondoc.PathString(cpath) + "  " + summary(lm, c, cpath)})
 				walk(c, cpath)
 			}
 			out = append(out, unknownRows(lm, path, known, seen)...)
@@ -938,7 +937,7 @@ func searchIndex(lm *listModel, st *menuState) []row {
 			for _, v := range fn.Variants {
 				out = append(out, row{kind: rowVariant, fn: v, variant: v,
 					path: clonePath(path), idx: -1,
-					label: docPath(path) + "  " + VariantSignature(v)})
+					label: jsondoc.PathString(path) + "  " + VariantSignature(v)})
 				for _, c := range v.Children {
 					if known[c.Key] {
 						continue
@@ -946,7 +945,7 @@ func searchIndex(lm *listModel, st *menuState) []row {
 					known[c.Key] = true
 					cpath := pathFor(path, c.Key)
 					out = append(out, row{kind: rowField, fn: c, path: cpath, idx: -1,
-						label: docPath(cpath) + "  " + summary(lm, c, cpath)})
+						label: jsondoc.PathString(cpath) + "  " + summary(lm, c, cpath)})
 					walk(c, cpath)
 				}
 			}
@@ -962,7 +961,7 @@ func searchIndex(lm *listModel, st *menuState) []row {
 				for _, mem := range *cur.Object {
 					cpath := pathFor(path, mem.Key)
 					out = append(out, row{kind: rowField, fn: vn, path: cpath, idx: -1,
-						label: docPath(cpath) + "  " + summary(lm, vn, cpath)})
+						label: jsondoc.PathString(cpath) + "  " + summary(lm, vn, cpath)})
 					walk(vn, cpath)
 				}
 			}
@@ -976,7 +975,7 @@ func searchIndex(lm *listModel, st *menuState) []row {
 			for i := range n {
 				ipath := pathIdx(path, i)
 				out = append(out, row{kind: rowDrill, fn: fn.Items, path: ipath, idx: -1,
-					label: docPath(ipath) + "  " + summary(lm, fn.Items, ipath)})
+					label: jsondoc.PathString(ipath) + "  " + summary(lm, fn.Items, ipath)})
 				walk(fn.Items, ipath)
 			}
 		}
@@ -1005,7 +1004,7 @@ func unknownRows(lm *listModel, path []any, known map[string]bool, seen map[stri
 			continue
 		}
 		p := pathFor(path, mem.Key)
-		if k := docPath(p); !seen[k] {
+		if k := jsondoc.PathString(p); !seen[k] {
 			seen[k] = true
 			out = append(out, unknownRow(lm, p))
 			out = append(out, unknownValueRows(lm, p, mem.Val, seen)...)
@@ -1017,7 +1016,7 @@ func unknownRows(lm *listModel, path []any, known map[string]bool, seen map[stri
 // unknownRow builds one schema-less index row.
 func unknownRow(lm *listModel, p []any) row {
 	return row{kind: rowUnknown, idx: -1, path: p,
-		label: docPath(p) + "  " + lm.rawValueSummary(p)}
+		label: jsondoc.PathString(p) + "  " + lm.rawValueSummary(p)}
 }
 
 // unknownValueRows indexes everything nested inside a schema-less value:
@@ -1031,7 +1030,7 @@ func unknownValueRows(lm *listModel, path []any, v *jsondoc.Node, seen map[strin
 	if v.Object != nil {
 		for _, mem := range *v.Object {
 			p := pathFor(path, mem.Key)
-			if k := docPath(p); !seen[k] {
+			if k := jsondoc.PathString(p); !seen[k] {
 				seen[k] = true
 				out = append(out, unknownRow(lm, p))
 				out = append(out, unknownValueRows(lm, p, mem.Val, seen)...)
@@ -1041,7 +1040,7 @@ func unknownValueRows(lm *listModel, path []any, v *jsondoc.Node, seen map[strin
 	if v.Array != nil {
 		for i, item := range *v.Array {
 			p := pathIdx(path, i)
-			if k := docPath(p); !seen[k] {
+			if k := jsondoc.PathString(p); !seen[k] {
 				seen[k] = true
 				out = append(out, unknownRow(lm, p))
 				out = append(out, unknownValueRows(lm, p, item, seen)...)
@@ -1065,12 +1064,8 @@ func unknownKeyIssues(model *smodel.FormNode, doc *jsondoc.Node) []issue {
 	var out []issue
 	emit := func(path []any, key string) {
 		p := pathFor(path, key)
-		ptr := ""
-		for _, seg := range p {
-			ptr += "/" + fmt.Sprint(seg)
-		}
 		out = append(out, issue{
-			msg:  fmt.Sprintf("at '%s': unknown key %q (not in the schema)", ptr, key),
+			msg:  fmt.Sprintf("at '%s': unknown key %q (not in the schema)", jsondoc.PathString(p), key),
 			path: p,
 			warn: true,
 		})
@@ -1198,95 +1193,92 @@ func rowSearchText(lm *listModel, r row) (string, bool) {
 	return text, true
 }
 
-// filterSearch narrows the index to rows matching q. A query containing "/"
-// is a document-path query: the row path ($/a/b/0) is the only match target —
-// title/key/value matching is suspended (search values with a slash-free
-// keyword instead). A leading "$" or "/" anchors the match at the document
-// root; without it the path matches anywhere. Otherwise the row text must
-// contain q: title and key, plus the value for rows carrying a scalar value
-// (container overviews are roll-ups of child rows and never match); fold=true
-// compares case-insensitively (the historic behavior), fold=false requires an
-// exact-case match. An empty query
-// keeps everything. Hits whose leaf key equals q (text mode) or whose full
-// path equals the query path (path mode) rank first; ties keep document
-// order. Variant rows match schema identity only: their jump target is the
-// picker row. Schema-less rows (unknown keys) match their key and value
-// overview. When re != nil the query is a regular expression, matched
-// against the path when it contains "/" and the text target otherwise; full
-// leaf-key/path matches rank first. The pattern arrives stripped of the path
-// anchor (splitPathAnchor), so an anchored path query requires a match at the
-// start of the path body — the regex counterpart of the literal matcher's
-// prefix rule.
+// filterSearch narrows the index to rows matching q. A query starting with
+// "$" — alone, "$.", or "$[" — is a document-path query in the rendered path
+// style ("$.a.b[0]"): the row path is the only match target (title/key/value
+// matching is suspended) and the match is anchored at the document root, with
+// prefix semantics so a partially typed last segment still matches. Any other
+// query is ordinary text: title and key, plus the value for rows carrying a
+// scalar value (container overviews are roll-ups of child rows and never
+// match); fold=true compares case-insensitively, fold=false requires an
+// exact-case match. An empty query keeps everything. Hits whose full path
+// equals the query (path mode) or whose leaf key equals q (text mode) rank
+// first; ties keep document order. Variant rows match schema identity only:
+// their jump target is the picker row. Schema-less rows (unknown keys) match
+// their key and value overview.
+//
+// When re != nil the query is a regular expression. Path queries still match
+// the path body: refilter compiles them via pathPattern (leading "$" stripped,
+// [N] index brackets escaped), so a pasted breadcrumb stays literal. Full
+// path matches rank first.
 func filterSearch(lm *listModel, all []row, q string, fold bool, re *regexp.Regexp) []row {
 	if q == "" {
 		return all
 	}
-	if re != nil {
-		isPath := strings.Contains(q, "/")
-		anchored := false
-		if isPath {
-			_, anchored = splitPathAnchor(q)
+	if isPathQuery(q) {
+		if re != nil {
+			var out []row
+			for _, r := range all {
+				body := pathBody(r.path)
+				if loc := re.FindStringIndex(body); loc != nil && loc[0] == 0 {
+					out = append(out, r)
+				}
+			}
+			full := func(r row) bool {
+				body := pathBody(r.path)
+				loc := re.FindStringIndex(body)
+				return loc != nil && loc[0] == 0 && loc[1] == len(body)
+			}
+			sort.SliceStable(out, func(i, j int) bool { return full(out[i]) && !full(out[j]) })
+			return out
+		}
+		needle := q
+		if fold {
+			needle = strings.ToLower(needle)
 		}
 		var out []row
 		for _, r := range all {
-			var text string
-			if isPath {
-				text = pathBody(r.path, anchored)
-			} else {
-				var ok bool
-				if text, ok = rowSearchText(lm, r); !ok {
-					continue
-				}
+			p := jsondoc.PathString(r.path)
+			if fold {
+				p = strings.ToLower(p)
 			}
-			if anchored {
-				// the path anchor means "matches from the document root"
-				if loc := re.FindStringIndex(text); loc == nil || loc[0] != 0 {
-					continue
-				}
-			} else if !re.MatchString(text) {
+			if strings.HasPrefix(p, needle) {
+				out = append(out, r)
+			}
+		}
+		exact := func(r row) bool {
+			p := jsondoc.PathString(r.path)
+			if fold {
+				p = strings.ToLower(p)
+			}
+			return p == needle
+		}
+		sort.SliceStable(out, func(i, j int) bool { return exact(out[i]) && !exact(out[j]) })
+		return out
+	}
+	var out []row
+	if re != nil {
+		for _, r := range all {
+			text, ok := rowSearchText(lm, r)
+			if !ok {
 				continue
 			}
-			out = append(out, r)
+			if re.MatchString(text) {
+				out = append(out, r)
+			}
 		}
 		full := func(r row) bool {
 			target := rowKey(r)
-			if isPath {
-				target = pathBody(r.path, anchored)
-			}
 			loc := re.FindStringIndex(target)
 			return loc != nil && loc[0] == 0 && loc[1] == len(target)
 		}
 		sort.SliceStable(out, func(i, j int) bool { return full(out[i]) && !full(out[j]) })
 		return out
 	}
-	pathQ, anchored, isPath := parsePathQuery(q)
-	if fold && !isPath {
+	if fold {
 		q = strings.ToLower(q)
 	}
-	var out []row
 	for _, r := range all {
-		if isPath {
-			p := docPath(r.path)
-			if fold {
-				p = strings.ToLower(p)
-			}
-			needle := "/" + pathQ
-			if fold {
-				needle = strings.ToLower(needle)
-			}
-			keep := true // bare "/", "$/" or "$//": every row
-			if pathQ != "" {
-				if anchored {
-					keep = strings.HasPrefix(p, "$"+needle)
-				} else {
-					keep = strings.Contains(p, needle)
-				}
-			}
-			if keep {
-				out = append(out, r)
-			}
-			continue
-		}
 		var ok bool
 		var text string
 		if text, ok = rowSearchText(lm, r); !ok {
@@ -1306,11 +1298,8 @@ func filterSearch(lm *listModel, all []row, q string, fold bool, re *regexp.Rege
 		return a == b
 	}
 	score := func(r row) int {
-		if isPath && pathQ != "" && eq(docPath(r.path), "$/"+pathQ) {
-			return 0 // exact full path (path mode)
-		}
-		if !isPath && eq(rowKey(r), q) {
-			return 0 // exact leaf key (text mode)
+		if eq(rowKey(r), q) {
+			return 0 // exact leaf key
 		}
 		return 1
 	}
@@ -1318,44 +1307,64 @@ func filterSearch(lm *listModel, all []row, q string, fold bool, re *regexp.Rege
 	return out
 }
 
-// splitPathAnchor splits the UI's anchored path syntax off a query: a leading
-// "$/" or "/" — the form the breadcrumbs print, e.g. "$/server/port" — means
-// the query targets the path from the document root. ok=false leaves the
-// query untouched. It is the regex-mode counterpart of parsePathQuery, and
-// also keeps a leading "$" away from the regexp engine, where it would read
-// as an end-of-text anchor and match nothing.
-func splitPathAnchor(q string) (rest string, anchored bool) {
-	if r, ok := strings.CutPrefix(q, "$/"); ok {
-		return r, true
-	}
-	if r, ok := strings.CutPrefix(q, "/"); ok {
-		return r, true
-	}
-	return q, false
+// isPathQuery reports whether q is a document-path query: "$", "$.", or "$["
+// prefix. Requiring the "$" keeps ordinary text searches for values containing
+// dots or slashes working.
+func isPathQuery(q string) bool {
+	return q == "$" || strings.HasPrefix(q, "$.") || strings.HasPrefix(q, "$[")
 }
 
-// pathBody is a row path as a match subject: "$/a/b/0" normally; for an
-// anchored query, whose pattern was stripped of the "$/" prefix by
-// splitPathAnchor, the body "a/b/0" — the pattern then matches at its start.
-func pathBody(path []any, anchored bool) string {
-	p := docPath(path)
-	if !anchored || len(p) < 2 { // the root renders as "$": nothing left to match
-		return p
-	}
-	return p[2:]
+// pathBody is a row path as a path-query match subject: the rendered path
+// without its leading "$" ("$.a.b[0]" → ".a.b[0]", root "$" → "").
+func pathBody(path []any) string {
+	return jsondoc.PathString(path)[1:]
 }
 
-// parsePathQuery classifies a query containing "/" as a document-path query:
-// the row path ($/a/b/0) is then the only match target — title/key/value
-// matching is suspended (search values with a slash-free keyword instead).
-// A leading "$" or "/" anchors the match at the document root; without it
-// the path matches anywhere. norm drops the "$"/"/" prefix and a trailing
-// "/" (partial last segments still match: prefix semantics).
-func parsePathQuery(q string) (norm string, anchored, isPath bool) {
-	isPath = strings.Contains(q, "/")
-	anchored = strings.HasPrefix(q, "$") || strings.HasPrefix(q, "/")
-	norm = strings.TrimSuffix(strings.TrimPrefix(strings.TrimPrefix(q, "$"), "/"), "/")
-	return norm, anchored, isPath
+// pathPattern turns a document-path query into a regex over pathBody: the
+// leading "$" is dropped and JSON-path index brackets are escaped, so a pasted
+// breadcrumb stays literal in the default regex mode ("$.tags[0]" matches
+// ".tags[0]", not ".tags0"). A bracket still being typed is escaped as soon as
+// it is followed only by digits, keeping the incremental pattern valid; other
+// brackets are left to the regex engine (character classes).
+func pathPattern(q string) string {
+	body := strings.TrimPrefix(q, "$")
+	var b strings.Builder
+	for i := 0; i < len(body); {
+		if body[i] != '[' {
+			b.WriteByte(body[i])
+			i++
+			continue
+		}
+		if k := strings.IndexByte(body[i+1:], ']'); k >= 0 {
+			k += i + 1
+			if allDigits(body[i+1 : k]) {
+				b.WriteString(`\[` + body[i+1:k] + `\]`)
+				i = k + 1
+				continue
+			}
+		} else if rest := body[i+1:]; rest == "" || allDigits(rest) {
+			// an index still being typed: escape so the regex stays valid
+			b.WriteString(`\[` + rest)
+			i = len(body)
+			continue
+		}
+		b.WriteByte(body[i])
+		i++
+	}
+	return b.String()
+}
+
+// allDigits reports whether s consists of ASCII digits and is non-empty.
+func allDigits(s string) bool {
+	if s == "" {
+		return false
+	}
+	for i := 0; i < len(s); i++ {
+		if s[i] < '0' || s[i] > '9' {
+			return false
+		}
+	}
+	return true
 }
 
 // rowKey returns a row's leaf key for exact-key ranking: the last path
@@ -1439,7 +1448,7 @@ func runesFoldEqual(a, b []rune) bool {
 
 // replaceHits narrows the index to rows whose document value is a string
 // containing q (per fold), relabeling each hit
-// "<docPath>  <old> → <new>" so the result list doubles as the replacement
+// "<path>  <old> → <new>" so the result list doubles as the replacement
 // preview. An empty query lists every string value with its original label
 // (mirroring filterSearch's keep-everything rule). Duplicate paths — oneOf
 // variants walking the same location — are kept once.
@@ -1468,7 +1477,7 @@ func replaceHits(lm *listModel, all []row, q, rep string, fold bool, re *regexp.
 			if c == 0 {
 				continue
 			}
-			r2.label = docPath(r.path) + "  " + valueClip(*n.Str) + " → " + valueClip(new)
+			r2.label = jsondoc.PathString(r.path) + "  " + valueClip(*n.Str) + " → " + valueClip(new)
 		}
 		out = append(out, r2)
 	}
@@ -1476,10 +1485,10 @@ func replaceHits(lm *listModel, all []row, q, rep string, fold bool, re *regexp.
 }
 
 // parseIssue extracts the instance location from a validator message like
-// "at '/inner/x': got number, want string": the JSON-pointer path, extended
-// by the property name for "missing property 'p'" and by the first name of
+// "at '$.inner.x': got number, want string": the document path, extended by
+// the property name for "missing property 'p'" and by the first name of
 // "additional properties 'p', … not allowed". ok is false when the message
-// carries no location.
+// carries no location or the location is not a document path.
 func parseIssue(msg string) (path []any, ok bool) {
 	const at = "at '"
 	i := strings.Index(msg, at)
@@ -1491,7 +1500,9 @@ func parseIssue(msg string) (path []any, ok bool) {
 	if j < 0 {
 		return nil, false
 	}
-	path = pointerPath(rest[:j])
+	if path, ok = jsondoc.ParsePath(rest[:j]); !ok {
+		return nil, false
+	}
 	detail := rest[j:]
 	for _, marker := range []string{"missing property '", "additional propert"} {
 		k := strings.Index(detail, marker)
@@ -1509,27 +1520,6 @@ func parseIssue(msg string) (path []any, ok bool) {
 		return path, true
 	}
 	return path, true
-}
-
-// pointerPath converts a JSON Pointer ("" or "/a/b/0") to a document path;
-// numeric segments become array indices, ~1/~0 escapes are resolved.
-func pointerPath(ptr string) []any {
-	if ptr == "" {
-		return nil
-	}
-	var out []any
-	for _, seg := range strings.Split(strings.Trim(ptr, "/"), "/") {
-		if seg == "" {
-			continue
-		}
-		seg = strings.ReplaceAll(strings.ReplaceAll(seg, "~1", "/"), "~0", "~")
-		if n, err := strconv.Atoi(seg); err == nil {
-			out = append(out, n)
-		} else {
-			out = append(out, seg)
-		}
-	}
-	return out
 }
 
 func clonePath(p []any) []any {
@@ -1567,21 +1557,4 @@ func issueStatusLabel(errs, warns int) string {
 	default:
 		return fmt.Sprintf("%s %d warning%s", icons.Warn, warns, plural(warns))
 	}
-}
-
-// docPath renders a document path as the breadcrumb string ("$/a/b/0",
-// "$" for the root). Keys and array indices both use "/" segments.
-func docPath(path []any) string {
-	var b strings.Builder
-	b.WriteByte('$')
-	for _, seg := range path {
-		switch s := seg.(type) {
-		case string:
-			b.WriteByte('/')
-			b.WriteString(s)
-		case int:
-			fmt.Fprintf(&b, "/%d", s)
-		}
-	}
-	return b.String()
 }

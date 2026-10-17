@@ -51,7 +51,7 @@ func TestMenuMountsAddFillBack(t *testing.T) {
 	if m.top().kind != menuObject || !contains(m.View(), "< Remove this item >") {
 		t.Fatalf("item menu should offer removal:\n%s", m.View())
 	}
-	if v := m.View(); !contains(v, "$/mounts/0") {
+	if v := m.View(); !contains(v, "$.mounts[0]") {
 		t.Fatalf("breadcrumb should carry the item index:\n%s", v)
 	}
 	press(m, "down", "enter") // Source field
@@ -362,8 +362,8 @@ func TestCursorWrap(t *testing.T) {
 	// issues overlay: two entries wrap as well
 	doc := testDoc()
 	m3 := newListModel(testModel(), doc, Options{LoadErrors: []string{
-		"at '/server/port': minimum value is 1024",
-		"at '/name': got number, want string",
+		"at '$.server.port': minimum value is 1024",
+		"at '$.name': got number, want string",
 	}})
 	m3.Update(tea.WindowSizeMsg{Width: 100, Height: 30})
 	press(m3, "enter") // status row → issues
@@ -466,14 +466,14 @@ func TestMenuSearchJump(t *testing.T) {
 		t.Fatalf("search mode should open:\n%s", m.View())
 	}
 	press(m, "p", "o", "r", "t")
-	if len(m.search.results) != 1 { // $/server/port only: $/server just rolls the value up
+	if len(m.search.results) != 1 { // $.server.port only: $.server just rolls the value up
 		t.Fatalf("results = %d, want 1", len(m.search.results))
 	}
 	press(m, "enter")
 	if m.search.active {
 		t.Fatal("enter should park the search and render the jump target")
 	}
-	if len(m.stack) != 2 || !contains(m.View(), "$/server") {
+	if len(m.stack) != 2 || !contains(m.View(), "$.server") {
 		t.Fatalf("jump should land inside Server:\n%s", m.View())
 	}
 	if !contains(m.View(), "> Port") {
@@ -489,22 +489,22 @@ func TestMenuSearchJump(t *testing.T) {
 	// search is scoped to the path the breadcrumb shows
 	m3 := newListModel(testModel(), testDoc(), Options{})
 	m3.Update(tea.WindowSizeMsg{Width: 100, Height: 30})
-	press(m3, "down", "down", "enter") // root → Server menu ($/server)
+	press(m3, "down", "down", "enter") // root → Server menu ($.server)
 	press(m3, "/", "n", "a", "m", "e")
 	if len(m3.search.results) != 0 {
-		t.Fatalf("scoped search must exclude rows outside $/server, got %d", len(m3.search.results))
+		t.Fatalf("scoped search must exclude rows outside $.server, got %d", len(m3.search.results))
 	}
 	press(m3, "esc")
 	press(m3, "/", "0", ".", "0")
 	if len(m3.search.results) != 2 { // regex default: "." matches any char, so 8080 counts too
 		t.Fatalf("scoped regex search = %d results, want 2", len(m3.search.results))
 	}
-	if v := m3.View(); !contains(v, "$/server/host") {
+	if v := m3.View(); !contains(v, "$.server.host") {
 		t.Fatalf("scoped results should show breadcrumb-style paths:\n%s", v)
 	}
 	press(m3, "esc")
 	press(m3, "/", "0", "\\", ".", "0")
-	if len(m3.search.results) != 1 { // escaped dot: only $/server/host = 0.0.0.0
+	if len(m3.search.results) != 1 { // escaped dot: only $.server.host = 0.0.0.0
 		t.Fatalf("scoped escaped search = %d results, want 1", len(m3.search.results))
 	}
 	press(m3, "esc")
@@ -516,7 +516,7 @@ func TestMenuSearchJumpReturn(t *testing.T) {
 	m := newListModel(testModel(), testDoc(), Options{})
 	m.Update(tea.WindowSizeMsg{Width: 100, Height: 30})
 	press(m, "/", "8", "0", "8", "0")
-	press(m, "enter") // land on $/server/port
+	press(m, "enter") // land on $.server.port
 	if m.search.active || len(m.stack) != 2 {
 		t.Fatalf("jump should land inside Server: stack %d, active %v", len(m.stack), m.search.active)
 	}
@@ -535,7 +535,7 @@ func TestMenuSearchJumpReturn(t *testing.T) {
 		t.Fatalf("the query should survive the jump:\n%s", v)
 	}
 
-	press(m, "esc") // closing returns to the pre-search menu, not to $/server
+	press(m, "esc") // closing returns to the pre-search menu, not to $.server
 	if m.search.active || len(m.stack) != 1 || !contains(m.View(), "> Name*") {
 		t.Fatalf("close should restore the root menu:\n%s", m.View())
 	}
@@ -594,7 +594,7 @@ func TestMenuSearchSecondJumpReturn(t *testing.T) {
 	// entry menu: every park re-captures the return point
 	m := newListModel(testModel(), testDoc(), Options{})
 	m.Update(tea.WindowSizeMsg{Width: 100, Height: 30})
-	press(m, "/", "8", "0", "8", "0", "enter") // jump to $/server/port
+	press(m, "/", "8", "0", "8", "0", "enter") // jump to $.server.port
 	if len(m.stack) != 2 {
 		t.Fatalf("first jump stack = %d, want 2", len(m.stack))
 	}
@@ -602,7 +602,7 @@ func TestMenuSearchSecondJumpReturn(t *testing.T) {
 	if !m.search.active || len(m.stack) != 1 {
 		t.Fatalf("first return: active %v, stack %d", m.search.active, len(m.stack))
 	}
-	press(m, "ctrl+u", "0", ".", "0", ".", "0", ".", "0", "enter") // jump to $/server/host
+	press(m, "ctrl+u", "0", ".", "0", ".", "0", ".", "0", "enter") // jump to $.server.host
 	if len(m.stack) != 2 {
 		t.Fatalf("second jump stack = %d, want 2", len(m.stack))
 	}
@@ -783,14 +783,14 @@ func TestMenuSearchReplace(t *testing.T) {
 	// the query previews the projected replacement on string hits only
 	press(m, "/data")
 	if len(m.search.results) != 1 {
-		t.Fatalf("results = %d, want the $/mounts/0/src hit", len(m.search.results))
+		t.Fatalf("results = %d, want the $.mounts[0].src hit", len(m.search.results))
 	}
 	press(m, "tab")
 	if !m.search.rti.Focused() {
 		t.Fatal("tab should focus the replace input")
 	}
 	press(m, "/opt")
-	if v := m.View(); !contains(v, "$/mounts/0/src  /data → /opt") {
+	if v := m.View(); !contains(v, "$.mounts[0].src  /data → /opt") {
 		t.Fatalf("preview label missing:\n%s", v)
 	}
 
@@ -865,13 +865,13 @@ func TestMenuSearchReplace(t *testing.T) {
 		tmem("server", tobj(tmem("host", tstr("same")))))
 	m6 := newListModel(testModel(), doc6, Options{})
 	m6.Update(tea.WindowSizeMsg{Width: 100, Height: 30})
-	press(m6, "down", "down", "enter") // root → $/server
+	press(m6, "down", "down", "enter") // root → $.server
 	press(m6, "r", "same", "tab", "other", "ctrl+r")
 	if s := strAt(t, doc6, "server", "host"); s != "other" {
 		t.Fatalf("host = %q, want other", s)
 	}
 	if s := strAt(t, doc6, "name"); s != "same" {
-		t.Fatalf("scoped replace leaked to $/name: %q", s)
+		t.Fatalf("scoped replace leaked to $.name: %q", s)
 	}
 
 	// / opens jump search; tab arms replace mid-flight
@@ -926,7 +926,7 @@ func TestMenuSearchRegex(t *testing.T) {
 		t.Fatalf("the overlay should open in regex mode:\n%s", v)
 	}
 	press(m, "0", "\\", ".", "0")
-	if len(m.search.results) != 1 { // $/server/host = 0.0.0.0
+	if len(m.search.results) != 1 { // $.server.host = 0.0.0.0
 		t.Fatalf("regex 0\\.0 = %d hits, want 1", len(m.search.results))
 	}
 	press(m, "alt+x")
@@ -942,20 +942,21 @@ func TestMenuSearchRegex(t *testing.T) {
 	}
 	press(m, "esc")
 
-	// the path syntax the breadcrumbs print keeps working: "$/" anchors the
-	// match at the document root instead of reading as a regex "end of text"
+	// the path syntax the breadcrumbs print keeps working in regex mode: "$."
+	// anchors the match at the document root instead of reading as an "end of
+	// text" assertion
 	m5 := newListModel(testModel(), testDoc(), Options{})
 	m5.Update(tea.WindowSizeMsg{Width: 100, Height: 30})
 	press(m5, "/")
-	for _, k := range []string{"$", "/", "s", "e", "r", "v", "e", "r"} {
+	for _, k := range []string{"$", ".", "s", "e", "r", "v", "e", "r"} {
 		press(m5, k)
 	}
 	if len(m5.search.results) == 0 {
 		t.Fatal("anchored path query found nothing")
 	}
-	for _, r := range m5.search.results { // prefix match: $/server and its children
-		if p := docPath(r.path); !strings.HasPrefix(p, "$/server") {
-			t.Fatalf("anchored hit %q lacks the $/server prefix", p)
+	for _, r := range m5.search.results { // prefix match: $.server and its children
+		if p := jsondoc.PathString(r.path); !strings.HasPrefix(p, "$.server") {
+			t.Fatalf("anchored hit %q lacks the $.server prefix", p)
 		}
 	}
 	if got := m5.search.results[0].path; !pathEq(got, []any{"server"}) {
@@ -967,13 +968,34 @@ func TestMenuSearchRegex(t *testing.T) {
 	m6 := newListModel(testModel(), testDoc(), Options{})
 	m6.Update(tea.WindowSizeMsg{Width: 100, Height: 30})
 	press(m6, "/")
-	for _, k := range []string{"$", "/", "p", "o", "r", "t"} {
+	for _, k := range []string{"$", ".", "p", "o", "r", "t"} {
 		press(m6, k)
 	}
-	if len(m6.search.results) != 0 { // nothing starts with $/port …
-		t.Fatalf("anchored $/port = %d hits, want 0", len(m6.search.results))
+	if len(m6.search.results) != 0 { // nothing starts with $.port …
+		t.Fatalf("anchored $.port = %d hits, want 0", len(m6.search.results))
 	}
 	press(m6, "esc")
+
+	// an [N] index pasted from a breadcrumb stays literal: the "[" typed on
+	// its own must not momentarily break the regex
+	m7 := newListModel(testModel(), testDoc(), Options{})
+	m7.Update(tea.WindowSizeMsg{Width: 100, Height: 30})
+	press(m7, "/")
+	for _, k := range []string{"$", ".", "m", "o", "u", "n", "t", "s", "["} {
+		press(m7, k)
+	}
+	if m7.search.reErr != "" {
+		t.Fatalf("a path index still being typed must keep the regex valid: %s", m7.search.reErr)
+	}
+	press(m7, "0", "]")
+	// prefix semantics: the item row and its fields, exact path first
+	if len(m7.search.results) != 3 {
+		t.Fatalf("pasted $.mounts[0] = %d hits, want the item row and its fields", len(m7.search.results))
+	}
+	if got := jsondoc.PathString(m7.search.results[0].path); got != "$.mounts[0]" {
+		t.Fatalf("hit = %q, want $.mounts[0]", got)
+	}
+	press(m7, "esc")
 
 	// an uncompilable pattern yields no results plus a footer error
 	m2 := newListModel(testModel(), testDoc(), Options{})
@@ -991,7 +1013,7 @@ func TestMenuSearchRegex(t *testing.T) {
 	m3 := newListModel(testModel(), testDoc(), Options{})
 	m3.Update(tea.WindowSizeMsg{Width: 100, Height: 30})
 	press(m3, "r", "(", "\\", "d", "+", ")")
-	if len(m3.search.results) != 1 { // only $/server/host holds digits
+	if len(m3.search.results) != 1 { // only $.server.host holds digits
 		t.Fatalf("replace regex hits = %d, want 1", len(m3.search.results))
 	}
 	press(m3, "tab", "[", "$", "1", "]")

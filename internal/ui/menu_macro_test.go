@@ -211,7 +211,7 @@ func TestMacroEmptyAndCancel(t *testing.T) {
 }
 
 func TestMacroKeyConflicts(t *testing.T) {
-	m := newListModel(testModel(), testDoc(), Options{LoadErrors: []string{"at '/name': invalid"}})
+	m := newListModel(testModel(), testDoc(), Options{LoadErrors: []string{"at '$.name': invalid"}})
 
 	// (a) not recording: @ arms recording on the issue overlay too; the list
 	// stays open (esc/q is the close binding).

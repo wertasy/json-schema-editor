@@ -111,7 +111,7 @@ func TestMenuDrillAndRestoreCursor(t *testing.T) {
 
 	// move to row 2 (Server), drill in, come back: cursor must survive
 	press(m, "down", "down", "enter")
-	if len(m.stack) != 2 || !contains(m.View(), "$/server") {
+	if len(m.stack) != 2 || !contains(m.View(), "$.server") {
 		t.Fatalf("breadcrumb after drill:\n%s", m.View())
 	}
 	if !contains(m.View(), "> Port") {
@@ -123,7 +123,7 @@ func TestMenuDrillAndRestoreCursor(t *testing.T) {
 	}
 	// one more down lands on row 3 (Logging): proves cursor was restored to 2
 	press(m, "down", "enter")
-	if len(m.stack) != 2 || !contains(m.View(), "$/logging") {
+	if len(m.stack) != 2 || !contains(m.View(), "$.logging") {
 		t.Fatalf("cursor restore failed, breadcrumb:\n%s", m.View())
 	}
 }
@@ -495,8 +495,8 @@ func TestJumpKeys(t *testing.T) {
 func TestJumpKeysOverlays(t *testing.T) {
 	// issues overlay
 	msgs := []string{
-		"at '/server/port': minimum value is 1024",
-		"at '/name': got number, want string",
+		"at '$.server.port': minimum value is 1024",
+		"at '$.name': got number, want string",
 	}
 	m := newListModel(testModel(), testDoc(), Options{LoadErrors: msgs})
 	m.Update(tea.WindowSizeMsg{Width: 100, Height: 30})
@@ -540,7 +540,7 @@ func TestJumpKeysOverlays(t *testing.T) {
 
 	// save-error overlay
 	validate := func(*jsondoc.Node) []string {
-		return []string{"at '/name': got number, want string", "at '/server/port': minimum value is 1024", "at '/mode': bad mode"}
+		return []string{"at '$.name': got number, want string", "at '$.server.port': minimum value is 1024", "at '$.mode': bad mode"}
 	}
 	m2 := newListModel(testModel(), testDoc(), Options{
 		Validate: validate, Force: true, Save: func(*jsondoc.Node) error { return nil },

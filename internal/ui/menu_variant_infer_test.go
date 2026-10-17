@@ -111,7 +111,7 @@ func TestOneOfItemAddInfer(t *testing.T) {
 		t.Fatalf("add should open the dynamic menu of the oneOf, got variantOf=%v", top.variantOf)
 	}
 	// the breadcrumb carries the item index
-	if v := m.View(); !contains(v, "$/inbounds/0") {
+	if v := m.View(); !contains(v, "$.inbounds[0]") {
 		t.Fatalf("breadcrumb should carry the item index:\n%s", v)
 	}
 	if v := m.View(); !contains(v, "Type") || !contains(v, "Listen") || !contains(v, "Password") {
@@ -512,26 +512,26 @@ func TestBreadcrumbPath(t *testing.T) {
 		{kind: menuItems, node: childOf(t, root, "inbounds"), path: []any{"inbounds"}},
 		{kind: menuObject, node: oneOfOf(t, root, "inbounds"), path: []any{"inbounds", 0}},
 	}
-	if got := lm.breadcrumb(); got != "$/inbounds/0" {
-		t.Fatalf("breadcrumb = %q, want $/inbounds/0", got)
+	if got := lm.breadcrumb(); got != "$.inbounds[0]" {
+		t.Fatalf("breadcrumb = %q, want $.inbounds[0]", got)
 	}
 
 	// oneOf picker level shares the path: no extra segment
 	lm.stack = append(lm.stack, &menuState{kind: menuOneOf, node: oneOfOf(t, root, "inbounds"), path: []any{"inbounds", 0}})
-	if got := lm.breadcrumb(); got != "$/inbounds/0" {
+	if got := lm.breadcrumb(); got != "$.inbounds[0]" {
 		t.Fatalf("picker level must not extend the path, got %q", got)
 	}
 
 	// depth: keys and indices compose
 	lm.stack = append(lm.stack, &menuState{kind: menuObject,
 		node: &smodel.FormNode{Key: "listen", Title: "Listen"}, path: []any{"inbounds", 3, "listen"}})
-	if got := lm.breadcrumb(); got != "$/inbounds/3/listen" {
+	if got := lm.breadcrumb(); got != "$.inbounds[3].listen" {
 		t.Fatalf("deep path = %q", got)
 	}
 
 	// narrow terminal: the tail survives within the width
 	lm.width = 12
-	if got := lm.breadcrumb(); got != "…ds/3/listen" {
+	if got := lm.breadcrumb(); got != "…s[3].listen" {
 		t.Fatalf("clipped path = %q, want the tail", got)
 	}
 
@@ -554,8 +554,8 @@ func oneOfOf(t *testing.T, n *smodel.FormNode, key string) *smodel.FormNode {
 func TestIssuesJumpReturn(t *testing.T) {
 	doc := testDoc()
 	msgs := []string{
-		"at '/server/port': minimum value is 1024",
-		"at '/name': got number, want string",
+		"at '$.server.port': minimum value is 1024",
+		"at '$.name': got number, want string",
 	}
 	m := newListModel(testModel(), doc, Options{LoadErrors: msgs})
 	m.Update(tea.WindowSizeMsg{Width: 100, Height: 30})
@@ -618,10 +618,10 @@ func TestIssuesLiveRefresh(t *testing.T) {
 	check := func(doc *jsondoc.Node) []string {
 		var out []string
 		if n, _ := doc.Get([]any{"server", "port"}); n != nil && n.Num != nil && n.Num.String() == "8080" {
-			out = append(out, "at '/server/port': minimum value is 1024")
+			out = append(out, "at '$.server.port': minimum value is 1024")
 		}
 		if n, _ := doc.Get([]any{"name"}); n != nil && n.Str != nil && *n.Str == "webapp" {
-			out = append(out, "at '/name': invalid name")
+			out = append(out, "at '$.name': invalid name")
 		}
 		return out
 	}
@@ -694,7 +694,7 @@ func TestIssuesLiveRefresh(t *testing.T) {
 	if m2.issues == nil || len(m2.issues.items) != 1 {
 		t.Fatalf("returned list should hold the remaining issue only, got %+v", m2.issues)
 	}
-	if contains(m2.issues.items[0].msg, "/server/port") {
+	if contains(m2.issues.items[0].msg, "$.server.port") {
 		t.Fatalf("fixed entry still listed: %q", m2.issues.items[0].msg)
 	}
 }

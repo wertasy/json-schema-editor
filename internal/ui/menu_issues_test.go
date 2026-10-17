@@ -22,13 +22,13 @@ func TestParseIssue(t *testing.T) {
 		want string // path rendered as a compact string
 		ok   bool
 	}{
-		{"at '/server/port': minimum value is 1024", "server/port", true},
-		{"at '': missing property 'port'", "port", true},
-		{"at '/inner': additional properties 'extra_key' not allowed", "inner/extra_key", true},
-		{"at '': additional properties 'a', 'b' not allowed", "a", true},
-		{"at '/a/0/b': got number, want string", "a/0/b", true},
-		{"at '/a~1b': unexpected", "a/b", true},
-		{"at '': got string, want object", "", true},
+		{"at '$.server.port': minimum value is 1024", "server/port", true},
+		{"at '$': missing property 'port'", "port", true},
+		{"at '$.inner': additional properties 'extra_key' not allowed", "inner/extra_key", true},
+		{"at '$': additional properties 'a', 'b' not allowed", "a", true},
+		{"at '$.a[0].b': got number, want string", "a/0/b", true},
+		{"at '$.a/b': unexpected", "a/b", true},
+		{"at '$': got string, want object", "", true},
 		{"jsonschema validation failed", "", false},
 	}
 	for _, tc := range cases {
@@ -143,8 +143,8 @@ func TestLoadIssuesRowAndJump(t *testing.T) {
 	doc := testDoc()
 	doc.Set([]any{"extra_key"}, tstr("x"))
 	msgs := []string{
-		"at '/server/port': minimum value is 1024",
-		"at '': additional properties 'extra_key' not allowed",
+		"at '$.server.port': minimum value is 1024",
+		"at '$': additional properties 'extra_key' not allowed",
 	}
 	m := newListModel(testModel(), doc, Options{LoadErrors: msgs})
 	m.Update(tea.WindowSizeMsg{Width: 100, Height: 30})
@@ -210,12 +210,12 @@ func TestLoadIssuesRowAndJump(t *testing.T) {
 
 	// the overlay recomputes against the current doc when a validator exists
 	m.opts.Validate = func(*jsondoc.Node) []string {
-		return []string{"at '/name': got number, want string"}
+		return []string{"at '$.name': got number, want string"}
 	}
 	m.top().cursor = 0
 	press(m, "enter")
 	if m.issues == nil || len(m.issues.items) != 2 ||
-		!contains(m.issues.items[0].msg, "/name") ||
+		!contains(m.issues.items[0].msg, "$.name") ||
 		!contains(m.issues.items[1].msg, `unknown key "extra_key"`) {
 		t.Fatalf("overlay should recompute from the validator: %+v", m.issues)
 	}
@@ -253,7 +253,7 @@ func TestUnknownKeyIssuesListed(t *testing.T) {
 	// validator output combines with the warnings without double-flagging
 	m.opts.Validate = func(d *jsondoc.Node) []string {
 		if _, ok := d.Get([]any{"extra_key"}); ok {
-			return []string{"at '': additional properties 'extra_key' not allowed"}
+			return []string{"at '$': additional properties 'extra_key' not allowed"}
 		}
 		return nil
 	}
@@ -318,7 +318,7 @@ func TestUnknownKeyWarningColor(t *testing.T) {
 	doc := testDoc()
 	doc.Set([]any{"extra_key"}, tstr("x"))
 	m := newListModel(testModel(), doc, Options{LoadErrors: []string{
-		"at '/server/port': minimum value is 1024",
+		"at '$.server.port': minimum value is 1024",
 	}})
 	m.Update(tea.WindowSizeMsg{Width: 100, Height: 30})
 

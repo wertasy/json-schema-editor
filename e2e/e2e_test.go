@@ -397,6 +397,79 @@ func TestPtySmoke(t *testing.T) {
 	}
 }
 
+// TestPtyIssuesUseDocumentPaths proves validator messages reach the issues
+// overlay in the editor's path style, array indexes included.
+func TestPtyIssuesUseDocumentPaths(t *testing.T) {
+	dir := t.TempDir()
+	schema := filepath.Join(dir, "strict.schema.json")
+	cfg := filepath.Join(dir, "strict.json")
+	writeFile(t, schema, `{"type":"object","properties":{
+		"port":{"type":"integer","title":"Port","minimum":1024},
+		"items":{"type":"array","title":"Items","items":{"type":"object","properties":{
+			"tag":{"type":"integer","title":"Tag","minimum":1}}}}}}`)
+	writeFile(t, cfg, `{"port":1,"items":[{"tag":0}]}`)
+
+	cmd := exec.Command(jseBin, "-s", schema, cfg)
+	cmd.Dir = ".."
+	cmd.Env = append(os.Environ(), "TERM=xterm-256color")
+	tty, err := pty.StartWithSize(cmd, &pty.Winsize{Rows: 30, Cols: 120})
+	if err != nil {
+		t.Skipf("no pty available: %v", err)
+	}
+	defer tty.Close()
+
+	frames := make(chan string, 64)
+	go func() {
+		buf := make([]byte, 4096)
+		var acc bytes.Buffer
+		for {
+			n, err := tty.Read(buf)
+			if n > 0 {
+				acc.Write(buf[:n])
+				frames <- acc.String()
+			}
+			if err != nil {
+				close(frames)
+				return
+			}
+		}
+	}()
+	waitFrame := func(what string, offset int, want ...string) (string, int) {
+		t.Helper()
+		deadline := time.After(15 * time.Second)
+		for {
+			select {
+			case frame, ok := <-frames:
+				if !ok {
+					t.Fatalf("pty closed while waiting for %s", what)
+				}
+				ready := true
+				for _, w := range want {
+					if !strings.Contains(frame[offset:], w) {
+						ready = false
+						break
+					}
+				}
+				if ready {
+					return frame, len(frame)
+				}
+			case <-deadline:
+				t.Fatalf("timed out waiting for %s", what)
+			}
+		}
+	}
+
+	_, off := waitFrame("root issues row", 0, "Save and exit", "validation error")
+	tty.Write([]byte("\r")) // the issues row is first at the root
+	waitFrame("issues overlay", off, "at '$.port'", "at '$.items[0].tag'")
+	tty.Write([]byte("\x03"))
+
+	waitErr := cmd.Wait()
+	if ee, ok := waitErr.(*exec.ExitError); !ok || ee.ExitCode() != 130 {
+		t.Fatalf("exit after ctrl+c = %v, want 130", waitErr)
+	}
+}
+
 // TestPtyQuitSavePrompt drives the root esc exit path on a real terminal:
 // an unchanged document quits immediately (exit 0, no write), a changed one
 // asks whether to save, y writes and exits 0, n discards and exits 130.
@@ -709,7 +782,10 @@ func TestPtyMoveItem(t *testing.T) {
 
 	_, off := waitFrame("root menu", 0, "Save and exit")
 	tty.Write([]byte("\r")) // enter → Tags items
-	_, off = waitFrame("items menu", off, "alpha")
+	frame, off := waitFrame("items menu", off, "alpha")
+	if !strings.Contains(frame, "$.tags") {
+		t.Fatalf("items breadcrumb should use the JSON path style:\n%s", frame)
+	}
 	tty.Write([]byte("\x1b[BJ")) // ↓ to item 0 (alpha), J moves it down
 	// the swap is visible once the rows render beta above alpha
 	moved := false
@@ -815,29 +891,29 @@ func TestPtySearch(t *testing.T) {
 	tty.Write([]byte("8080")) // root search: value hit on the row that owns it
 	prev := off
 	frame, off = waitFrame("value hits", off,
-		"$/server/port  8080") // leaf value hit
-	if strings.Contains(frame[prev:], "$/server  port=8080 host=localhost +1") {
+		"$.server.port  8080") // leaf value hit
+	if strings.Contains(frame[prev:], "$.server  port=8080 host=localhost +1") {
 		t.Errorf("a container must not match through its child roll-up:\n%s", frame[prev:])
 	}
 	tty.Write([]byte("\x1b")) // close search
 	time.Sleep(200 * time.Millisecond)
-	tty.Write([]byte("/")) // reopen: the "$/" path syntax works in regex mode too
+	tty.Write([]byte("/")) // reopen: the "$." path syntax works in regex mode too
 	_, off = waitFrame("search view again", off, "search:")
-	tty.Write([]byte("$/server/port"))
-	frame, off = waitFrame("anchored path hit", off, "$/server/port  8080")
+	tty.Write([]byte("$.server.port"))
+	frame, off = waitFrame("anchored path hit", off, "$.server.port  8080")
 	if strings.Contains(frame[off:], "invalid regex") {
 		t.Errorf("the path anchor must not reach the regexp engine:\n%s", frame[off:])
 	}
 	tty.Write([]byte("\x1b")) // close search
 	time.Sleep(200 * time.Millisecond)
-	tty.Write([]byte("\x1b[B\x1b[B\x1b[B\r")) // ↓↓↓ enter → Server ($/server); row 0 is the issues row
-	_, off = waitFrame("server menu", off, "$/server")
-	tty.Write([]byte("/")) // scoped search: nothing below $/server
+	tty.Write([]byte("\x1b[B\x1b[B\x1b[B\r")) // ↓↓↓ enter → Server ($.server); row 0 is the issues row
+	_, off = waitFrame("server menu", off, "$.server")
+	tty.Write([]byte("/")) // scoped search: nothing below $.server
 	_, off = waitFrame("scoped search view", off, "search:")
 	tty.Write([]byte("name"))
 	frame, _ = waitFrame("scoped search settles", off, "search: name")
-	if strings.Contains(frame[off:], "$/name") {
-		t.Errorf("scoped search leaked $/name:\n%s", frame[off:])
+	if strings.Contains(frame[off:], "$.name") {
+		t.Errorf("scoped search leaked $.name:\n%s", frame[off:])
 	}
 	tty.Write([]byte("\x1b"))
 	time.Sleep(200 * time.Millisecond)
@@ -926,9 +1002,9 @@ func TestPtySearchReplace(t *testing.T) {
 	tty.Write([]byte("r")) // open search-and-replace directly
 	_, off = waitFrame("replace view", off, "replace:", "case-insensitive")
 	tty.Write([]byte("localhost"))
-	_, off = waitFrame("replace preview", off, "$/server/host  localhost →")
+	_, off = waitFrame("replace preview", off, "$.server.host  localhost →")
 	tty.Write([]byte("\t127.0.0.1")) // focus the replace input, type the text
-	_, off = waitFrame("replacement typed", off, "$/server/host  localhost → 127.0.0.1")
+	_, off = waitFrame("replacement typed", off, "$.server.host  localhost → 127.0.0.1")
 	tty.Write([]byte("\x12")) // ctrl+r: replace all in scope
 	_, off = waitFrame("replace-all notice", off, "replaced 2 occurrence")
 	tty.Write([]byte("\x13")) // ctrl+s: persist
