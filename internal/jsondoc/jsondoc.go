@@ -268,7 +268,7 @@ func (n *Node) Set(path []any, v *Node) {
 				if !empty(cur) {
 					panic(fmt.Sprintf("jsondoc: Set string key %q into non-object", k))
 				}
-				cur.Object = containerFor(path[i]).Object
+				*cur = *containerFor(path[i])
 			}
 			if last {
 				setMember(cur, k, v)
@@ -290,7 +290,7 @@ func (n *Node) Set(path []any, v *Node) {
 				if !empty(cur) {
 					panic(fmt.Sprintf("jsondoc: Set index %d into non-array", k))
 				}
-				cur.Array = containerFor(path[i]).Array
+				*cur = *containerFor(path[i])
 			}
 			items := *cur.Array
 			switch {
@@ -381,7 +381,7 @@ func (n *Node) Append(path []any, v *Node) {
 		if !empty(arr) {
 			panic("jsondoc: Append into non-array")
 		}
-		arr.Array = &[]*Node{}
+		*arr = *containerFor(path[len(path)-1])
 	}
 	*arr.Array = append(*arr.Array, v)
 }
@@ -399,7 +399,7 @@ func (n *Node) Insert(path []any, idx int, v *Node) {
 		if !empty(arr) {
 			panic("jsondoc: Insert into non-array")
 		}
-		arr.Array = &[]*Node{}
+		*arr = *containerFor(path[len(path)-1])
 	}
 	a := *arr.Array
 	if idx < 0 {
@@ -448,7 +448,7 @@ func (n *Node) InsertMember(path []any, key string, idx int, v *Node) {
 	obj, ok := n.Get(path)
 	if !ok || obj.Object == nil {
 		if ok && empty(obj) {
-			obj.Object = &[]Member{}
+			*obj = *containerFor("")
 		} else {
 			panic("jsondoc: InsertMember into non-object")
 		}

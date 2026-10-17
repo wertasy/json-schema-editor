@@ -298,6 +298,9 @@ func TestSetReplacesNullWithContainer(t *testing.T) {
 	if arr.Array == nil || len(*arr.Array) != 1 {
 		t.Fatalf("Host should be a 1-element array, got %+v", arr)
 	}
+	if arr.Null {
+		t.Fatalf("converted member still carries the null flag: %+v", arr)
+	}
 
 	n.Set([]any{"obj", "sub"}, FromAny(7))
 	obj, _ := n.Get([]any{"obj"})
