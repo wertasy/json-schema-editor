@@ -116,7 +116,7 @@ func (m *listModel) activate(r row) tea.Cmd {
 	case rowSave:
 		return m.saveAndExit()
 	case rowRaw:
-		m.openRaw(nil)
+		return m.editRawExternal()
 	case rowVariant:
 		return m.enterVariant(r)
 	case rowToggle:
@@ -337,10 +337,6 @@ func (m *listModel) openField(fn *smodel.FormNode, path []any, isNew bool) {
 	default: // KRaw / item-less arrays
 		m.openRawAt(fn, path)
 	}
-}
-
-func (m *listModel) openRaw(path []any) {
-	m.openRawAt(nil, path)
 }
 
 func (m *listModel) openRawAt(fn *smodel.FormNode, path []any) {

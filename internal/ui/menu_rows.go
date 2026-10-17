@@ -966,12 +966,18 @@ func searchIndex(lm *listModel, st *menuState) []row {
 		case smodel.KOneOf:
 			// first-definition field rows across variants (shared keys like
 			// a discriminator would otherwise repeat per variant), then the
-			// members no variant defines
+			// members no variant defines. The variant rows themselves are only
+			// useful while the value is unset (pick a type); with a value the
+			// field row already shows it and the signatures are duplicates.
+			val, hasVal := lm.doc.Get(path)
+			hasVal = hasVal && val != nil && !val.Null
 			known := map[string]bool{}
 			for _, v := range fn.Variants {
-				out = append(out, row{kind: rowVariant, fn: v, variant: v,
-					path: clonePath(path), idx: -1,
-					label: jsondoc.PathString(path) + "  " + VariantSignature(v)})
+				if !hasVal {
+					out = append(out, row{kind: rowVariant, fn: v, variant: v,
+						path: clonePath(path), idx: -1,
+						label: jsondoc.PathString(path) + "  " + VariantSignature(v)})
+				}
 				for _, c := range v.Children {
 					if known[c.Key] {
 						continue

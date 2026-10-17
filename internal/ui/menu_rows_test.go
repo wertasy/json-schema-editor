@@ -571,6 +571,43 @@ func TestSearchIndexAndFilter(t *testing.T) {
 	}
 }
 
+func TestSearchIndexVariantRowsOnlyWithoutValue(t *testing.T) {
+	count := func(rows []row) int {
+		n := 0
+		for _, r := range rows {
+			if r.kind == rowVariant && pathEq(r.path, []any{"auth"}) {
+				n++
+			}
+		}
+		return n
+	}
+
+	// Unset oneOf: the variant rows are useful searchable type targets.
+	lm := lmAt(testDoc())
+	if n := count(searchIndex(lm, lm.top())); n != 2 {
+		t.Fatalf("unset auth variants = %d, want 2", n)
+	}
+
+	// Set oneOf: the field row already carries the value; the signature rows
+	// would repeat the same path with "string"/"list of string".
+	doc := testDoc()
+	doc.Set([]any{"auth"}, tobj(tmem("token", tstr("secret"))))
+	lm2 := lmAt(doc)
+	all := searchIndex(lm2, lm2.top())
+	if n := count(all); n != 0 {
+		t.Fatalf("set auth variants = %d, want none", n)
+	}
+	found := false
+	for _, r := range all {
+		if r.fn != nil && r.fn.Key == "auth" && pathEq(r.path, []any{"auth"}) {
+			found = true
+		}
+	}
+	if !found {
+		t.Fatal("the value-bearing auth field row must stay searchable")
+	}
+}
+
 func TestSearchRankAndPathQueries(t *testing.T) {
 	lm := lmAt(testDoc())
 	all := searchIndex(lm, lm.top())

@@ -514,6 +514,8 @@ func (m *listModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case tea.WindowSizeMsg:
 		m.width, m.height = msg.Width, msg.Height
 		return m, nil
+	case rawEditorDoneMsg:
+		return m.applyExternalEdit(msg)
 	case tea.KeyMsg:
 		// ctrl+c always quits immediately without writing (contract).
 		if msg.Type == tea.KeyCtrlC {

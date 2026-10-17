@@ -110,6 +110,9 @@ func TestPathShapes(t *testing.T) {
 }
 
 func TestRemoteSchema(t *testing.T) {
+	// Ephemeral ports get reused; a shared cache can then serve another
+	// test's schema for the same URL.
+	t.Setenv("JSE_CACHE_DIR", t.TempDir())
 	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Write([]byte(schemaSrc))
 	}))
@@ -128,6 +131,7 @@ func TestRemoteSchema(t *testing.T) {
 }
 
 func TestRemoteRefInsideSchema(t *testing.T) {
+	t.Setenv("JSE_CACHE_DIR", t.TempDir())
 	refServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Write([]byte(`{"type": "integer", "minimum": 1024}`))
 	}))

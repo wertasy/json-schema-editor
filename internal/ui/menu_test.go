@@ -1,6 +1,9 @@
 package ui
 
 import (
+	"errors"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 
@@ -372,23 +375,24 @@ func TestMenuCtrlC(t *testing.T) {
 
 func TestMenuTextareaRaw(t *testing.T) {
 	doc := testDoc()
+	doc.Set([]any{"extra"}, tstr("old"))
 	m := newListModel(testModel(), doc, Options{})
 	m.Update(tea.WindowSizeMsg{Width: 100, Height: 30})
 	openRaw := func() {
 		t.Helper()
 		for i, r := range menuRows(m) {
-			if r.kind == rowRaw {
+			if r.kind == rowUnknown {
 				m.top().cursor = i
 			}
 		}
 		press(m, "enter")
 	}
-	// root Edit raw JSON row
+	// an unknown key opens the in-app raw editor for its value
 	openRaw()
 	if m.text == nil || !contains(m.View(), "Edit raw JSON") {
 		t.Fatalf("raw editor should open:\n%s", m.View())
 	}
-	if !contains(m.View(), `"name":"webapp"`) {
+	if !contains(m.View(), `"old"`) {
 		t.Fatalf("raw editor prefill missing:\n%s", m.View())
 	}
 	// invalid JSON is rejected
@@ -397,21 +401,75 @@ func TestMenuTextareaRaw(t *testing.T) {
 	if m.text == nil || m.text.err == "" {
 		t.Fatal("invalid JSON must keep the editor open with an error")
 	}
-	// valid JSON replaces the whole document
-	m.text.ta.SetValue(`{"name":"changed"}`)
+	// valid JSON replaces the value
+	m.text.ta.SetValue(`"new"`)
 	press(m, "ctrl+s")
 	if m.text != nil {
 		t.Fatal("apply must close the editor")
 	}
-	if s := strAt(t, doc, "name"); s != "changed" {
-		t.Fatalf("doc name = %q, want changed", s)
+	if s := strAt(t, doc, "extra"); s != "new" {
+		t.Fatalf("extra = %q, want new", s)
 	}
-	// empty at the root is refused
+	// empty removes the key
 	openRaw()
 	m.text.ta.SetValue("  ")
 	press(m, "ctrl+s")
-	if m.text == nil || !contains(m.View(), "cannot be empty") {
-		t.Fatalf("empty root raw must be refused:\n%s", m.View())
+	if m.text != nil {
+		t.Fatal("empty apply must close the editor")
+	}
+	if _, ok := doc.Get([]any{"extra"}); ok {
+		t.Fatal("empty raw value should remove the key")
+	}
+}
+
+func TestExternalRawEdit(t *testing.T) {
+	m := newListModel(testModel(), testDoc(), Options{})
+	m.Update(tea.WindowSizeMsg{Width: 100, Height: 30})
+
+	apply := func(path string, runErr error) *listModel {
+		t.Helper()
+		nm, _ := m.Update(rawEditorDoneMsg{path: path, err: runErr})
+		return nm.(*listModel)
+	}
+
+	// A successful edit replaces the document as one undo step.
+	path := filepath.Join(t.TempDir(), "raw.json")
+	if err := os.WriteFile(path, []byte(`{"name":"edited"}`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	m = apply(path, nil)
+	if s := strAt(t, m.doc, "name"); s != "edited" {
+		t.Fatalf("doc name = %q, want edited", s)
+	}
+	if !m.dirty() {
+		t.Fatal("external edit must mark the document dirty")
+	}
+	if _, err := os.Stat(path); !os.IsNotExist(err) {
+		t.Fatalf("temp file not removed: %v", err)
+	}
+	press(m, "u")
+	if s := strAt(t, m.doc, "name"); s != "webapp" {
+		t.Fatalf("undo name = %q, want webapp", s)
+	}
+
+	// Invalid JSON keeps the document and reports the parse error.
+	before := m.doc.Clone()
+	bad := filepath.Join(t.TempDir(), "bad.json")
+	if err := os.WriteFile(bad, []byte("{oops"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	m = apply(bad, nil)
+	if !nodesEqual(before, m.doc) {
+		t.Fatal("invalid JSON must not replace the document")
+	}
+	if !contains(m.notice, "invalid JSON") {
+		t.Fatalf("notice = %q, want an invalid JSON error", m.notice)
+	}
+
+	// An editor failure keeps the document too.
+	m = apply("missing", errors.New("boom"))
+	if !contains(m.notice, "boom") {
+		t.Fatalf("notice = %q, want the editor error", m.notice)
 	}
 }
 
