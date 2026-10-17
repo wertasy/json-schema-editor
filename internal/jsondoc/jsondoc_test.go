@@ -274,11 +274,36 @@ func TestSetOutOfRangePanics(t *testing.T) {
 			t.Fatal("out-of-range index should panic")
 		}
 	}()
-	n, err := Parse(strings.NewReader(`{"arr": [1]}`))
+	n, err := Parse(strings.NewReader(`{"a": [1]}`))
 	if err != nil {
 		t.Fatal(err)
 	}
-	n.Set([]any{"arr", 5}, FromAny(1))
+	n.Set([]any{"a", 5}, FromAny("x"))
+}
+
+func TestSetReplacesNullWithContainer(t *testing.T) {
+	// JSON null carries no value: the first write through it replaces it
+	// with the container the path demands (the oneOf placeholder flow:
+	// a null value, the list variant picked, then the first element lands).
+	n, err := Parse(strings.NewReader(`{"map": {"Host": null}, "obj": null}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	n.Set([]any{"map", "Host", 0}, FromAny("x"))
+	got, ok := n.Get([]any{"map", "Host", 0})
+	if !ok || got.Str == nil || *got.Str != "x" {
+		t.Fatalf("indexed write through null failed: ok=%v got=%+v", ok, got)
+	}
+	arr, _ := n.Get([]any{"map", "Host"})
+	if arr.Array == nil || len(*arr.Array) != 1 {
+		t.Fatalf("Host should be a 1-element array, got %+v", arr)
+	}
+
+	n.Set([]any{"obj", "sub"}, FromAny(7))
+	obj, _ := n.Get([]any{"obj"})
+	if obj.Object == nil {
+		t.Fatalf("null member should become an object, got %+v", obj)
+	}
 }
 
 func TestToFromAny(t *testing.T) {

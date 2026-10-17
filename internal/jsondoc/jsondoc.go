@@ -231,11 +231,11 @@ func memberNode(n *Node, key string) (*Node, bool) {
 	return nil, false
 }
 
-// empty reports whether n holds no value at all (zero Node) or JSON null,
+// empty reports whether n holds no value at all (zero Node or JSON null),
 // i.e. it can be replaced by a container without data loss.
 func empty(n *Node) bool {
-	return n == nil || (n.Object == nil && n.Array == nil && n.Str == nil &&
-		n.Num == nil && n.Bool == nil && !n.Null)
+	return n == nil || n.Null || (n.Object == nil && n.Array == nil &&
+		n.Str == nil && n.Num == nil && n.Bool == nil)
 }
 
 // containerFor returns a fresh node suited for indexing by p
