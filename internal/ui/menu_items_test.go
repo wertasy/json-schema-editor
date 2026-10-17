@@ -260,8 +260,10 @@ func TestMenuOneOfVariants(t *testing.T) {
 		t.Fatalf("picker should open on the current variant, cursor = %d", m.top().cursor)
 	}
 	press(m, "enter")
-	if len(m.stack) != 3 || !contains(m.View(), "$/auth") {
-		t.Fatalf("enter on current variant should drill:\n%s", m.View())
+	// the chosen editor replaces the picker in the stack: esc lands on the
+	// parent menu, and ctrl+t offers the type switch from the editor
+	if len(m.stack) != 2 || m.top().kind != menuObject || m.top().node == nil || m.top().node.Title != "Token" {
+		t.Fatalf("enter on current variant should re-enter its editor:\n%s", m.View())
 	}
 	press(m, "esc") // out of the token editor, back to the root list
 

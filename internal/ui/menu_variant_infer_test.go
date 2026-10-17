@@ -1001,3 +1001,120 @@ func TestMapListValueAddElementAfterTypeSwitch(t *testing.T) {
 		t.Fatalf("Host should be a 1-element array, got %+v", arr)
 	}
 }
+
+func TestMapNullSeedListAddConvertsCleanly(t *testing.T) {
+	// the user repro: a seeds the key with a null placeholder, the list
+	// variant is picked, the first element is added — the converted member
+	// must not keep the stale null flag (it rendered as "Host=null" even
+	// though the array data was there)
+	headers := &smodel.FormNode{Key: "headers", Title: "Headers", Kind: smodel.KMap,
+		Items: &smodel.FormNode{Key: "headers", Title: "Header", Kind: smodel.KOneOf, Variants: []*smodel.FormNode{
+			{Key: "headers", Title: "string", Kind: smodel.KScalar, JSONType: "string"},
+			{Key: "headers", Title: "list", Kind: smodel.KArray,
+				Items: &smodel.FormNode{Key: "headers", Kind: smodel.KScalar, JSONType: "string"}},
+		}}}
+	root := &smodel.FormNode{Key: "$", Title: "$", Kind: smodel.KObject,
+		Children: []*smodel.FormNode{headers}}
+	doc := tobj(tmem("headers", tobj()))
+	m := newListModel(root, doc, Options{})
+	m.Update(tea.WindowSizeMsg{Width: 100, Height: 30})
+	press(m, "enter")                         // headers menu
+	press(m, "a")                             // add key
+	m.add.ti.SetValue("Host")                 //
+	m.keyAdd(tea.KeyMsg{Type: tea.KeyEnter})  // seeds null + opens the value picker
+	press(m, "down")                          // list variant
+	press(m, "enter")                         // (null value: no confirm)
+	press(m, "enter")                         // < Add item >
+	m.edit.ti.SetValue("8.8.8.8")             //
+	press(m, "enter")                         // commit
+	press(m, "esc", "esc")                    // back out
+
+	v, ok := doc.Get([]any{"headers", "Host"})
+	if !ok || v == nil || v.Null {
+		t.Fatalf("Host node = %+v, want the converted array (no null flag)", v)
+	}
+	if v.Array == nil || len(*v.Array) != 1 || (*v.Array)[0].Str == nil || *(*v.Array)[0].Str != "8.8.8.8" {
+		t.Fatalf("Host = %s", smodel.EncodeValue(v))
+	}
+}
+
+func TestElementLabelsAndEditTitle(t *testing.T) {
+	// map rows label by document key; list elements as key[N]; the in-place
+	// edit line keeps that label (not the shared schema title)
+	headers := &smodel.FormNode{Key: "headers", Title: "Headers", Kind: smodel.KMap,
+		Items: &smodel.FormNode{Key: "headers", Title: "headers", Kind: smodel.KOneOf, Variants: []*smodel.FormNode{
+			{Key: "headers", Title: "string", Kind: smodel.KScalar, JSONType: "string"},
+			{Key: "headers", Title: "list", Kind: smodel.KArray,
+				Items: &smodel.FormNode{Key: "headers", Kind: smodel.KScalar, JSONType: "string"}},
+		}}}
+	root := &smodel.FormNode{Key: "$", Title: "$", Kind: smodel.KObject,
+		Children: []*smodel.FormNode{headers}}
+
+	// array value: the list editor labels elements Host[0], Host[1]
+	doc := tobj(tmem("headers", tobj(tmem("Host", tarr(tstr("a"), tstr("b"))))))
+	m := newListModel(root, doc, Options{})
+	m.Update(tea.WindowSizeMsg{Width: 100, Height: 30})
+	press(m, "enter") // headers menu
+	press(m, "enter") // Host -> pinned list variant editor
+	v := m.View()
+	if !contains(v, "Host[0]") || !contains(v, "Host[1]") {
+		t.Fatalf("list element labels missing:\n%s", v)
+	}
+	press(m, "down", "enter") // edit element 0 in place
+	v = m.View()
+	if !contains(v, "> Host[0]") {
+		t.Fatalf("edit line must keep the element label:\n%s", v)
+	}
+
+	// string value: the in-place edit line reads "Host", not the schema title
+	m2 := newListModel(root, tobj(tmem("headers", tobj(tmem("Host", tstr("canhui.wang"))))), Options{})
+	m2.Update(tea.WindowSizeMsg{Width: 100, Height: 30})
+	press(m2, "enter", "enter") // headers -> Host in-place edit
+	v2 := m2.View()
+	if !contains(v2, "> Host") || contains(v2, "> headers") {
+		t.Fatalf("edit line must keep the doc key:\n%s", v2)
+	}
+}
+
+func TestVariantEntryReplacesPickerInStack(t *testing.T) {
+	// picking a container variant from the picker replaces it in the stack:
+	// esc from the editor lands on the parent menu, not back on the picker
+	// (ctrl+t still offers the type switch from the editor)
+	headers := &smodel.FormNode{Key: "headers", Title: "Headers", Kind: smodel.KMap,
+		Items: &smodel.FormNode{Key: "headers", Title: "Header", Kind: smodel.KOneOf, Variants: []*smodel.FormNode{
+			{Key: "headers", Title: "string", Kind: smodel.KScalar, JSONType: "string"},
+			{Key: "headers", Title: "list", Kind: smodel.KArray,
+				Items: &smodel.FormNode{Key: "headers", Kind: smodel.KScalar, JSONType: "string"}},
+		}}}
+	root := &smodel.FormNode{Key: "$", Title: "$", Kind: smodel.KObject,
+		Children: []*smodel.FormNode{headers}}
+	doc := tobj(tmem("headers", tobj(tmem("Host", tstr("old")))))
+	m := newListModel(root, doc, Options{})
+	m.Update(tea.WindowSizeMsg{Width: 100, Height: 30})
+	press(m, "enter") // headers menu
+
+	path := []any{"headers", "Host"}
+	oneOf := headers.Items
+	m.push(oneOf, path) // the picker
+	list := oneOf.Variants[1]
+	m.enterVariant(row{kind: rowVariant, variant: list, path: clonePath(path), idx: -1})
+	// entering with an existing value confirms first; y answers through the
+	// real key handler (clears the overlay, then runs the replace)
+	if m.confirm == nil {
+		t.Fatal("switching an existing value should confirm")
+	}
+	press(m, "y")
+	if m.top().node != list {
+		t.Fatalf("top = %+v, want the list variant editor", m.top().node)
+	}
+	if m.top().oneOf != oneOf {
+		t.Fatal("the editor must carry its oneOf for the type switch")
+	}
+	if len(m.stack) != 3 || m.stack[1].node != headers {
+		t.Fatalf("stack = %d states, want [root, headers, list] without the picker", len(m.stack))
+	}
+	press(m, "esc") // items menu -> headers menu, not the picker
+	if m.top().node != headers {
+		t.Fatalf("esc landed on %v, want the headers menu", m.top().node)
+	}
+}

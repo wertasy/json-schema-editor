@@ -221,7 +221,9 @@ func mapItemRow(node *smodel.FormNode, parentPath []any, key string) row {
 	return row{kind: rowDrill, fn: items, path: p, idx: -1, label: label}
 }
 
-// itemRow maps array element i to an editable or drillable row.
+// itemRow maps array element i to an editable or drillable row. The row
+// label is "<key>[i]" (the document key owns the list), so element rows
+// read like addresses rather than repeating the shared item schema title.
 func itemRow(node *smodel.FormNode, parentPath []any, i int) row {
 	p := pathIdx(parentPath, i)
 	items := node.Items
@@ -229,10 +231,17 @@ func itemRow(node *smodel.FormNode, parentPath []any, i int) row {
 		// items schema unknown: fall back to raw editing of the element
 		items = &smodel.FormNode{Key: node.Key, Title: node.Title, Kind: smodel.KRaw}
 	}
-	if menuLeaf(items) {
-		return row{kind: rowField, fn: items, path: p, idx: i}
+	key := node.Key
+	if n := len(parentPath); n > 0 {
+		if s, ok := parentPath[n-1].(string); ok {
+			key = s
+		}
 	}
-	return row{kind: rowDrill, fn: items, path: p, idx: i}
+	label := fmt.Sprintf("%s[%d]", key, i)
+	if menuLeaf(items) {
+		return row{kind: rowField, fn: items, path: p, idx: i, label: label}
+	}
+	return row{kind: rowDrill, fn: items, path: p, idx: i, label: label}
 }
 
 // summary renders the right-hand value column for fn at path: the current

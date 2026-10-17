@@ -835,12 +835,18 @@ func (m *listModel) rowLine(r row, cursor bool) string {
 	// oneOf field row when a leaf variant is being edited (the picker pops
 	// back to the parent menu for leaf variants)
 	if m.edit != nil && !m.edit.isNew && pathEq(r.path, m.edit.path) {
+		title := r.fn.Title
+		if r.label != "" {
+			// map/array rows: the label is the document key (Host, Host[0]…);
+			// the shared value node carries no per-key title
+			title = r.label
+		}
 		switch {
 		case r.kind == rowField && r.fn == m.edit.fn:
-			return m.editLines(m.titleCol(r.fn.Title))
+			return m.editLines(m.titleCol(title))
 		case (r.kind == rowField || r.kind == rowDrill) && r.fn != nil &&
 			r.fn.Kind == smodel.KOneOf && variantContains(r.fn, m.edit.fn):
-			return m.editLines(m.titleCol(r.fn.Title))
+			return m.editLines(m.titleCol(title))
 		}
 	}
 	var left, right string
@@ -1191,6 +1197,8 @@ func (m *listModel) variantValueSummary(v *smodel.FormNode, val *jsondoc.Node) s
 		if val.Object != nil {
 			return objectSummary(v, val)
 		}
+	case smodel.KArray:
+		return arraySummary(val)
 	case smodel.KEnum:
 		enc := smodel.EncodeValue(val)
 		for _, o := range v.Enum {

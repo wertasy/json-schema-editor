@@ -713,6 +713,11 @@ func (m *listModel) enterVariant(r row) tea.Cmd {
 func (m *listModel) enterVariantEditor(variant *smodel.FormNode, path []any, oneOf *smodel.FormNode) {
 	switch variant.Kind {
 	case smodel.KObject, smodel.KArray:
+		// the variant is chosen: the editor replaces the picker (esc lands
+		// on the parent menu; ctrl+t still offers the type switch)
+		if m.top() != nil && m.top().kind == menuOneOf && len(m.stack) > 1 {
+			m.stack = m.stack[:len(m.stack)-1]
+		}
 		m.push(variant, path)
 		m.top().oneOf = oneOf // ctrl+t offers the type switch
 	case smodel.KBoolean:
