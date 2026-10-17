@@ -73,6 +73,24 @@ func TestParseWriteRoundtrip(t *testing.T) {
 	}
 }
 
+func TestCompact(t *testing.T) {
+	n, err := Parse(strings.NewReader(roundtripSrc))
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := `{"name":"alpha","port":8080,"ratio":1.0,"big":1e3,"enabled":true,"nothing":null,"nested":{"a/b":"slash key","m~n":"tilde key","名字":"unicode"},"list":["x",42,{"inner":true},[]],"empty_obj":{},"empty_arr":[]}`
+	if got := n.Compact(); got != want {
+		t.Fatalf("Compact =\n%s\nwant\n%s", got, want)
+	}
+	sub, ok := n.Get([]any{"nested"})
+	if !ok {
+		t.Fatal("nested missing")
+	}
+	if got, want := sub.Compact(), `{"a/b":"slash key","m~n":"tilde key","名字":"unicode"}`; got != want {
+		t.Fatalf("subtree Compact = %q, want %q", got, want)
+	}
+}
+
 func TestGetSetRemoveAppend(t *testing.T) {
 	n, err := Parse(strings.NewReader(`{"a": {"b": 1}}`))
 	if err != nil {

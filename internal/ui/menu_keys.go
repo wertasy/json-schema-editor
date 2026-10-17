@@ -40,6 +40,12 @@ func (m *listModel) keyList(msg tea.KeyMsg) tea.Cmd {
 		m.moveToValue(rows, 1)
 	case "p":
 		m.moveToValue(rows, -1)
+	case "y":
+		m.copyRow(r, false)
+	case "Y":
+		m.copyRow(r, true)
+	case "z":
+		m.toggleEmptyKeys()
 	case "enter", "right", "l":
 		if (msg.String() == "right" || msg.String() == "l") && r.kind == rowField && r.fn.Kind == smodel.KEnum {
 			m.cycleEnum(r, 1)
@@ -92,6 +98,61 @@ func (m *listModel) keyList(msg tea.KeyMsg) tea.Cmd {
 		return m.save()
 	}
 	return nil
+}
+
+// toggleEmptyKeys flips the z filter. The cursor follows its row when that
+// row stays visible; when it was a hidden empty key, the next surviving row
+// (clamped at the end) takes the selection.
+func (m *listModel) toggleEmptyKeys() {
+	st := m.top()
+	oldRows := menuRows(m)
+	m.clampCursor(oldRows)
+	var cur row
+	hasCur := st.cursor >= 0 && st.cursor < len(oldRows)
+	if hasCur {
+		cur = oldRows[st.cursor]
+	}
+	m.hideEmpty = !m.hideEmpty
+	rows := menuRows(m)
+	if hasCur {
+		if i := indexSameRow(rows, cur); i >= 0 {
+			st.cursor = i
+		} else {
+			// The cursor's row vanished: land on the next row that survives
+			// the filter (Save/raw action rows included), not merely the same
+			// numeric position.
+			for j := st.cursor + 1; j < len(oldRows); j++ {
+				if i := indexSameRow(rows, oldRows[j]); i >= 0 {
+					st.cursor = i
+					break
+				}
+			}
+		}
+	}
+	m.clampCursor(rows)
+	if m.hideEmpty {
+		m.notice = "empty fields hidden · z shows them"
+	} else {
+		m.notice = "empty fields shown"
+	}
+}
+
+// indexSameRow finds the line sameMenuRow identifies, -1 when it is gone.
+func indexSameRow(rows []row, want row) int {
+	for i, r := range rows {
+		if sameMenuRow(want, r) {
+			return i
+		}
+	}
+	return -1
+}
+
+// sameMenuRow reports whether a and b are the same selectable line: kind,
+// document position, schema node and label. Variant rows share one path, so
+// the variant node breaks the tie; synthetic rows compare by label.
+func sameMenuRow(a, b row) bool {
+	return a.kind == b.kind && a.idx == b.idx && pathEq(a.path, b.path) &&
+		a.fn == b.fn && a.variant == b.variant && a.label == b.label
 }
 
 // activate performs the enter action for a row.

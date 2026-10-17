@@ -23,28 +23,40 @@ import (
 
 const menuHelp = "↑/↓ move · enter edit/open · esc back · ctrl+s save · / search · ? help"
 
-// helpLines is the full key reference shown by the "?" overlay.
-var helpLines = []string{
-	"↑/↓/j/k      move (wraps at both ends; ctrl+j/k in search and issues)",
-	"n / p        next / previous key with a non-null value",
-	"gg / G       jump to first / last row (Home/End too)",
-	"enter / → / l   edit field · open submenu",
-	"← / h        back one level",
-	"esc / q      cancel / back — q is a full alias outside text inputs;",
-	"             at the root: quit, asking to save when the doc changed",
-	"space        toggle boolean / enum member",
-	"d / delete   delete the selected pair (required keys refused)",
-	"a / A        add a schema-less key before / after the cursor",
-	"J / K        move the item under the cursor down / up",
-	"ctrl+t       switch the variant type of a oneOf value",
-	"u / ctrl+r   undo / redo",
-	"ctrl+s       save (stay in the session)",
-	"/            search below the current path",
-	"r            search & replace string values",
-	"alt+x        regex toggle (default on): match the query as a regular expression ($1 groups in replace)",
-	"@ / .        record / play a macro",
-	"?            open/close this help",
-	"ctrl+c       quit without saving (exit 130)",
+// helpEntry is one row of the "?" key reference. keys is the left column;
+// empty means a continuation line aligned under the descriptions.
+type helpEntry struct {
+	keys string
+	desc string
+}
+
+// helpEntries is the full key reference shown by the "?" overlay. The render
+// pads the key column instead of writing literal tabs: tabs are expanded by
+// the terminal without the renderer knowing their width, which breaks the
+// cell accounting used for clipping and the end-of-line erase.
+var helpEntries = []helpEntry{
+	{"up / down / j / k", "move (wraps at both ends; ctrl+j/k in search and issues)"},
+	{"n / p", "next / previous key with a non-null value"},
+	{"y / Y", "copy value / \"key\": value (JSON) to the clipboard"},
+	{"z", "show/hide fields with no value (null/unset)"},
+	{"gg / G", "jump to first / last row (Home/End too)"},
+	{"enter / right / l", "edit field · open submenu"},
+	{"left / h", "back one level"},
+	{"esc / q", "cancel / back — q is a full alias outside text inputs;"},
+	{"", "at the root: quit, asking to save when the doc changed"},
+	{"space", "toggle boolean / enum member"},
+	{"d / delete", "delete the selected pair (required keys refused)"},
+	{"a / A", "add a schema-less key before / after the cursor"},
+	{"J / K", "move the item under the cursor down / up"},
+	{"ctrl+t", "switch the variant type of a oneOf value"},
+	{"u / ctrl+r", "undo / redo"},
+	{"ctrl+s", "save (stay in the session)"},
+	{"/", "search below the current path"},
+	{"r", "search & replace string values"},
+	{"alt+x", "regex toggle (default on): match the query as a regular expression ($1 groups in replace)"},
+	{"@ / .", "record / play a macro"},
+	{"?", "open/close this help"},
+	{"ctrl+c", "quit without saving (exit 130)"},
 }
 
 const overlayHelp = "enter select · esc cancel"
@@ -201,6 +213,7 @@ type listModel struct {
 	errs          *errsState
 	confirm       *confirmState
 	help          bool // "?" keyboard-help overlay
+	hideEmpty     bool // z filter: hide object keys with no document value
 	search        searchState
 	menuCache     map[*smodel.FormNode]*smodel.FormNode
 	notice        string          // transient list-mode message, cleared on the next key
@@ -670,7 +683,28 @@ func (m *listModel) listView() string {
 	if m.notice != "" {
 		h--
 	}
+	if m.hideEmpty {
+		h--
+	}
 	m.writeRows(&b, rows, h)
+	if m.hideEmpty {
+		b.WriteString(clipDisplay("  "+mDim.Render("[empty hidden]"), m.width-1))
+		b.WriteByte('\n')
+	}
+	// Pin the bottom block (row description + transient notice) directly
+	// above the hint bar: fill the gap below the rows first, so notices do not
+	// float in the middle of a short menu. No trailing newline after the hint
+	// bar, or the renderer would treat it as an extra line and scroll the
+	// title out of view.
+	bottom := len(descLines)
+	if m.notice != "" {
+		bottom++
+	}
+	lines := strings.Count(b.String(), "\n")
+	for lines < m.height-1-bottom {
+		b.WriteByte('\n')
+		lines++
+	}
 	for _, line := range descLines {
 		b.WriteString(clipDisplay(mHelp.Render(line), m.width-1))
 		b.WriteByte('\n')
@@ -678,15 +712,6 @@ func (m *listModel) listView() string {
 	if m.notice != "" {
 		b.WriteString(clipDisplay(mErr.Render(clipRunes(m.notice, m.width)), m.width-1))
 		b.WriteByte('\n')
-	}
-	// pin the hint bar to the last terminal row: fill the gap below the rows
-	// instead of letting the bar float right under a short menu. No trailing
-	// newline, or the renderer would treat it as an extra line and scroll the
-	// title out of view.
-	lines := strings.Count(b.String(), "\n")
-	for lines < m.height-1 {
-		b.WriteByte('\n')
-		lines++
 	}
 	b.WriteString(m.helpLine())
 	return b.String()
@@ -757,8 +782,19 @@ func (m *listModel) helpView() string {
 	var b strings.Builder
 	b.WriteString(mTitle.Render("Keyboard help"))
 	b.WriteString("\n\n")
-	for _, l := range helpLines {
-		b.WriteString(clipDisplay(mHelp.Render(l), m.width-1))
+	for _, e := range helpEntries {
+		var line string
+		if m.width-1 < titleColWidth+12 {
+			// Narrow terminal: do not waste most of the row on padding.
+			line = e.keys
+			if line != "" {
+				line += " "
+			}
+			line += e.desc
+		} else {
+			line = m.titleCol(e.keys) + e.desc
+		}
+		b.WriteString(clipDisplay(mHelp.Render(line), m.width-1))
 		b.WriteByte('\n')
 	}
 	b.WriteString(m.recHint("esc/? close"))
@@ -955,12 +991,15 @@ func (m *listModel) dirty() bool {
 	return !nodesEqual(m.doc, m.baseline)
 }
 
-// titleCol pads the left column to 24 cells.
+// titleColWidth is the menu and keyboard-help left column width.
+const titleColWidth = 24
+
+// titleCol pads the left column to titleColWidth cells.
 func (m *listModel) titleCol(left string) string {
-	if w := displayWidth(left); w >= 24 {
+	if w := displayWidth(left); w >= titleColWidth {
 		return left + " "
 	} else {
-		return left + strings.Repeat(" ", 24-w)
+		return left + strings.Repeat(" ", titleColWidth-w)
 	}
 }
 
@@ -1223,11 +1262,29 @@ func isPathPrefix(prefix, path []any) bool {
 // jumpToPath rebuilds the navigation stack down to path and puts the cursor on
 // the row representing it (search-jump semantics).
 func (m *listModel) jumpToPath(path []any) {
+	m.revealHiddenEmpty(path)
 	m.stack = rebuildStack(m.model, m.doc, path)
 	rows := menuRows(m)
 	m.clampCursor(rows)
 	m.top().cursor = cursorByPath(rows, path)
 	m.top().offset = 0
+}
+
+// revealHiddenEmpty turns the z filter off when path names an object key with
+// no document value, so a search or issue jump always lands on a visible row
+// instead of its parent.
+func (m *listModel) revealHiddenEmpty(path []any) {
+	if !m.hideEmpty || m.doc == nil || len(path) == 0 {
+		return
+	}
+	if _, ok := path[len(path)-1].(string); !ok {
+		return
+	}
+	v, ok := m.doc.Get(path)
+	if !ok || v == nil || v.Null {
+		m.hideEmpty = false
+		m.notice = "empty fields shown"
+	}
 }
 
 // cursorByPath finds the row for path: an exact match first, else the deepest

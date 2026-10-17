@@ -738,3 +738,63 @@ func (n *Node) String() string {
 	}
 	return buf.String()
 }
+
+// Compact renders the value as one-line JSON, preserving member order and
+// exact numeric literals. The menu's copy shortcuts use it for non-string
+// values and for the JSON side of a `"key": value` pair.
+func (n *Node) Compact() string {
+	var b strings.Builder
+	writeCompact(&b, n)
+	return b.String()
+}
+
+func writeCompact(b *strings.Builder, n *Node) {
+	switch {
+	case n == nil:
+		b.WriteString("null")
+	case n.Object != nil:
+		b.WriteByte('{')
+		for i, m := range *n.Object {
+			if i > 0 {
+				b.WriteByte(',')
+			}
+			raw, err := json.Marshal(m.Key)
+			if err != nil {
+				b.WriteString(`""`)
+			} else {
+				b.Write(raw)
+			}
+			b.WriteByte(':')
+			writeCompact(b, m.Val)
+		}
+		b.WriteByte('}')
+	case n.Array != nil:
+		b.WriteByte('[')
+		for i, it := range *n.Array {
+			if i > 0 {
+				b.WriteByte(',')
+			}
+			writeCompact(b, it)
+		}
+		b.WriteByte(']')
+	case n.Str != nil:
+		raw, err := json.Marshal(*n.Str)
+		if err != nil {
+			b.WriteString(`""`)
+		} else {
+			b.Write(raw)
+		}
+	case n.Num != nil:
+		b.WriteString(n.Num.String())
+	case n.Bool != nil:
+		if *n.Bool {
+			b.WriteString("true")
+		} else {
+			b.WriteString("false")
+		}
+	case n.Null:
+		b.WriteString("null")
+	default:
+		b.WriteString("null")
+	}
+}

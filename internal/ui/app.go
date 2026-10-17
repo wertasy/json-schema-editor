@@ -24,6 +24,9 @@ type Options struct {
 	// through it (TUI ctrl+s, the Save-and-exit row, the accessible save);
 	// nil makes saving impossible.
 	Save func(*jsondoc.Node) error
+	// Copy writes text to the system clipboard (menu y/Y). nil uses the
+	// platform helper (wl-copy, xclip/xsel, pbcopy, or clip.exe).
+	Copy func(string) error
 	// Status is a warning line shown on the root screen (e.g. compile
 	// failure).
 	Status string

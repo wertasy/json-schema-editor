@@ -172,6 +172,9 @@ func menuRowsFor(lm *listModel, st *menuState) []row {
 				path: clonePath(st.path), idx: -1})
 		}
 	}
+	if lm.hideEmpty {
+		rows = lm.withoutEmptyKeys(rows)
+	}
 	if len(rows) == 0 {
 		rows = append(rows, row{kind: rowNoItems, idx: -1, label: "( nothing here )"})
 	}
@@ -209,6 +212,40 @@ func (m *listModel) valueRow(r row) bool {
 	}
 	v, ok := m.doc.Get(r.path) // a nil path is the root scalar itself
 	return ok && v != nil && !v.Null
+}
+
+// emptyKeyRow reports whether r is an object member row with no document
+// value: a schema field, map member or unknown key that is absent or explicit
+// null. This is valueRow's inverse for key rows: a non-null default does not
+// count as a value (the key is still unset in the document). Array elements
+// are addressed by index, not key, and are never filtered.
+func (m *listModel) emptyKeyRow(r row) bool {
+	if m.doc == nil || len(r.path) == 0 {
+		return false
+	}
+	if _, ok := r.path[len(r.path)-1].(string); !ok {
+		return false
+	}
+	switch r.kind {
+	case rowField, rowDrill, rowUnknown:
+	default:
+		return false
+	}
+	v, ok := m.doc.Get(r.path)
+	return !ok || v == nil || v.Null
+}
+
+// withoutEmptyKeys drops the rows the z filter hides. Rows built for one
+// menu are a fresh slice, so it can compact in place.
+func (m *listModel) withoutEmptyKeys(rows []row) []row {
+	out := rows[:0]
+	for _, r := range rows {
+		if m.emptyKeyRow(r) {
+			continue
+		}
+		out = append(out, r)
+	}
+	return out
 }
 
 // moveToValue moves the cursor to the next (delta > 0) or previous

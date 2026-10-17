@@ -4,6 +4,7 @@ package ui
 // above the help bar for the highlighted row.
 
 import (
+	"strings"
 	"testing"
 
 	tea "github.com/charmbracelet/bubbletea"
@@ -44,6 +45,89 @@ func TestHelpOverlay(t *testing.T) {
 	}
 	if v := m.View(); !contains(v, "Name") {
 		t.Fatalf("list must be back after closing help:\n%s", v)
+	}
+}
+
+// TestNoticePinnedAboveHelp pins the bottom stack: schema description, then
+// the transient notice, then the hint bar, regardless of how short the menu
+// is. Previously the notice sat right under the rows and blank padding opened
+// between it and the help bar.
+func TestNoticePinnedAboveHelp(t *testing.T) {
+	root := testModel()
+	root.Children[0].Desc = "name help" // Name row description
+	m := newListModel(root, testDoc(), Options{})
+	m.Update(tea.WindowSizeMsg{Width: 100, Height: 30})
+	m.notice = "empty fields hidden · z shows them"
+
+	lines := strings.Split(m.View(), "\n")
+	if len(lines) != 30 {
+		t.Fatalf("view has %d lines, want 30", len(lines))
+	}
+	if !contains(lines[len(lines)-1], "? help") {
+		t.Fatalf("help bar is not on the last row:\n%s", m.View())
+	}
+	if !contains(lines[len(lines)-2], "empty fields hidden · z shows them") {
+		t.Fatalf("notice is not directly above the help bar:\n%s", m.View())
+	}
+	if !contains(lines[len(lines)-3], "name help") {
+		t.Fatalf("description is not above the notice:\n%s", m.View())
+	}
+
+	// Without a description the notice still hugs the help bar.
+	m2 := newListModel(testModel(), testDoc(), Options{})
+	m2.Update(tea.WindowSizeMsg{Width: 100, Height: 30})
+	m2.notice = "Saved"
+	lines = strings.Split(m2.View(), "\n")
+	if !contains(lines[len(lines)-2], "Saved") {
+		t.Fatalf("notice is not directly above the help bar:\n%s", m2.View())
+	}
+}
+
+// TestHelpOverlayKeyColumn pins the two-column help layout: descriptions
+// start at the fixed title column (24 cells), and continuation lines align
+// under them. On narrow terminals the padding collapses so the description
+// still gets room.
+func TestHelpOverlayKeyColumn(t *testing.T) {
+	m := newListModel(testModel(), testDoc(), Options{})
+	m.Update(tea.WindowSizeMsg{Width: 120, Height: 40})
+	press(m, "?")
+
+	lines := strings.Split(m.View(), "\n")
+	find := func(needle string) string {
+		t.Helper()
+		for _, l := range lines {
+			if strings.Contains(l, needle) {
+				return l
+			}
+		}
+		t.Fatalf("help line with %q missing:\n%s", needle, m.View())
+		return ""
+	}
+	line := find("move (wraps")
+	at := strings.Index(line, "move (wraps")
+	if !strings.Contains(line[:at], "up / down / j / k") {
+		t.Fatalf("key column lost its key:\n%s", line)
+	}
+	if got := displayWidth(line[:at]); got != titleColWidth {
+		t.Fatalf("description starts at %d cells, want %d:\n%s", got, titleColWidth, line)
+	}
+
+	cont := find("at the root: quit")
+	at = strings.Index(cont, "at the root: quit")
+	if got := displayWidth(cont[:at]); got != titleColWidth {
+		t.Fatalf("continuation starts at %d cells, want %d:\n%s", got, titleColWidth, cont)
+	}
+
+	// Narrow terminals collapse the padding instead of clipping the text away.
+	m.Update(tea.WindowSizeMsg{Width: 30, Height: 40})
+	narrow := m.View()
+	if !contains(narrow, "move (wraps") {
+		t.Fatalf("narrow help lost the description:\n%s", narrow)
+	}
+	for _, l := range strings.Split(strings.TrimSuffix(narrow, "\n"), "\n") {
+		if got := displayWidth(l); got > 29 {
+			t.Fatalf("narrow help line is %d cells, want <= 29: %q", got, l)
+		}
 	}
 }
 
