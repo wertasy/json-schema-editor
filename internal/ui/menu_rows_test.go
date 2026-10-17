@@ -608,6 +608,61 @@ func TestSearchIndexVariantRowsOnlyWithoutValue(t *testing.T) {
 	}
 }
 
+func TestSearchIndexOnlyMatchedVariantFields(t *testing.T) {
+	// an array of discriminated variants (sing-box inbounds): each item's
+	// current type defines its fields, so a foreign variant's fields must not
+	// be indexed under it
+	scalar := func(key, title string) *smodel.FormNode {
+		return &smodel.FormNode{Key: key, Title: title, Kind: smodel.KScalar, JSONType: "string"}
+	}
+	root := &smodel.FormNode{Key: "$", Kind: smodel.KObject, Children: []*smodel.FormNode{
+		{Key: "inbounds", Title: "Inbounds", Kind: smodel.KArray, Items: &smodel.FormNode{
+			Key: "inbounds", Kind: smodel.KOneOf, Variants: []*smodel.FormNode{
+				{Key: "inbounds", Title: "Direct", Kind: smodel.KObject, Children: []*smodel.FormNode{
+					{Key: "type", Title: "Type", Kind: smodel.KEnum, Required: true, Enum: tenum("direct")},
+					scalar("listen_port", "Listen port"),
+				}},
+				{Key: "inbounds", Title: "Tun", Kind: smodel.KObject, Children: []*smodel.FormNode{
+					{Key: "type", Title: "Type", Kind: smodel.KEnum, Required: true, Enum: tenum("tun")},
+					{Key: "include_package", Title: "Include package", Kind: smodel.KOneOf, Variants: []*smodel.FormNode{
+						scalar("include_package", "Include package"),
+						{Key: "include_package", Title: "Include package", Kind: smodel.KArray,
+							Items: scalar("include_package", "Include package")},
+					}},
+				}},
+			}},
+		}},
+	}
+	doc := tobj(tmem("inbounds", tarr(
+		tobj(tmem("type", tstr("direct")), tmem("listen_port", tstr("1080"))),
+		tobj(tmem("type", tstr("tun")), tmem("include_package", tarr(tstr("com.foo")))),
+	)))
+	lm := &listModel{model: root, doc: doc, width: 80, height: 24}
+	lm.stack = []*menuState{{kind: menuObject, node: root}}
+
+	var foreign, own int
+	for _, r := range searchIndex(lm, lm.top()) {
+		switch {
+		case pathEq(r.path, []any{"inbounds", 0, "include_package"}):
+			foreign++
+		case pathEq(r.path, []any{"inbounds", 1, "include_package"}):
+			own++
+		}
+	}
+	if foreign != 0 {
+		t.Errorf("direct inbound indexed %d tun fields", foreign)
+	}
+	if own != 1 {
+		t.Errorf("tun include_package rows = %d, want 1", own)
+	}
+
+	// the direct inbound's own field survives the restriction
+	hits := filterSearch(lm, searchIndex(lm, lm.top()), "listen_port", true, nil)
+	if len(hits) != 1 || !pathEq(hits[0].path, []any{"inbounds", 0, "listen_port"}) {
+		t.Errorf("listen_port hits = %+v, want the direct item only", hits)
+	}
+}
+
 func TestSearchRankAndPathQueries(t *testing.T) {
 	lm := lmAt(testDoc())
 	all := searchIndex(lm, lm.top())

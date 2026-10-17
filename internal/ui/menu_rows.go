@@ -979,9 +979,11 @@ func rebuildStack(root *smodel.FormNode, doc *jsondoc.Node, path []any) []*menuS
 // searchIndex walks the schema subtree below st — the menu the breadcrumb
 // points at — collecting object children, the actual array items and oneOf
 // variant subtrees, plus the document keys the schema does not define
-// (nested values included) so they stay searchable and replaceable. Labels
-// are "<path>  <overview>" using the same value column the menus show,
-// so hits read as jump targets; variant rows carry their structural
+// (nested values included) so they stay searchable and replaceable. A oneOf
+// whose value fits exactly one variant contributes only that variant's
+// fields: the other variants are not part of the document's current type.
+// Labels are "<path>  <overview>" using the same value column the menus
+// show, so hits read as jump targets; variant rows carry their structural
 // signature instead of fallback titles like "variant 2", which carry no
 // meaning for the user.
 func searchIndex(lm *listModel, st *menuState) []row {
@@ -1008,8 +1010,22 @@ func searchIndex(lm *listModel, st *menuState) []row {
 			// field row already shows it and the signatures are duplicates.
 			val, hasVal := lm.doc.Get(path)
 			hasVal = hasVal && val != nil && !val.Null
+			// A value that fits exactly one variant makes that variant the
+			// document's current type: only its fields belong under this path.
+			// Unset, ambiguous and non-conforming values keep the union (the
+			// user has not picked a type yet, or the document is invalid).
+			variants := fn.Variants
+			if hasVal {
+				cands := dynamicVariants(fn)
+				if cands == nil {
+					cands = fn.Variants
+				}
+				if matched := matchVariantList(cands, val); len(matched) == 1 {
+					variants = matched
+				}
+			}
 			known := map[string]bool{}
-			for _, v := range fn.Variants {
+			for _, v := range variants {
 				if !hasVal {
 					out = append(out, row{kind: rowVariant, fn: v, variant: v,
 						path: clonePath(path), idx: -1,
