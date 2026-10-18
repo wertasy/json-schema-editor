@@ -1141,14 +1141,6 @@ func (m *listModel) completions(fn *smodel.FormNode, path []any) []string {
 			out = append(out, v)
 		}
 	}
-	// schema-provided values (a collapsed oneOf/anyOf of strings, e.g. the
-	// workflow shell builtins) complete the document-derived ones
-	for _, v := range fn.Suggestions {
-		if v != "" && !sameSeen[v] && !otherSeen[v] {
-			sameSeen[v] = true
-			out = append(out, v)
-		}
-	}
 	return out
 }
 
@@ -1230,12 +1222,23 @@ func tagOfNode(n *jsondoc.Node) string {
 }
 
 // refreshEditSuggestions re-filters the candidates by the current input and
-// resets the tab cycle.
+// resets the tab cycle. A field with schema-provided options completes only
+// those while the typed text keeps matching one of them; once it matches
+// none, the usual document-derived candidates take over so free text stays
+// completable.
 func (m *listModel) refreshEditSuggestions() {
 	if m.edit == nil {
 		return
 	}
-	m.edit.sugs = filterCompletions(m.edit.cands, m.edit.ti.Value())
+	prefix := m.edit.ti.Value()
+	if fn := m.edit.fn; fn != nil && fn.TagRef == "" && len(fn.Suggestions) > 0 {
+		if opts := filterCompletions(fn.Suggestions, prefix); len(opts) > 0 {
+			m.edit.sugs = opts
+			m.edit.sugIdx = -1
+			return
+		}
+	}
+	m.edit.sugs = filterCompletions(m.edit.cands, prefix)
 	m.edit.sugIdx = -1
 }
 

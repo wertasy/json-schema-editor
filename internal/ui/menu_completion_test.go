@@ -144,8 +144,9 @@ func TestCompletionAllDocumentStrings(t *testing.T) {
 }
 
 // TestStringComboEditsAsTextWithTabOptions: a shell-style anyOf (open string
-// plus a set of strings) edits as free text, and the listed values are tab
-// completions rather than a variant picker.
+// plus a set of strings) edits as free text, the listed values are the only
+// tab completions while the text matches one of them, and document-derived
+// candidates take over once it matches none.
 func TestStringComboEditsAsTextWithTabOptions(t *testing.T) {
 	root := mustSchema(t, `{
   "type": "object",
@@ -155,10 +156,15 @@ func TestStringComboEditsAsTextWithTabOptions(t *testing.T) {
         {"type": "string"},
         {"type": "string", "enum": ["bash", "pwsh", "python", "sh", "cmd", "powershell"]}
       ]}
-    }}}}
+    }}}},
+    "jobs": {"type": "object", "properties": {"build": {"type": "object", "properties": {
+      "shell": {"type": "string"}}}}}
   }
 }`)
-	doc := tobj(tmem("defaults", tobj(tmem("run", tobj(tmem("shell", tstr("bash")))))))
+	// a document value under the same key elsewhere: only the fallback may use it
+	doc := tobj(
+		tmem("defaults", tobj(tmem("run", tobj(tmem("shell", tstr("bash")))))),
+		tmem("jobs", tobj(tmem("build", tobj(tmem("shell", tstr("custom-shell")))))))
 	m := newListModel(root, doc, Options{})
 	m.Update(tea.WindowSizeMsg{Width: 120, Height: 30})
 
@@ -166,17 +172,21 @@ func TestStringComboEditsAsTextWithTabOptions(t *testing.T) {
 	if m.edit == nil || m.edit.fn.Key != "shell" {
 		t.Fatalf("shell must edit as text, edit = %+v\n%s", m.edit, m.View())
 	}
-	if got := strings.Join(m.edit.cands, " "); got != "bash pwsh python sh cmd powershell" {
-		t.Fatalf("candidates = %q, want the enum options", got)
-	}
-	if v := m.View(); !contains(v, "tab: ") || !contains(v, "shell") {
-		t.Fatalf("completion hint missing:\n%s", v)
+	if got := strings.Join(m.edit.cands, " "); got != "custom-shell" {
+		t.Fatalf("document candidates = %q, want only custom-shell", got)
 	}
 
-	// tab completes to a listed value
-	press(m, "ctrl+u", "p", "w")
+	// matching text completes from the schema options alone, never the document
+	press(m, "ctrl+u")
+	if got := strings.Join(m.edit.sugs, " "); got != "bash pwsh python sh cmd powershell" {
+		t.Fatalf("suggestions = %q, want the enum options only", got)
+	}
+	press(m, "p", "w")
 	if len(m.edit.sugs) != 1 || m.edit.sugs[0] != "pwsh" {
 		t.Fatalf("filtered suggestions = %v, want [pwsh]", m.edit.sugs)
+	}
+	if v := m.View(); !contains(v, "tab: ") || contains(v, "custom-shell") {
+		t.Fatalf("hint line must list the option only:\n%s", v)
 	}
 	press(m, "tab", "enter")
 	if m.edit != nil {
@@ -184,6 +194,16 @@ func TestStringComboEditsAsTextWithTabOptions(t *testing.T) {
 	}
 	if got := strAt(t, doc, "defaults", "run", "shell"); got != "pwsh" {
 		t.Fatalf("shell = %q, want pwsh", got)
+	}
+
+	// a prefix no option matches falls back to the document-derived candidates
+	press(m, "enter", "ctrl+u", "c", "u")
+	if got := strings.Join(m.edit.sugs, " "); got != "custom-shell" {
+		t.Fatalf("fallback suggestions = %q, want [custom-shell]", m.edit.sugs)
+	}
+	press(m, "tab", "enter")
+	if got := strAt(t, doc, "defaults", "run", "shell"); got != "custom-shell" {
+		t.Fatalf("shell = %q, want custom-shell", got)
 	}
 
 	// an unlisted value is still accepted (the open branch allows it)
