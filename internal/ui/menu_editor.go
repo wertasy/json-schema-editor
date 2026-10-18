@@ -117,12 +117,12 @@ func (m *listModel) applyExternalEdit(msg rawEditorDoneMsg) (tea.Model, tea.Cmd)
 		return m.applyExternalValue(edit, data)
 	}
 
+	pre := m.doc.Clone()
 	nd, err := m.opts.decodeRawDoc(data)
 	if err != nil {
 		m.notice = "editor: invalid " + m.opts.rawLabel() + ": " + err.Error()
 		return m, nil
 	}
-	pre := m.doc.Clone()
 	if nodesEqual(pre, nd) {
 		m.notice = "Raw " + m.opts.rawLabel() + " unchanged"
 		return m, nil

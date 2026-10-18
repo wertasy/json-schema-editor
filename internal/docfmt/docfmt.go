@@ -28,6 +28,10 @@ type Format interface {
 	Extensions() []string
 	// Load parses one document.
 	Load(data []byte) (Session, error)
+	// Adopt parses data and binds it to doc, the live tree: the parsed tree
+	// replaces *doc in place and the returned session carries the new
+	// metadata (comments, directives) for that same tree.
+	Adopt(data []byte, doc *jsondoc.Node) (Session, error)
 	// NewEmpty returns the session for a file that does not exist yet: an
 	// empty object document.
 	NewEmpty() Session
@@ -160,6 +164,15 @@ func (jsoncFormat) NewEmpty() Session {
 	return jsoncSession{&jsondoc.Node{Object: &members}, nil}
 }
 
+func (jsoncFormat) Adopt(data []byte, doc *jsondoc.Node) (Session, error) {
+	nd, meta, err := jsoncdoc.Parse(data)
+	if err != nil {
+		return nil, err
+	}
+	*doc = *nd
+	return jsoncSession{doc, meta}, nil
+}
+
 type jsoncSession struct {
 	doc  *jsondoc.Node
 	meta *jsoncdoc.Meta
@@ -195,6 +208,15 @@ func (yamlFormat) Load(data []byte) (Session, error) {
 func (yamlFormat) NewEmpty() Session {
 	members := []jsondoc.Member{}
 	return yamlSession{&jsondoc.Node{Object: &members}, &yamldoc.Meta{}}
+}
+
+func (yamlFormat) Adopt(data []byte, doc *jsondoc.Node) (Session, error) {
+	nd, meta, err := yamldoc.Parse(data)
+	if err != nil {
+		return nil, err
+	}
+	*doc = *nd
+	return yamlSession{doc, meta}, nil
 }
 
 type yamlSession struct {

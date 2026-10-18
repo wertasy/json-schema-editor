@@ -33,6 +33,9 @@ func (o Options) encodeRawDoc(w io.Writer, doc *jsondoc.Node) error {
 }
 
 func (o Options) decodeRawDoc(data []byte) (*jsondoc.Node, error) {
+	if o.Raw.AdoptDoc != nil {
+		return o.Raw.AdoptDoc(data)
+	}
 	if o.Raw.UnmarshalDoc != nil {
 		return o.Raw.UnmarshalDoc(data)
 	}

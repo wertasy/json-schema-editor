@@ -695,7 +695,7 @@ func TestPtyExternalRawYAMLEditor(t *testing.T) {
 		`case "$1" in *.yaml) ;; *) exit 5;; esac`+"\n"+
 		`grep -q '^name: demo$' "$1" || exit 3`+"\n"+
 		`grep -q '"name"' "$1" && exit 4`+"\n"+
-		`printf 'name: edited\n' > "$1"`+"\n")
+		`printf '# edited comment\nname: edited\n' > "$1"`+"\n")
 	if err := os.Chmod(editor, 0o755); err != nil {
 		t.Fatal(err)
 	}
@@ -767,8 +767,10 @@ func TestPtyExternalRawYAMLEditor(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !strings.Contains(string(data), "name: edited") || strings.Contains(string(data), `"name"`) {
-		t.Fatalf("saved config is not YAML:\n%s", data)
+	if !strings.Contains(string(data), "# edited comment") ||
+		!strings.Contains(string(data), "name: edited") ||
+		strings.Contains(string(data), `"name"`) {
+		t.Fatalf("saved config did not keep the raw YAML (and its comment):\n%s", data)
 	}
 }
 

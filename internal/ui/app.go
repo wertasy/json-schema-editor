@@ -20,10 +20,14 @@ import (
 // MarshalDoc writes the whole live document (comments included when the
 // codec captures the session); MarshalValue writes one subtree.
 type RawCodec struct {
-	Label          string // "JSON" (default) or "YAML"
-	Ext            string // temp-file extension; default ".json"
-	MarshalDoc     func(io.Writer) error
-	UnmarshalDoc   func([]byte) (*jsondoc.Node, error)
+	Label        string // "JSON" (default) or "YAML"
+	Ext          string // temp-file extension; default ".json"
+	MarshalDoc   func(io.Writer) error
+	UnmarshalDoc func([]byte) (*jsondoc.Node, error)
+	// AdoptDoc, when set, parses a whole document and also installs its
+	// format metadata (comments/directives) in the live session; it
+	// supersedes UnmarshalDoc.
+	AdoptDoc       func([]byte) (*jsondoc.Node, error)
 	MarshalValue   func(io.Writer, *jsondoc.Node) error
 	UnmarshalValue func([]byte) (*jsondoc.Node, error)
 }

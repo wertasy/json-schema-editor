@@ -240,9 +240,13 @@ func run() int {
 			MarshalDoc: func(w io.Writer) error {
 				return sess.Write(w)
 			},
-			UnmarshalDoc: func(data []byte) (*jsondoc.Node, error) {
-				d, _, err := yamldoc.Parse(data)
-				return d, err
+			AdoptDoc: func(data []byte) (*jsondoc.Node, error) {
+				s, err := format.Adopt(data, cfg)
+				if err != nil {
+					return nil, err
+				}
+				sess = s
+				return s.Doc(), nil
 			},
 			MarshalValue: func(w io.Writer, n *jsondoc.Node) error {
 				return yamldoc.Write(w, n, nil)
