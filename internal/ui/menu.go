@@ -806,8 +806,14 @@ func (m *listModel) helpView() string {
 		b.WriteString(clipDisplay(mHelp.Render(line), m.width-1))
 		b.WriteByte('\n')
 	}
+	// Keep the close hint on the terminal's last line; blank rows fill the
+	// space under a reference that does not use the full screen.
+	lines := strings.Count(b.String(), "\n")
+	for lines < m.height-1 {
+		b.WriteByte('\n')
+		lines++
+	}
 	b.WriteString(m.recHint("esc/? close"))
-	b.WriteByte('\n')
 	return b.String()
 }
 

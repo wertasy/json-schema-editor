@@ -48,6 +48,22 @@ func TestHelpOverlay(t *testing.T) {
 	}
 }
 
+func TestHelpOverlayFooterAtBottom(t *testing.T) {
+	m := newListModel(testModel(), testDoc(), Options{})
+	m.Update(tea.WindowSizeMsg{Width: 120, Height: 40})
+	press(m, "?")
+	lines := strings.Split(m.View(), "\n")
+	if len(lines) != 40 {
+		t.Fatalf("help view has %d lines, want 40:\n%s", len(lines), strings.Join(lines, "\n"))
+	}
+	if !strings.Contains(lines[39], "esc/? close") {
+		t.Fatalf("close hint not on the last line:\n%s", strings.Join(lines, "\n"))
+	}
+	if strings.Contains(lines[39], "\n") {
+		t.Fatalf("close hint has a trailing newline")
+	}
+}
+
 // TestNoticePinnedAboveHelp pins the bottom stack: schema description, then
 // the transient notice, then the hint bar, regardless of how short the menu
 // is. Previously the notice sat right under the rows and blank padding opened
