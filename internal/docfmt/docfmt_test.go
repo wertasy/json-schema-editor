@@ -238,6 +238,39 @@ func TestYAMLExplicitSchemaMember(t *testing.T) {
 	}
 }
 
+func TestYAMLEmptySchemaMemberNotFilled(t *testing.T) {
+	cases := []struct {
+		name string
+		src  string
+		keep string
+	}{
+		{"empty string", "$schema: \"\"\nname: demo\n", "$schema: \"\""},
+		{"explicit null", "$schema: null\nname: demo\n", "$schema: null"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			s, err := (yamlFormat{}).Load([]byte(tc.src))
+			if err != nil {
+				t.Fatal(err)
+			}
+			s.SetSchemaLocation("sch.json")
+			out := writeSession(t, s)
+			if !strings.Contains(out, tc.keep) {
+				t.Fatalf("empty $schema member was filled or removed:\n%s", out)
+			}
+			if strings.Contains(out, "$schema: sch.json") {
+				t.Fatalf("schema written into a $schema field:\n%s", out)
+			}
+			if !strings.Contains(out, "# yaml-language-server: $schema=sch.json") {
+				t.Fatalf("directive missing:\n%s", out)
+			}
+			if loc, ok := s.SchemaLocation(); !ok || loc != "sch.json" {
+				t.Fatalf("location = %q, %v", loc, ok)
+			}
+		})
+	}
+}
+
 func TestYAMLNewEmptySchemaDirective(t *testing.T) {
 	s := yamlFormat{}.NewEmpty()
 	s.SetSchemaLocation("sch.json")

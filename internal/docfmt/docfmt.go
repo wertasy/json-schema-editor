@@ -103,18 +103,6 @@ func schemaFromDoc(doc *jsondoc.Node) (string, bool) {
 	return "", false
 }
 
-func hasSchemaMember(doc *jsondoc.Node) bool {
-	if doc == nil || doc.Object == nil {
-		return false
-	}
-	for _, m := range *doc.Object {
-		if m.Key == "$schema" {
-			return true
-		}
-	}
-	return false
-}
-
 // setSchemaMember sets the top-level "$schema" member to loc when the
 // document has none (or an empty/null one), keeping the file's own value
 // otherwise. A new member goes first, the conventional position.
@@ -230,11 +218,10 @@ func (s yamlSession) SchemaLocation() (string, bool) {
 }
 
 // SetSchemaLocation keeps YAML idiomatic: it writes a yaml-language-server
-// comment instead of adding a "$schema" key, unless the file already has an
-// explicit "$schema" member to fill.
+// comment and never creates or fills a "$schema" member. A non-empty
+// "$schema" member already in the file stays authoritative and untouched.
 func (s yamlSession) SetSchemaLocation(loc string) {
-	if hasSchemaMember(s.doc) {
-		setSchemaMember(s.doc, loc)
+	if _, ok := schemaFromDoc(s.doc); ok {
 		return
 	}
 	if s.meta != nil {
