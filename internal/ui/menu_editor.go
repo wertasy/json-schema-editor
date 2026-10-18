@@ -88,7 +88,10 @@ func (m *listModel) applyExternalEdit(msg rawEditorDoneMsg) (tea.Model, tea.Cmd)
 		m.notice = "Raw JSON unchanged"
 		return m, nil
 	}
-	m.doc = nd
+	// Edit in place: the live tree is shared with the session and the
+	// caller; replacing the pointer would leave their copy stale (undo
+	// already relies on in-place assignment).
+	*m.doc = *nd
 	m.pushUndo(pre)
 	m.refreshVariantMenu()
 	m.refreshIssues()

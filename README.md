@@ -7,7 +7,7 @@
 ## 用法
 
 ```
-jse [-s <schema路径|http(s)://URL>] [--pick] [--force] [--accessible] <config.json>
+jse [-s <schema路径|http(s)://URL>] [--pick] [--force] [--accessible] <config.(json|jsonc|yaml|yml)>
 ```
 
 示例：
@@ -23,14 +23,30 @@ jse server.json
 jse -s https://example.com/schemas/server.schema.json server.json
 ```
 
+## 配置格式
+
+按扩展名选择读写格式（大小写不敏感）；未知扩展名或无扩展名按 JSONC 处理，保持历史上「一律 JSON」的行为：
+
+| 扩展名 | 格式 | 说明 |
+|---|---|---|
+| `.json` / `.jsonc` | JSONC | 严格 JSON 的超集：`//` 行注释、`/* … */` 块注释、对象/数组尾随逗号；其余文法与 `encoding/json` 一致 |
+| `.yaml` / `.yml` | YAML | 锚点/别名展开（状态栏提示展开次数）；多文档、非字符串键、合并键 `<<`、`.inf`/`.nan` 报错退出 |
+
+- **注释保留**：注释跟随所属键/值，编辑该成员后仍在；删除成员时其注释一并消失；新增成员没有注释。JSONC 中与值同行、写在逗号后的注释归该值；下一行注释归下一个键。空行不保证保留（YAML 发射器会归一化）。
+- **schema 指向**：`-s` 或 SchemaStore 选择的结果按格式记录——JSON/JSONC 用顶层 `$schema` 键；YAML 用文件头 `# yaml-language-server: $schema=<位置>` 注释，不向 YAML 文档塞入 JSON 风格键。两种写法都会被后续启动识别。
+- **无注释 JSON 零回归**：`.json` 没有注释时保存输出与旧版完全一致（委托给 `jsondoc.Node.Write`）。带注释/尾随逗号的旧 JSON 现在可以正常打开。
+- YAML 时间戳按字符串编辑，保存后写回原文本；`!!binary` 与未知标签按普通字符串处理（保存后不再带标签）。数值字面量归一化为 JSON 数字（`0x1F` → `31`、`1_000` → `1000`），`1.0`、`1e3` 这类合法 JSON 字面量保持原样。
+- 内置 raw JSON 编辑器与 `$EDITOR` 外部编辑器始终以 **JSON 文本**表示文档树；保存时仍按文件原格式写回。
+- 新增格式只需实现一个只依赖 `internal/jsondoc` 的转换包，并在 `internal/docfmt` 注册一个 `Format`/`Session` 适配器（接口见该包注释）。
+
 ## Schema 来源（按顺序解析）
 
 1. 显式 `-s`：`http://`/`https://` 开头 → 远端抓取；否则视为本地路径。
-2. 无 `-s` → 读配置顶层 `$schema` 字符串：URL 直接用；无 scheme 的相对路径相对**配置文件所在目录**解析。
+2. 无 `-s` → 读配置自带的 schema 指向：JSON/JSONC 为顶层 `$schema` 字符串；YAML 还可读文件头的 `# yaml-language-server: $schema=…` 注释（显式 `$schema` 键仍优先）。URL 直接用；无 scheme 的相对路径相对**配置文件所在目录**解析。
 3. 两者皆无 → 查 SchemaStore 公共目录（schemastore.org）：按文件名做 `fileMatch` 匹配，**唯一命中直接采用**；歧义或未命中都打开检索选择器（`--pick` 强制打开）。选中即用，中止 → 报错 `no schema found: …`，exit 2。
-4. 目录里也没有 → 报错 `no schema found: provide -s or set "$schema" in config`，exit 2。
+4. 目录里也没有 → 报错 `no schema found: provide -s or record the schema location in the config`，exit 2。
 
-选择器（TUI 全屏：输入过滤、↑/↓ 或 `ctrl+j`/`ctrl+k` 移动、enter 选定、esc 取消；`--accessible` 为行协议：输入搜索词 → 编号列表 → 数字选择，`0` 重搜、空行中止）。自动匹配或选定的 URL 按 `-s` 同样规则写回配置顶层 `$schema`，下次启动直接走第 2 优先级；`-pick` 则强制重选并覆盖既有 `$schema`。
+选择器（TUI 全屏：输入过滤、↑/↓ 或 `ctrl+j`/`ctrl+k` 移动、enter 选定、esc 取消；`--accessible` 为行协议：输入搜索词 → 编号列表 → 数字选择，`0` 重搜、空行中止）。自动匹配或选定的 URL 按 `-s` 同样规则写回配置的 schema 指向（JSON/JSONC 顶层 `$schema`；YAML 文件头注释），下次启动直接走第 2 优先级；`-pick` 则强制重选并覆盖既有指向。
 
 schema 抓取失败（路径不存在 / HTTP 非 2xx / 超时）→ exit 1（远端 schema 有可用缓存时改为回退到缓存，见下节）。远端 `$ref`（包括相对 base URI、`$id`）同样支持；不可达的 ref 降级为原始 JSON 编辑（见下文）。
 
@@ -62,7 +78,7 @@ $
 ```
 
 - 紧凑布局：标题行（当前菜单）+ **面包屑行**（文档路径 `$.a.b[0]`：字段用 `.` 追加、数组下标用 `[N]`；oneOf 拣选器/变体编辑器等不扩展路径的层级不占段；过宽时保留尾部并加 `…`）+ 行列表 + **固定在终端最后一行的**操作提示栏（灰色 Faint，与主菜单区分；只列常用键，完整键位见 `?`；内容不足时补空行）。`esc` 返回的层级保留光标位置。
-- `-s` 的值会**自动填入文档顶层 `$schema` 字段**（文件已有非空值则保留原值、空值/缺失则填入并置于首位），保存后文件自带 schema 出处；下次可直接省略 `-s`（解析顺序见上）。schema 定义了 `$schema` 属性时（如 sing-box）该字段在编辑器中可见可改。
+- `-s` 的值会**自动写入配置的 schema 指向**：JSON/JSONC 为顶层 `$schema` 字段（文件已有非空值则保留原值、空值/缺失则填入并置于首位）；YAML 不新增 JSON 风格键，而是在文件头写 `# yaml-language-server: $schema=<位置>` 注释（已有非空 `$schema` 键或同类注释则保留）。保存后文件自带 schema 出处，下次可直接省略 `-s`（解析顺序见上）。schema 定义了 `$schema` 属性时（如 sing-box）该字段在编辑器中可见可改；YAML 注释同样会被识别为 schema 来源。
 - 属性标记：红色 `*` = required（恒显，与该字段是否已填无关）。
 - 变更标记：与**加载时/上次保存**的文档逐节点对比，值有变化的行在行尾显示粉色 `●`（对象/数组行在其子树含任何变更时也标记，父级逐层可见）；标题行右侧的 `●` 表示整个文档存在未保存变更；`ctrl+s` 保存成功后基线刷新、标记清除。中止退出（ctrl+c）本身不写文件；若此前 `ctrl+s` 已保存过，磁盘保留该次保存，其后的修改丢弃。
 - schema 未定义的键（文档里有、schema 里没有）：作为**警告**（非错误）对待，在所属菜单中显示为黄色行，带 `(not in schema)` 与值摘要，行尾 `<warn>` 也为黄色（校验错误改用红色 `<err>`）；`enter` 打开原始 JSON 编辑器修复（编辑器内提示），`delete` 直接删除；对象菜单中 `a`/`A` 可新增这样的键值对，分别插在光标成员**前/后**（光标不在已有成员上时追加到末尾；输入键名 → `enter` → 原始 JSON 编辑器填值，`ctrl+s` 写入，`esc` 在任一步取消、不写入，空值 `ctrl+s` 视同取消）。这些键同时作为**编辑器级警告**进入问题列表（`unknown key … not in the schema`，黄色条目，与红色校验错误条目区分，enter 跳转定位到该行，删除即消）——JSON Schema 本身允许未知键，故不阻断保存，也不与 `additionalProperties: false` 的校验错误重复列出；顶层 `$schema`（编辑器自动写回的 schema 指针）不警告。搜索与替换同样覆盖这些键（见下）。
@@ -94,7 +110,7 @@ $
 | 130 | 用户中止（`n` 放弃修改 / ctrl+c；此前未保存过 / 已 `ctrl+s` 保存过） | `Aborted, no changes written` / `Saved to <path>; aborted (changes after the last save are lost)` |
 
 - 保存前用 schema 库做权威校验；有错误则列出并返回编辑，`--force` 可强存（结果行 `Saved with validation errors (--force): <path>`）。
-- 写入为原子写（同目录临时文件 + rename），保留已存在文件的权限位；键序与数值字面量（如 `1.0`）原样保留；schema 之外的未知键、`$schema` 键均保留。
+- 写入为原子写（同目录临时文件 + rename），保留已存在文件的权限位；键序与数值字面量（如 `1.0`）原样保留；schema 之外的未知键、`$schema` 键均保留。输出格式由扩展名决定（见「配置格式」）；raw JSON 编辑器的修改同样按原格式写回。
 - `--accessible`：行式问答模式（无全屏 TUI，适合管道/屏幕阅读器）。注意：管道喂答案时脚本必须覆盖全部提问——required 输入框不能靠空行取默认值；stdin 读尽后会话中止。
 
 ## 支持的表单关键字子集
@@ -128,4 +144,4 @@ go build ./... && go vet ./... && go test ./...   # 单测 + e2e（accessible �
 go run ./cmd/jse -s examples/server.schema.json examples/server.config.json
 ```
 
-包结构：`internal/jsondoc`（保序 JSON 文档）、`internal/fetch`（本地/远端统一加载）、`internal/catalog`（SchemaStore 目录加载与 fileMatch 匹配）、`internal/smodel`（schema→表单模型）、`internal/validate`（保存期校验）、`internal/ui`（menuconfig 菜单、schema 检索选择器与 --accessible huh 流程）、`cmd/jse`（CLI）。
+包结构：`internal/jsondoc`（保序 JSON 文档）、`internal/docfmt`（按扩展名分派格式的接口/注册表）、`internal/jsoncdoc`（JSONC 注释解析与写回）、`internal/yamldoc`（YAML 注释/别名转换）、`internal/fetch`（本地/远端统一加载）、`internal/catalog`（SchemaStore 目录加载与 fileMatch 匹配）、`internal/smodel`（schema→表单模型）、`internal/validate`（保存期校验）、`internal/ui`（menuconfig 菜单、schema 检索选择器与 --accessible huh 流程）、`cmd/jse`（CLI）。

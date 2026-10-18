@@ -18,6 +18,8 @@ import (
 
 	"github.com/creack/pty"
 
+	"gopkg.in/yaml.v3"
+
 	"json-schema-editor/internal/icons"
 	"json-schema-editor/internal/jsondoc"
 )
@@ -303,6 +305,108 @@ func TestSchemaResolution(t *testing.T) {
 			t.Fatalf("stderr missing catalog note:\n%s", stderr)
 		}
 	})
+}
+
+// TestYAMLEditingAccessible edits a comment-bearing YAML config through the
+// real binary: the value changes and its comments survive the save.
+func TestYAMLEditingAccessible(t *testing.T) {
+	dir := t.TempDir()
+	schema := filepath.Join(dir, "mini.schema.json")
+	cfg := filepath.Join(dir, "config.yaml")
+	writeFile(t, schema, `{"type":"object","properties":{"name":{"type":"string","title":"Name"}},"required":["name"]}`)
+	writeFile(t, cfg, "# config header\nname: demo # keep me\n")
+
+	stdout, stderr, code := runJSE(t, 60*time.Second, "newname\n\n",
+		"-s", schema, cfg, "--accessible")
+	if code != 0 {
+		t.Fatalf("exit = %d\nstdout:\n%s\nstderr:\n%s", code, stdout, stderr)
+	}
+	if !strings.Contains(stdout, "Saved to") {
+		t.Fatalf("stdout missing result line:\n%s", stdout)
+	}
+	data, err := os.ReadFile(cfg)
+	if err != nil {
+		t.Fatal(err)
+	}
+	text := string(data)
+	wantDirective := "# yaml-language-server: $schema=" + schema
+	if !strings.Contains(text, wantDirective) {
+		t.Fatalf("yaml schema directive missing:\n%s", text)
+	}
+	if !strings.Contains(text, "# config header") {
+		t.Fatalf("header comment lost:\n%s", text)
+	}
+	if !strings.Contains(text, "name: newname # keep me") {
+		t.Fatalf("value or line comment lost:\n%s", text)
+	}
+	if strings.Contains(text, "name: demo") {
+		t.Fatalf("old value survived:\n%s", text)
+	}
+	if strings.Contains(text, "$schema:") {
+		t.Fatalf("JSON-style $schema key written into YAML:\n%s", text)
+	}
+	var got map[string]any
+	if err := yaml.Unmarshal(data, &got); err != nil {
+		t.Fatalf("saved YAML does not parse: %v\n%s", err, text)
+	}
+	if !reflect.DeepEqual(got, map[string]any{"name": "newname"}) {
+		t.Fatalf("saved doc = %#v", got)
+	}
+
+	// The directive alone supplies the schema on the next run (no -s).
+	stdout, stderr, code = runJSE(t, 60*time.Second, "newname\n\n", cfg, "--accessible")
+	if code != 0 {
+		t.Fatalf("directive run exit = %d\nstdout:\n%s\nstderr:\n%s", code, stdout, stderr)
+	}
+	if !strings.Contains(stdout, "Saved to") {
+		t.Fatalf("directive run not saved:\n%s", stdout)
+	}
+	data, err = os.ReadFile(cfg)
+	if err != nil {
+		t.Fatal(err)
+	}
+	text = string(data)
+	if !strings.Contains(text, wantDirective) || !strings.Contains(text, "# config header") ||
+		!strings.Contains(text, "name: newname # keep me") {
+		t.Fatalf("comment/directive lost on second save:\n%s", text)
+	}
+}
+
+// TestJSONCEditingAccessible proves both .jsonc and .json files go through the
+// JSONC superset parser and keep their comments.
+func TestJSONCEditingAccessible(t *testing.T) {
+	for _, name := range []string{"config.jsonc", "config.json"} {
+		t.Run(name, func(t *testing.T) {
+			dir := t.TempDir()
+			schema := filepath.Join(dir, "mini.schema.json")
+			cfg := filepath.Join(dir, name)
+			writeFile(t, schema, `{"type":"object","properties":{"name":{"type":"string","title":"Name"}},"required":["name"]}`)
+			writeFile(t, cfg, "// config header\n{\n  \"name\": \"demo\" // keep me\n}\n")
+
+			stdout, stderr, code := runJSE(t, 60*time.Second, "newname\n\n",
+				"-s", schema, cfg, "--accessible")
+			if code != 0 {
+				t.Fatalf("exit = %d\nstdout:\n%s\nstderr:\n%s", code, stdout, stderr)
+			}
+			if !strings.Contains(stdout, "Saved to") {
+				t.Fatalf("stdout missing result line:\n%s", stdout)
+			}
+			data, err := os.ReadFile(cfg)
+			if err != nil {
+				t.Fatal(err)
+			}
+			text := string(data)
+			if !strings.Contains(text, "// config header") {
+				t.Fatalf("header comment lost:\n%s", text)
+			}
+			if !strings.Contains(text, `"name": "newname" // keep me`) {
+				t.Fatalf("value or line comment lost:\n%s", text)
+			}
+			if strings.Contains(text, `"name": "demo"`) {
+				t.Fatalf("old value survived:\n%s", text)
+			}
+		})
+	}
 }
 
 func TestRemoteSchema(t *testing.T) {

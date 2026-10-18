@@ -1,11 +1,12 @@
-// Command jse edits JSON configuration files through a TUI generated from
-// a JSON Schema.
+// Command jse edits JSON, JSONC, and YAML configuration files through a TUI
+// generated from a JSON Schema.
 package main
 
 import (
 	"errors"
 	"flag"
 	"fmt"
+	"io"
 	"os"
 	"path/filepath"
 	"strings"
@@ -13,6 +14,7 @@ import (
 	"github.com/charmbracelet/x/term"
 
 	"json-schema-editor/internal/catalog"
+	"json-schema-editor/internal/docfmt"
 	"json-schema-editor/internal/fetch"
 	"json-schema-editor/internal/icons"
 	"json-schema-editor/internal/jsondoc"
@@ -21,15 +23,16 @@ import (
 	"json-schema-editor/internal/validate"
 )
 
-var errNoSchema = errors.New(`no schema found: provide -s or set "$schema" in config`)
+var errNoSchema = errors.New(`no schema found: provide -s or record the schema location in the config`)
 
-const usageText = `Usage: jse [-s <schema path|http(s)://URL>] [--pick] [--force] [--accessible] <config.json>
+const usageText = `Usage: jse [-s <schema path|http(s)://URL>] [--pick] [--force] [--accessible] <config.(json|jsonc|yaml|yml)>
 
-Edit a JSON configuration file guided by a JSON Schema.
+Edit a JSON, JSONC, or YAML configuration file guided by a JSON Schema.
 
 Schema source (checked in order):
   1. -s <local path or http(s)://URL>
-  2. the "$schema" key at the top level of the config file;
+  2. the config's own schema pointer: a top-level "$schema" key, or a
+     "# yaml-language-server: $schema=..." comment for YAML files;
      relative paths resolve against the config file's directory
   3. the SchemaStore catalog: a unique fileMatch hit for the file name is
      used directly; an ambiguous or missing match opens an interactive
@@ -43,8 +46,9 @@ schema catalog shares that cache; JSE_CATALOG_URL overrides the catalog
 endpoint.
 
 Arguments:
-  config.json   the configuration file to edit (local path); a missing
-                file starts empty and is created on save
+  config file   the configuration file to edit (local path); the format
+                follows the extension (.json/.jsonc, .yaml/.yml) and a
+                missing file starts empty and is created on save
 
 Flags:
   -s string     JSON Schema: local path or http(s):// URL
@@ -78,7 +82,7 @@ func run() int {
 		if len(positional) > 1 {
 			fmt.Fprintf(os.Stderr, "unexpected argument: %s\n", positional[1])
 		} else {
-			fmt.Fprintln(os.Stderr, "no config file: pass <config.json> as a positional argument")
+			fmt.Fprintln(os.Stderr, "no config file: pass <config.(json|jsonc|yaml|yml)> as a positional argument")
 		}
 		flag.Usage()
 		return 2
@@ -89,40 +93,46 @@ func run() int {
 		return 2
 	}
 
+	format := docfmt.ForFormat(config)
+
 	// Load config; a missing file starts empty and is created on save.
 	var cfg *jsondoc.Node
+	var sess docfmt.Session
 	loaded := false
 	if data, err := os.ReadFile(config); err == nil {
-		cfg, err = jsondoc.Parse(strings.NewReader(string(data)))
+		sess, err = format.Load(data)
 		if err != nil {
 			fmt.Fprintf(os.Stderr, "parse config %s: %v\n", config, err)
 			return 1
 		}
+		cfg = sess.Doc()
 		loaded = true
 	} else if !errors.Is(err, os.ErrNotExist) {
 		fmt.Fprintf(os.Stderr, "read config %s: %v\n", config, err)
 		return 1
 	} else {
-		members := []jsondoc.Member{}
-		cfg = &jsondoc.Node{Object: &members}
+		sess = format.NewEmpty()
+		cfg = sess.Doc()
 	}
 
 	var status []string
+	status = append(status, sess.Notices()...)
 
-	// A -s location also lands in the document's top-level "$schema" field
-	// (when the file has none), keeping the saved config self-describing.
+	// A -s location is recorded in the file's own convention (a top-level
+	// "$schema" member, or a yaml-language-server comment for YAML) when the
+	// file has none, keeping the saved config self-describing.
 	if *schemaFlag != "" {
-		fillSchemaField(cfg, *schemaFlag)
+		sess.SetSchemaLocation(*schemaFlag)
 	}
-	// A catalog pick must overwrite an existing "$schema", so drop it first.
+	// A catalog pick must overwrite an existing location, so drop it first.
 	if *pick {
-		clearSchemaField(cfg)
+		sess.ClearSchemaLocation()
 	}
 
 	schemaLoc := ""
 	var resolveErr error
 	if !*pick {
-		schemaLoc, resolveErr = resolveSchemaLoc(*schemaFlag, config, cfg)
+		schemaLoc, resolveErr = resolveSchemaLoc(*schemaFlag, config, sess)
 	}
 	if resolveErr != nil && !errors.Is(resolveErr, errNoSchema) {
 		fmt.Fprintln(os.Stderr, resolveErr.Error())
@@ -170,7 +180,7 @@ func run() int {
 			chosen = c
 		}
 		schemaLoc = chosen.URL
-		fillSchemaField(cfg, schemaLoc)
+		sess.SetSchemaLocation(schemaLoc)
 		status = append(status, "schema from SchemaStore: "+chosen.Name)
 	}
 
@@ -202,14 +212,13 @@ func run() int {
 		}
 	}
 
-	// The UI writes on every save action (TUI ctrl+s stays open; the
-	// Save-and-exit row, a root quit answered with "save", and the
-	// accessible save quit afterwards).
+	// The UI edits sess.Doc() in place; Write emits it in the file's own
+	// format. The raw JSON editor deliberately still shows JSON text.
 	outcome := ui.Run(model, cfg, ui.Options{
 		Accessible: *accessible,
 		Force:      *force,
 		Validate:   check,
-		Save:       func(d *jsondoc.Node) error { return atomicWrite(config, d) },
+		Save:       func(*jsondoc.Node) error { return atomicWrite(config, sess.Write) },
 		Status:     strings.Join(status, "\n"),
 		LoadErrors: loadErrors,
 	})
@@ -253,28 +262,25 @@ func httpPrefix(p string) string {
 }
 
 // resolveSchemaLoc implements the schema source resolution order.
-func resolveSchemaLoc(sFlag, cFlag string, cfg *jsondoc.Node) (string, error) {
+func resolveSchemaLoc(sFlag, cFlag string, sess docfmt.Session) (string, error) {
 	if sFlag != "" {
 		return sFlag, nil
 	}
-	if cFlag != "" && cfg != nil {
-		if n, ok := cfg.Get([]any{"$schema"}); ok && n.Str != nil && *n.Str != "" {
-			u := *n.Str
-			if strings.HasPrefix(u, "http://") || strings.HasPrefix(u, "https://") {
-				return u, nil
-			}
-			if filepath.IsAbs(u) {
-				return u, nil
-			}
-			return filepath.Join(filepath.Dir(cFlag), u), nil
+	if u, ok := sess.SchemaLocation(); ok && u != "" {
+		if strings.HasPrefix(u, "http://") || strings.HasPrefix(u, "https://") {
+			return u, nil
 		}
+		if filepath.IsAbs(u) {
+			return u, nil
+		}
+		return filepath.Join(filepath.Dir(cFlag), u), nil
 	}
 	return "", errNoSchema
 }
 
-// atomicWrite writes doc to path via a same-directory temp file + rename,
-// preserving the mode of an existing file.
-func atomicWrite(path string, doc *jsondoc.Node) error {
+// atomicWrite writes a document to path via a same-directory temp file +
+// rename, preserving the mode of an existing file.
+func atomicWrite(path string, write func(io.Writer) error) error {
 	mode := os.FileMode(0o644)
 	if fi, err := os.Stat(path); err == nil {
 		mode = fi.Mode().Perm()
@@ -289,7 +295,7 @@ func atomicWrite(path string, doc *jsondoc.Node) error {
 	}
 	tmpName := tmp.Name()
 	defer os.Remove(tmpName) // no-op after successful rename
-	if err := doc.Write(tmp); err != nil {
+	if err := write(tmp); err != nil {
 		tmp.Close()
 		return err
 	}
@@ -301,46 +307,6 @@ func atomicWrite(path string, doc *jsondoc.Node) error {
 		return err
 	}
 	return os.Rename(tmpName, path)
-}
-
-// fillSchemaField sets the top-level "$schema" member to loc when the
-// document has none (or an empty one), keeping the file's own value
-// otherwise. The member goes first, the conventional position.
-func fillSchemaField(doc *jsondoc.Node, loc string) {
-	if doc == nil || doc.Object == nil {
-		return
-	}
-	for i, m := range *doc.Object {
-		if m.Key != "$schema" {
-			continue
-		}
-		if m.Val != nil && m.Val.Str != nil && *m.Val.Str != "" {
-			return
-		}
-		(*doc.Object)[i].Val = &jsondoc.Node{Str: &loc}
-		return
-	}
-	members := make([]jsondoc.Member, 0, len(*doc.Object)+1)
-	members = append(members, jsondoc.Member{Key: "$schema", Val: &jsondoc.Node{Str: &loc}})
-	members = append(members, *doc.Object...)
-	*doc.Object = members
-}
-
-// clearSchemaField removes the top-level "$schema" member; a freshly chosen
-// schema (-pick) must overwrite an existing value, which fillSchemaField
-// never does.
-func clearSchemaField(doc *jsondoc.Node) {
-	if doc == nil || doc.Object == nil {
-		return
-	}
-	members := (*doc.Object)[:0]
-	for _, m := range *doc.Object {
-		if m.Key == "$schema" {
-			continue
-		}
-		members = append(members, m)
-	}
-	*doc.Object = members
 }
 
 // searchStem is the file name without its extension, the initial catalog
