@@ -10,6 +10,7 @@ import (
 	"fmt"
 	"math"
 	"net/url"
+	"regexp"
 	"strings"
 
 	"github.com/wertasy/json-schema-editor/internal/fetch"
@@ -81,6 +82,7 @@ type FormNode struct {
 	MinItems, MaxItems         int
 	Variants                   []*FormNode // KOneOf
 	TagRef                     string      // x-tag-reference: tag lookup domain (e.g. "http_client")
+	KeyPattern                 string      // KMap: document keys must match this Go regexp (patternProperties)
 }
 
 const maxDepth = 32
@@ -346,6 +348,16 @@ func (p *parser) build(n *jsondoc.Node, ctx *refCtx, key string, required bool, 
 			fn.Items = p.schema(field(n, "additionalProperties"), ctx, key, false, depth+1)
 			break
 		}
+		if !hasProps {
+			// single-pattern object (GitHub workflow jobs): document keys are
+			// the rows, each value edits against the pattern's value schema
+			if pat, val, ok := patternMap(n); ok {
+				fn.Kind = KMap
+				fn.KeyPattern = pat
+				fn.Items = p.schema(val, ctx, key, false, depth+1)
+				break
+			}
+		}
 		fn.Kind = KObject
 		fn.Children = p.buildChildren(n, ctx, depth)
 	case t == "array" || hasItems:
@@ -385,6 +397,26 @@ func usableAdditional(n *jsondoc.Node) bool {
 		return *ap.Bool
 	}
 	return ap.Object != nil
+}
+
+// patternMap reports whether n is a single-pattern string-keyed map: exactly
+// one patternProperties member, additionalProperties: false closing the
+// object, and a pattern that compiles as a Go regexp. It returns the pattern
+// string, the value schema, and whether the shape qualifies.
+func patternMap(n *jsondoc.Node) (string, *jsondoc.Node, bool) {
+	pp := field(n, "patternProperties")
+	if pp == nil || pp.Object == nil || len(*pp.Object) != 1 {
+		return "", nil, false
+	}
+	ap := field(n, "additionalProperties")
+	if ap == nil || ap.Bool == nil || *ap.Bool {
+		return "", nil, false
+	}
+	pattern := (*pp.Object)[0].Key
+	if _, err := regexp.Compile(pattern); err != nil {
+		return "", nil, false
+	}
+	return pattern, (*pp.Object)[0].Val, true
 }
 
 // buildVariants handles oneOf/anyOf: if every variant is a const or single

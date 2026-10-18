@@ -673,6 +673,12 @@ func (m *listModel) keyAdd(msg tea.KeyMsg) tea.Cmd {
 				}
 			}
 		}
+		if m.add.node.Kind == smodel.KMap && m.add.node.KeyPattern != "" {
+			if re, err := regexp.Compile(m.add.node.KeyPattern); err != nil || !re.MatchString(k) {
+				m.add.err = "key must match " + m.add.node.KeyPattern
+				return nil
+			}
+		}
 		path := pathFor(m.add.path, k)
 		idx := m.add.idx
 		node := m.add.node

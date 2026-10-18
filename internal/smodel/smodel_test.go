@@ -737,3 +737,89 @@ func TestSharedRefPropertyTitles(t *testing.T) {
 		}
 	}
 }
+
+// TestPatternPropertiesMap pins the single-pattern map gate: one
+// patternProperties member plus additionalProperties: false form-izes the
+// object as a KMap whose keys must match the pattern; every other shape
+// keeps today's behavior (KObject with no children for pattern-only
+// objects, additionalProperties winning when it is schema-valued).
+func TestPatternPropertiesMap(t *testing.T) {
+	const jobs = `{
+  "type": "object",
+  "properties": {
+    "jobs": {
+      "type": "object",
+      "patternProperties": {
+        "^[_a-zA-Z][a-zA-Z0-9_-]*$": {
+          "type": "object",
+          "properties": {"runs-on": {"type": "string"}}
+        }
+      },
+      "additionalProperties": false
+    }
+  }
+}`
+	fn := mustLoad(t, jobs)
+	j := child(t, fn, "jobs")
+	if j.Kind != KMap || j.KeyPattern != "^[_a-zA-Z][a-zA-Z0-9_-]*$" {
+		t.Fatalf("jobs: Kind=%v KeyPattern=%q, want map with the pattern", j.Kind, j.KeyPattern)
+	}
+	if j.Items == nil || j.Items.Kind != KObject {
+		t.Fatalf("jobs items = %+v, want an object value schema", j.Items)
+	}
+	if c := child(t, j.Items, "runs-on"); c.Kind != KScalar {
+		t.Fatalf("jobs value runs-on = %+v, want scalar", c)
+	}
+
+	// Two patterns is out of scope: unknown rows as before.
+	two := mustLoad(t, `{
+  "type": "object",
+  "properties": {
+    "jobs": {
+      "type": "object",
+      "patternProperties": {
+        "^a": {"type": "string"},
+        "^b": {"type": "string"}
+      },
+      "additionalProperties": false
+    }
+  }
+}`)
+	if j := child(t, two, "jobs"); j.Kind != KObject || len(j.Children) != 0 || j.KeyPattern != "" {
+		t.Fatalf("two patterns: Kind=%v children=%d pattern=%q, want an empty object",
+			j.Kind, len(j.Children), j.KeyPattern)
+	}
+
+	// A schema-valued additionalProperties still wins (existing map support),
+	// so the pattern branch must not fire even when a pattern exists.
+	scoped := mustLoad(t, `{
+  "type": "object",
+  "properties": {
+    "headers": {
+      "type": "object",
+      "patternProperties": {"^X-": {"type": "number"}},
+      "additionalProperties": {"type": "string"}
+    }
+  }
+}`)
+	if h := child(t, scoped, "headers"); h.Kind != KMap || h.KeyPattern != "" ||
+		h.Items == nil || h.Items.Kind != KScalar || h.Items.JSONType != "string" {
+		t.Fatalf("schema-valued additionalProperties: Kind=%v pattern=%q items=%+v, want a plain string map",
+			h.Kind, h.KeyPattern, h.Items)
+	}
+
+	// A pattern Go's regexp cannot compile (ECMA-262 lookahead) is unsupported.
+	bad := mustLoad(t, `{
+  "type": "object",
+  "properties": {
+    "jobs": {
+      "type": "object",
+      "patternProperties": {"(?=x)": {"type": "string"}},
+      "additionalProperties": false
+    }
+  }
+}`)
+	if j := child(t, bad, "jobs"); j.Kind != KObject || len(j.Children) != 0 {
+		t.Fatalf("uncompilable pattern: Kind=%v children=%d, want an empty object", j.Kind, len(j.Children))
+	}
+}

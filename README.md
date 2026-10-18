@@ -128,6 +128,7 @@ $
 | 字符串约束 | `minLength` `maxLength` `pattern` | 输入校验 |
 | 对象 | `properties` `required` | 字段按 schema 顺序；required 空值拦截 |
 | 对象映射 | `additionalProperties` | 键为文档成员（`a` 添加、`d` 删除），值按子 schema 编辑（如 sing-box HTTPHeader：字符串或字符串数组） |
+| 模式映射 | `patternProperties`（单个模式 + `additionalProperties: false`） | 同上，但 `a` 新增的键必须匹配该 Go 正则（不匹配时行内提示 `key must match <pattern>`；如 GitHub workflow 的 `jobs`）。多个模式、schema 形式或缺失的 `additionalProperties`、无法用 Go RE2 编译的模式仍按未声明处理 |
 | 数组 | `items` `minItems` `maxItems` | items.enum→多选；标量条目→逐条输入；对象条目→逐条表单 |
 | 组合 | `oneOf` `anyOf` | 变体选择后进入子编辑器；全 const/单值 enum 变体合并为一个枚举选择 |
 | 组合 | `allOf` | 浅合并（properties 拼接、required 并集、约束取更严者）；其中的 `oneOf`/`anyOf` 按分配律展开为嵌套变体（sing-box rule = 匹配字段 allOf action） |
@@ -139,7 +140,7 @@ $
 - 无法表单化的属性（不可达 `$ref`、数组套数组、未知类型）渲染为「Edit as JSON/YAML」文本域（YAML 文件用 YAML 语法）：提交时做对应格式的语法校验，语义合法性交给保存期校验。
 - schema 编译失败（非法 schema / 远端 ref 不可达）→ 保存期校验自动停用，根屏状态行提示 `<warn> schema compile failed, save-time validation disabled`。
 - 加载的配置若已有校验问题，不阻止编辑：根菜单首行显示问题计数 `enter` 打开问题列表，`↑/↓`（或 `ctrl+j`/`ctrl+k`）选择、`enter` 跳转到对应字段修改、`esc` 关闭；计数格式为 `<err> N validation error(s)`、混合时 `<err> N validation error(s) · <warn> M warning(s)`、仅警告时 `<warn> M warning(s)`；**问题列表实时刷新**——字段修好后计数、`<err>`/`<warn>` 行标记与该条目即刻更新/消失（全部修完状态行自动隐藏，保存期校验仍是最终兜底）；**从问题列表跳转后，在落点菜单按 `esc` 会回到刷新过的问题列表**（光标位置保留），再 `esc` 关闭列表；若在落点继续下钻，`esc` 先逐级返回，回到落点层后再返回列表（`/` 搜索跳转或重新打开列表会清除该返回点）。出错字段行尾标 `<err>` 红色（其父级对象/数组行同样标记）；仅未知键警告的字段标黄色 `<warn>`；问题列表条目同样按严重度着色（错误红、警告黄）；条目内的位置与面包屑同风格（如 `at '$.server.port':`、`at '$.items[0].tag':`）。保存失败的错误列表同样支持 `enter` 跳转。
-- 明确不做：`format` 校验、数组条目重排序 UI、`patternProperties`/`if-then-else`/`not` 的表单化、配置路径远端 URL。
+- 明确不做：`format` 校验、数组条目重排序 UI、`if-then-else`/`not` 的表单化、多模式 `patternProperties`、配置路径远端 URL。
 
 ## 开发
 
