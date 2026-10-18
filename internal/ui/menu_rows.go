@@ -590,6 +590,11 @@ func VariantSignature(fn *smodel.FormNode) string {
 			return "list of json"
 		}
 		return "list of " + VariantSignature(fn.Items)
+	case smodel.KRaw:
+		if fn.NullOnly {
+			return "null"
+		}
+		return "json"
 	default:
 		return "json"
 	}
@@ -766,6 +771,9 @@ func variantMatches(v *smodel.FormNode, val *jsondoc.Node) bool {
 func valueConforms(def *smodel.FormNode, v *jsondoc.Node) bool {
 	if def == nil {
 		return true
+	}
+	if def.Kind == smodel.KRaw && def.NullOnly {
+		return v != nil && v.Null
 	}
 	switch def.Kind {
 	case smodel.KEnum:

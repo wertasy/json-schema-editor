@@ -65,6 +65,7 @@ type FormNode struct {
 	Key, Title, Desc string // Title fallback: title → key; root: "$"
 	Kind             Kind
 	JSONType         string // KScalar: "string"|"integer"|"number"
+	NullOnly         bool   // KRaw: schema admits only JSON null
 
 	Min, Max, MultipleOf       *float64
 	ExclusiveMin, ExclusiveMax bool
@@ -358,6 +359,7 @@ func (p *parser) build(n *jsondoc.Node, ctx *refCtx, key string, required bool, 
 		fn.JSONType = t
 	default:
 		fn.Kind = KRaw
+		fn.NullOnly = nullOnlyType(n)
 	}
 	if nullable && fn.Kind != KRaw {
 		fn.Desc = appendWarn(fn.Desc, "may be omitted")
@@ -853,6 +855,29 @@ func nodeNum(n *jsondoc.Node) (float64, bool) {
 		return 0, true
 	}
 	return 0, false
+}
+
+// nullOnlyType reports whether the schema's type keyword admits null and
+// nothing else.
+func nullOnlyType(n *jsondoc.Node) bool {
+	t := field(n, "type")
+	if t == nil {
+		return false
+	}
+	if t.Str != nil {
+		return *t.Str == "null"
+	}
+	if t.Array == nil {
+		return false
+	}
+	found := false
+	for _, e := range *t.Array {
+		if e.Str == nil || *e.Str != "null" {
+			return false
+		}
+		found = true
+	}
+	return found
 }
 
 // typeOf returns the effective scalar type name (first non-null entry when

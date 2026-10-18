@@ -98,6 +98,49 @@ func TestCurrentVariantValueAware(t *testing.T) {
 	}
 }
 
+// TestNullOnlyVariantDoesNotShadowObject reproduces the GitHub workflow
+// `on.push` shape: oneOf [type null, object]. The null variant is a raw
+// fallback and must not match an object value just because raw accepts any
+// shape, otherwise entering push opens the raw JSON textarea.
+func TestNullOnlyVariantDoesNotShadowObject(t *testing.T) {
+	root := mustSchema(t, `{
+	  "type": "object",
+	  "properties": {
+	    "push": {"oneOf": [
+	      {"type": "null"},
+	      {"type": "object", "properties": {
+	        "tags": {"type": "array", "items": {"type": "string"}}}}]}}}`)
+	push := childOf(t, root, "push")
+	if push == nil || len(push.Variants) != 2 {
+		t.Fatalf("push model = %+v, want a two-variant oneOf", push)
+	}
+	if v := push.Variants[0]; v.Kind != smodel.KRaw || !v.NullOnly {
+		t.Fatalf("null variant = kind %v nullOnly %v", v.Kind, v.NullOnly)
+	}
+	if !variantMatches(push.Variants[0], &jsondoc.Node{Null: true}) {
+		t.Fatal("null variant must match an explicit null")
+	}
+
+	val := tobj(tmem("tags", tarr(tstr("v*"))))
+	if variantMatches(push.Variants[0], val) {
+		t.Fatal("null variant must not match an object")
+	}
+	if got := currentVariant(push, val); got != 1 {
+		t.Fatalf("currentVariant = %d, want the object variant (1)", got)
+	}
+
+	doc := tobj(tmem("push", val))
+	m := newListModel(root, doc, Options{})
+	m.Update(tea.WindowSizeMsg{Width: 100, Height: 30})
+	press(m, "enter") // push row
+	if m.text != nil {
+		t.Fatalf("push must not open the raw textarea:\n%s", m.View())
+	}
+	if m.top().kind != menuObject || !contains(m.View(), "tags") {
+		t.Fatalf("push should open its object menu:\n%s", m.View())
+	}
+}
+
 func TestOneOfItemAddInfer(t *testing.T) {
 	root, oneOf, _ := inferModel()
 	doc := tobj()
