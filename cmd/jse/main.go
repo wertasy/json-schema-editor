@@ -25,7 +25,14 @@ import (
 
 var errNoSchema = errors.New(`no schema found: provide -s or record the schema location in the config`)
 
-const usageText = `Usage: jse [-s <schema path|http(s)://URL>] [--pick] [--force] [--accessible] <config.(json|jsonc|yaml|yml)>
+// Build metadata. Release builds override these with -ldflags -X.
+var (
+	version   = "dev"
+	commit    = "none"
+	buildDate = "unknown"
+)
+
+const usageText = `Usage: jse [-s <schema path|http(s)://URL>] [--pick] [--force] [--accessible] [--version] <config.(json|jsonc|yaml|yml)>
 
 Edit a JSON, JSONC, or YAML configuration file guided by a JSON Schema.
 
@@ -56,6 +63,7 @@ Flags:
                 -s and "$schema")
   -force        save even when schema validation fails
   -accessible   line-based prompts instead of the full-screen TUI
+  -version      print the version and exit
   -h, --help    show this help
 
 Keys: ↑/↓ move · space toggle · enter select · tab next · esc back · ctrl+c quit
@@ -74,9 +82,15 @@ func run() int {
 	force := flag.Bool("force", false, "save even when validation fails")
 	accessible := flag.Bool("accessible", false, "line-based prompts")
 	pick := flag.Bool("pick", false, "choose the schema from the SchemaStore catalog")
+	showVersion := flag.Bool("version", false, "print the version and exit")
 	flag.Usage = func() { fmt.Fprintln(os.Stderr, usageText) }
 	flagArgs, positional := splitArgs(os.Args[1:])
 	_ = flag.CommandLine.Parse(flagArgs)
+
+	if *showVersion {
+		fmt.Printf("jse %s (commit %s, built %s)\n", version, commit, buildDate)
+		return 0
+	}
 
 	if len(positional) != 1 {
 		if len(positional) > 1 {

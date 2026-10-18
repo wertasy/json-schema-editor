@@ -2,12 +2,16 @@
 
 `jse` 读取一份 JSON Schema，生成 menuconfig 式的终端配置界面（单屏滚动列表：面包屑 + 条目 + 帮助栏），光标移动、就地编辑、层级钻取、当前路径向下搜索（标题/键/值），编辑即时写回；保存前用 [jsonschema](https://github.com/santhosh-tekuri/jsonschema) 库做权威校验。
 
-构建：`go build -o jse ./cmd/jse`（Linux / macOS）。
+## 安装
+
+预编译二进制见 [Releases](https://github.com/wertasy/json-schema-editor/releases)：Linux / macOS / Windows，amd64 与 arm64；压缩包内含 `jse`、`README.md`、`LICENSE`，`checksums.txt` 提供 SHA-256 校验和。
+
+源码构建：`go build -o jse ./cmd/jse`（Linux / macOS）。`jse --version` 输出发布版本、提交与构建时间。
 
 ## 用法
 
 ```
-jse [-s <schema路径|http(s)://URL>] [--pick] [--force] [--accessible] <config.(json|jsonc|yaml|yml)>
+jse [-s <schema路径|http(s)://URL>] [--pick] [--force] [--accessible] [--version] <config.(json|jsonc|yaml|yml)>
 ```
 
 示例：
@@ -145,3 +149,14 @@ go run ./cmd/jse -s examples/server.schema.json examples/server.config.json
 ```
 
 包结构：`internal/jsondoc`（保序 JSON 文档）、`internal/docfmt`（按扩展名分派格式的接口/注册表）、`internal/jsoncdoc`（JSONC 注释解析与写回）、`internal/yamldoc`（YAML 注释/别名转换）、`internal/fetch`（本地/远端统一加载）、`internal/catalog`（SchemaStore 目录加载与 fileMatch 匹配）、`internal/smodel`（schema→表单模型）、`internal/validate`（保存期校验）、`internal/ui`（menuconfig 菜单、schema 检索选择器与 --accessible huh 流程）、`cmd/jse`（CLI）。
+
+发布由 `.github/workflows/release.yml` 完成：推送 `v*` 标签即交叉编译 Linux / macOS / Windows 的 amd64 与 arm64 版本（`CGO_ENABLED=0`，`-trimpath`，版本号/提交/构建时间经 `-ldflags -X` 注入），生成带校验和的压缩包并创建 GitHub Release。
+
+```sh
+git tag -a v0.1.0 -m "jse v0.1.0"
+git push origin v0.1.0
+```
+
+## 许可证
+
+[MIT](LICENSE)
