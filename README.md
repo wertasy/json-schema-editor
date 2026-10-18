@@ -46,7 +46,7 @@ jse -s https://example.com/schemas/server.schema.json server.json
 ## Schema 来源（按顺序解析）
 
 1. 显式 `-s`：`http://`/`https://` 开头 → 远端抓取；否则视为本地路径。
-2. 无 `-s` → 读配置自带的 schema 指向：JSON/JSONC 为顶层 `$schema` 字符串；YAML 还可读文件头的 `# yaml-language-server: $schema=…` 注释（显式 `$schema` 键仍优先）。URL 直接用；无 scheme 的相对路径相对**配置文件所在目录**解析。
+2. 无 `-s` → 读配置自带的 schema 指向：JSON/JSONC 为顶层 `$schema` 字符串；YAML 还可读文件头的 `# yaml-language-server: $schema=…` 注释（显式 `$schema` 键仍优先）。URL 直接用；无 scheme 的相对路径先相对**配置文件所在目录**解析，该目录下不存在时回退到**当前工作目录**。
 3. 两者皆无 → 查 SchemaStore 公共目录（schemastore.org）：按文件名做 `fileMatch` 匹配，**唯一命中直接采用**；歧义或未命中都打开检索选择器（`--pick` 强制打开）。选中即用，中止 → 报错 `no schema found: …`，exit 2。
 4. 目录里也没有 → 报错 `no schema found: provide -s or record the schema location in the config`，exit 2。
 

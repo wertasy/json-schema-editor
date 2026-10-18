@@ -48,8 +48,15 @@ func TestMain(m *testing.M) {
 
 func runJSE(t *testing.T, timeout time.Duration, stdin string, args ...string) (string, string, int) {
 	t.Helper()
+	return runJSEIn(t, "..", timeout, stdin, args...)
+}
+
+// runJSEIn is runJSE with an explicit process working directory, for schema
+// locations that resolve relative to it.
+func runJSEIn(t *testing.T, dir string, timeout time.Duration, stdin string, args ...string) (string, string, int) {
+	t.Helper()
 	cmd := exec.Command(jseBin, args...)
-	cmd.Dir = ".."
+	cmd.Dir = dir
 	cmd.Stdin = strings.NewReader(stdin)
 	var out, errb bytes.Buffer
 	cmd.Stdout, cmd.Stderr = &out, &errb
@@ -271,6 +278,18 @@ func TestSchemaResolution(t *testing.T) {
 		stdout, _, code := runJSE(t, 60*time.Second, "\n\n", cfg, "--accessible")
 		if code != 0 || !strings.Contains(stdout, "Saved to") {
 			t.Fatalf("exit=%d stdout:\n%s", code, stdout)
+		}
+	})
+
+	t.Run("relative $schema falls back to cwd", func(t *testing.T) {
+		dir := t.TempDir()
+		work := t.TempDir()
+		writeFile(t, filepath.Join(work, "mini.schema.json"), miniSchema)
+		cfg := filepath.Join(dir, "cfg.json")
+		writeFile(t, cfg, `{"$schema": "mini.schema.json", "name": "x"}`)
+		stdout, stderr, code := runJSEIn(t, work, 60*time.Second, "\n\n", cfg, "--accessible")
+		if code != 0 || !strings.Contains(stdout, "Saved to") {
+			t.Fatalf("exit=%d stdout:\n%s\nstderr:\n%s", code, stdout, stderr)
 		}
 	})
 

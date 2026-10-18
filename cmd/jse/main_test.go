@@ -1,9 +1,68 @@
 package main
 
 import (
+	"os"
+	"path/filepath"
 	"reflect"
 	"testing"
+
+	"github.com/wertasy/json-schema-editor/internal/docfmt"
 )
+
+func TestResolveSchemaLocRelative(t *testing.T) {
+	root := t.TempDir()
+	configDir := filepath.Join(root, "config")
+	workDir := filepath.Join(root, "work")
+	for _, dir := range []string{configDir, workDir} {
+		if err := os.MkdirAll(dir, 0o755); err != nil {
+			t.Fatal(err)
+		}
+	}
+	cfg := filepath.Join(configDir, "cfg.json")
+	writeSchema := func(path string) {
+		t.Helper()
+		if err := os.WriteFile(path, []byte(`{"type":"object"}`), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	session := func(loc string) docfmt.Session {
+		s := docfmt.ForFormat(cfg).NewEmpty()
+		s.SetSchemaLocation(loc)
+		return s
+	}
+
+	t.Run("config directory wins", func(t *testing.T) {
+		t.Chdir(workDir)
+		writeSchema(filepath.Join(configDir, "schema.json"))
+		writeSchema(filepath.Join(workDir, "schema.json"))
+		got, err := resolveSchemaLoc("", cfg, session("schema.json"))
+		if err != nil {
+			t.Fatal(err)
+		}
+		if want := filepath.Join(configDir, "schema.json"); got != want {
+			t.Fatalf("resolved %q, want %q", got, want)
+		}
+	})
+
+	t.Run("falls back to cwd", func(t *testing.T) {
+		t.Chdir(workDir)
+		writeSchema(filepath.Join(workDir, "fallback.json"))
+		got, err := resolveSchemaLoc("", cfg, session("fallback.json"))
+		if err != nil {
+			t.Fatal(err)
+		}
+		if got != "fallback.json" {
+			t.Fatalf("resolved %q, want the cwd-relative path", got)
+		}
+		abs, err := filepath.Abs(got)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if want := filepath.Join(workDir, "fallback.json"); abs != want {
+			t.Fatalf("resolved to %q, want %q", abs, want)
+		}
+	})
+}
 
 func TestSearchStem(t *testing.T) {
 	cases := map[string]string{

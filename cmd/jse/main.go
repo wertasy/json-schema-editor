@@ -7,6 +7,7 @@ import (
 	"flag"
 	"fmt"
 	"io"
+	"io/fs"
 	"os"
 	"path/filepath"
 	"strings"
@@ -40,7 +41,8 @@ Schema source (checked in order):
   1. -s <local path or http(s)://URL>
   2. the config's own schema pointer: a top-level "$schema" key, or a
      "# yaml-language-server: $schema=..." comment for YAML files;
-     relative paths resolve against the config file's directory
+     relative paths resolve against the config file's directory, falling
+     back to the current working directory when no file exists there
   3. the SchemaStore catalog: a unique fileMatch hit for the file name is
      used directly; an ambiguous or missing match opens an interactive
      search over the catalog (--pick forces the search)
@@ -287,7 +289,13 @@ func resolveSchemaLoc(sFlag, cFlag string, sess docfmt.Session) (string, error) 
 		if filepath.IsAbs(u) {
 			return u, nil
 		}
-		return filepath.Join(filepath.Dir(cFlag), u), nil
+		// Prefer the config file's directory; fall back to the process
+		// working directory when no file exists there.
+		fromConfig := filepath.Join(filepath.Dir(cFlag), u)
+		if _, err := os.Stat(fromConfig); err == nil || !errors.Is(err, fs.ErrNotExist) {
+			return fromConfig, nil
+		}
+		return u, nil
 	}
 	return "", errNoSchema
 }
