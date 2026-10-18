@@ -1046,13 +1046,22 @@ func (m *listModel) keyEdit(msg tea.KeyMsg) tea.Cmd {
 	case "esc":
 		m.edit = nil
 		return nil
-	case "tab":
-		// cycle through the suggestions computed for the last typed prefix
+	case "tab", "shift+tab":
+		// cycle through the suggestions computed for the last typed prefix:
+		// tab moves forward, shift+tab backward (both wrap)
 		e := m.edit
 		if len(e.sugs) == 0 {
 			return nil
 		}
-		e.sugIdx = (e.sugIdx + 1) % len(e.sugs)
+		if msg.String() == "shift+tab" {
+			if e.sugIdx < 0 {
+				e.sugIdx = len(e.sugs) - 1
+			} else {
+				e.sugIdx = wrapCursor(e.sugIdx, -1, len(e.sugs))
+			}
+		} else {
+			e.sugIdx = wrapCursor(e.sugIdx, 1, len(e.sugs))
+		}
 		e.ti.SetValue(e.sugs[e.sugIdx])
 		e.ti.CursorEnd()
 		return nil

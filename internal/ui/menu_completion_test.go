@@ -216,3 +216,49 @@ func TestStringComboEditsAsTextWithTabOptions(t *testing.T) {
 		t.Fatalf("shell = %q, want the typed zsh", got)
 	}
 }
+
+// TestCompletionShiftTabReverses: shift+tab walks the candidates backward and
+// tab forward, both wrapping; a fresh cycle starts at the last candidate when
+// stepping back.
+func TestCompletionShiftTabReverses(t *testing.T) {
+	root := mustSchema(t, `{
+  "type": "object",
+  "properties": {
+    "shell": {"anyOf": [
+      {"type": "string"},
+      {"type": "string", "enum": ["bash", "pwsh", "python", "sh", "cmd", "powershell"]}
+    ]}
+  }
+}`)
+	m := newListModel(root, tobj(tmem("shell", tstr("bash"))), Options{})
+	m.Update(tea.WindowSizeMsg{Width: 120, Height: 30})
+
+	press(m, "enter", "ctrl+u") // open the shell editor with an empty prefix
+	if m.edit == nil || len(m.edit.sugs) != 6 {
+		t.Fatalf("edit = %+v, want the six options", m.edit)
+	}
+
+	press(m, "shift+tab")
+	if m.edit.sugIdx != 5 || m.edit.ti.Value() != "powershell" {
+		t.Fatalf("first shift+tab: idx=%d value=%q, want the last candidate", m.edit.sugIdx, m.edit.ti.Value())
+	}
+	if v := m.View(); !contains(v, "powershell") {
+		t.Fatalf("the hint must show the selected candidate:\n%s", v)
+	}
+	press(m, "shift+tab")
+	if m.edit.sugIdx != 4 || m.edit.ti.Value() != "cmd" {
+		t.Fatalf("second shift+tab: idx=%d value=%q, want cmd", m.edit.sugIdx, m.edit.ti.Value())
+	}
+	press(m, "tab")
+	if m.edit.sugIdx != 5 || m.edit.ti.Value() != "powershell" {
+		t.Fatalf("tab must move forward again: idx=%d value=%q", m.edit.sugIdx, m.edit.ti.Value())
+	}
+	press(m, "tab") // wraps to the first
+	if m.edit.sugIdx != 0 || m.edit.ti.Value() != "bash" {
+		t.Fatalf("tab must wrap to the first candidate: idx=%d value=%q", m.edit.sugIdx, m.edit.ti.Value())
+	}
+	press(m, "shift+tab") // wraps back to the last
+	if m.edit.sugIdx != 5 || m.edit.ti.Value() != "powershell" {
+		t.Fatalf("shift+tab must wrap to the last candidate: idx=%d value=%q", m.edit.sugIdx, m.edit.ti.Value())
+	}
+}
