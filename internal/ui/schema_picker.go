@@ -179,15 +179,20 @@ func (m pickerModel) View() string {
 	for i := m.offset; i < len(m.filtered) && i < m.offset+height; i++ {
 		e := m.entries[m.filtered[i]]
 		prefix := cursorPrefix(i == m.cursor)
-		body := clipRunes(e.Name+"  "+e.Description, max(m.width-2, 0))
+		avail := max(m.width-2, 0)
+		name := clipRunes(e.Name, avail)
+		desc := ""
+		if rem := avail - len([]rune(name)) - 2; rem > 0 {
+			desc = clipRunes(e.Description, rem)
+		}
+		sep := ""
+		if desc != "" {
+			sep = "  "
+		}
 		if i == m.cursor {
-			b.WriteString(mSel.Render(prefix + body))
+			b.WriteString(mSel.Render(prefix + name + sep + desc))
 		} else {
-			line := prefix + clipRunes(e.Name, max(m.width-2, 0))
-			if r := []rune(body); len(r) > len(e.Name)+2 {
-				line += mCrumb.Render(string(r[len(e.Name)+2:]))
-			}
-			b.WriteString(line)
+			b.WriteString(prefix + name + sep + mCrumb.Render(desc))
 		}
 		b.WriteByte('\n')
 	}

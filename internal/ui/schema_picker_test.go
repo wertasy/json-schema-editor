@@ -6,6 +6,7 @@ import (
 	"testing"
 
 	tea "github.com/charmbracelet/bubbletea"
+	"github.com/charmbracelet/x/ansi"
 
 	"json-schema-editor/internal/catalog"
 )
@@ -195,6 +196,21 @@ func TestPickerTUIWindowResize(t *testing.T) {
 	m = nm.(pickerModel)
 	if m.width != 100 || m.height != 30 {
 		t.Fatalf("size = %dx%d", m.width, m.height)
+	}
+}
+
+func TestPickerViewKeepsGapBeforeDescription(t *testing.T) {
+	m := newPickerModel(pickEntries(), PickOptions{Filename: "new.yml"})
+	m.width, m.height = 100, 30
+	view := ansi.Strip(m.View())
+	if !strings.Contains(view, "> Server Config  web server settings") {
+		t.Fatalf("selected row name and description not separated:\n%s", view)
+	}
+	if !strings.Contains(view, "  Kube Deployment  kubernetes workload") {
+		t.Fatalf("row name and description not separated:\n%s", view)
+	}
+	if strings.Contains(view, "Deploymentkubernetes") {
+		t.Fatalf("description glued to the name:\n%s", view)
 	}
 }
 
