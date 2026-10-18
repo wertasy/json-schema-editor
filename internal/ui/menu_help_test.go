@@ -8,6 +8,8 @@ import (
 	"testing"
 
 	tea "github.com/charmbracelet/bubbletea"
+	"github.com/charmbracelet/lipgloss"
+	"github.com/muesli/termenv"
 )
 
 func TestHelpOverlay(t *testing.T) {
@@ -166,5 +168,49 @@ func TestSchemaDescLine(t *testing.T) {
 	press(m, "down", "enter")
 	if v := m.View(); contains(v, "service name, lowercase") {
 		t.Fatal("parent's description must not show inside the submenu")
+	}
+}
+
+// TestSchemaDescColorDistinctFromHelp: the row description is schema metadata
+// and must not share the hint bar's color, so the two bottom rows read apart.
+func TestSchemaDescColorDistinctFromHelp(t *testing.T) {
+	old := lipgloss.ColorProfile()
+	lipgloss.SetColorProfile(termenv.TrueColor)
+	t.Cleanup(func() { lipgloss.SetColorProfile(old) })
+
+	root := testModel()
+	root.Children[0].Desc = "service name, lowercase" // Name row
+	m := newListModel(root, testDoc(), Options{})
+	m.Update(tea.WindowSizeMsg{Width: 120, Height: 30})
+	lines := strings.Split(m.View(), "\n")
+
+	sgr := func(s string) string {
+		i := strings.IndexByte(s, 0x1b)
+		if i < 0 || i+1 >= len(s) || s[i+1] != '[' {
+			return ""
+		}
+		if j := strings.IndexByte(s[i:], 'm'); j > 0 {
+			return s[i : i+j+1]
+		}
+		return ""
+	}
+
+	var descLine string
+	for i, l := range lines {
+		if strings.Contains(l, "service name, lowercase") {
+			descLine = l
+			if hint := lines[i+1]; !strings.Contains(hint, "↑/↓ move") {
+				t.Fatalf("row after the description must be the hint bar, got %q", hint)
+			} else if sgr(hint) == sgr(l) || sgr(hint) == "" || sgr(l) == "" {
+				t.Fatalf("description and hint bar must use different colors: desc=%q help=%q",
+					sgr(l), sgr(hint))
+			}
+		}
+	}
+	if descLine == "" {
+		t.Fatalf("description row missing:\n%s", m.View())
+	}
+	if want := sgr(mDesc.Render("x")); sgr(descLine) != want {
+		t.Fatalf("description SGR = %q, want the mDesc color %q", sgr(descLine), want)
 	}
 }

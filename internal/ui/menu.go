@@ -78,7 +78,11 @@ var (
 	mWarn   = lipgloss.NewStyle().Foreground(lipgloss.Color("3")) // unknown-key warnings: yellow, distinct from red errors
 	mTail   = lipgloss.NewStyle().Faint(true)
 	mHelp   = lipgloss.NewStyle().Foreground(lipgloss.AdaptiveColor{Light: "245", Dark: "248"})
-	mDim    = lipgloss.NewStyle().Faint(true)
+	// schema descriptions (the row comment above the hint bar) are metadata,
+	// not keys to press: violet-gray keeps them apart from the neutral gray
+	// hint bar without colliding with any value color
+	mDesc = lipgloss.NewStyle().Foreground(lipgloss.AdaptiveColor{Light: "97", Dark: "141"})
+	mDim  = lipgloss.NewStyle().Faint(true)
 
 	// panel chrome and value colors (adaptive: legible on light and dark)
 	mAccent  = lipgloss.NewStyle().Foreground(lipgloss.AdaptiveColor{Light: "27", Dark: "39"})
@@ -717,7 +721,7 @@ func (m *listModel) listView() string {
 		lines++
 	}
 	for _, line := range descLines {
-		b.WriteString(clipDisplay(mHelp.Render(line), m.width-1))
+		b.WriteString(clipDisplay(mDesc.Render(line), m.width-1))
 		b.WriteByte('\n')
 	}
 	if m.notice != "" {
@@ -820,8 +824,8 @@ func (m *listModel) helpView() string {
 }
 
 // focusedDesc returns the schema description of the highlighted row (shown
-// dim above the help bar): field/drill rows carry it in fn, oneOf variant
-// rows in variant.
+// in mDesc above the hint bar, so metadata reads differently from the keys
+// to press): field/drill rows carry it in fn, oneOf variant rows in variant.
 func (m *listModel) focusedDesc(rows []row) string {
 	if len(rows) == 0 {
 		return ""
