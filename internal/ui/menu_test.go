@@ -756,6 +756,39 @@ func TestMenuNextPrevNonNull(t *testing.T) {
 	}
 }
 
+func TestMenuNextPrevCtrlJK(t *testing.T) {
+	m := newListModel(testModel(), testDoc(), Options{})
+	m.Update(tea.WindowSizeMsg{Width: 100, Height: 30})
+	cursor := func() int { return m.top().cursor }
+
+	// ctrl+j is the same as n: Name(0) → Server(2), skipping unset Mode(1).
+	press(m, "ctrl+j")
+	if cursor() != 2 {
+		t.Fatalf("ctrl+j from Name = %d, want Server (2)", cursor())
+	}
+	press(m, "ctrl+j")
+	if cursor() != 4 {
+		t.Fatalf("ctrl+j from Server = %d, want Mounts (4)", cursor())
+	}
+	// ctrl+k is the same as p.
+	press(m, "ctrl+k")
+	if cursor() != 2 {
+		t.Fatalf("ctrl+k from Mounts = %d, want Server (2)", cursor())
+	}
+
+	root := &smodel.FormNode{Key: "$", Title: "$", Kind: smodel.KObject,
+		Children: []*smodel.FormNode{
+			{Key: "a", Title: "A", Kind: smodel.KScalar, JSONType: "string"},
+			{Key: "b", Title: "B", Kind: smodel.KScalar, JSONType: "string"},
+		}}
+	empty := newListModel(root, tobj(), Options{})
+	empty.Update(tea.WindowSizeMsg{Width: 100, Height: 30})
+	press(empty, "ctrl+j", "ctrl+k")
+	if empty.top().cursor != 0 {
+		t.Fatalf("ctrl+j/k without values moved the cursor to %d", empty.top().cursor)
+	}
+}
+
 func TestParseIssueMissingProperties(t *testing.T) {
 	const plural = "at '$': missing properties 'name', 'description', 'runs'"
 	p, ok := parseIssue(plural)

@@ -36,9 +36,9 @@ func (m *listModel) keyList(msg tea.KeyMsg) tea.Cmd {
 		st.cursor = wrapCursor(st.cursor, -1, len(rows))
 	case "down", "j":
 		st.cursor = wrapCursor(st.cursor, 1, len(rows))
-	case "n":
+	case "n", "ctrl+j":
 		m.moveToValue(rows, 1)
-	case "p":
+	case "p", "ctrl+k":
 		m.moveToValue(rows, -1)
 	case "y":
 		m.copyRow(r, false)

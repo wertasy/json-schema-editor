@@ -36,7 +36,7 @@ type helpEntry struct {
 // cell accounting used for clipping and the end-of-line erase.
 var helpEntries = []helpEntry{
 	{"up / down / j / k", "move (wraps at both ends; ctrl+j/k in search and issues)"},
-	{"n / p", "next / previous key with a non-null value"},
+	{"n / p / ctrl+j / ctrl+k", "next / previous key with a non-null value"},
 	{"y / Y", "copy value / \"key\": value (JSON) to the clipboard"},
 	{"z", "show/hide fields with no value (null/unset)"},
 	{"gg / G", "jump to first / last row (Home/End too)"},
