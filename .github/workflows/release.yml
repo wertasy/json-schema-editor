@@ -51,7 +51,7 @@ jobs:
           GOARCH: ${{ matrix.goarch }}
         run: |
           set -euo pipefail
-          pkg="jse_${GITHUB_REF_NAME}_${GOOS}_${GOARCH}"
+          pkg="jse-${GITHUB_REF_NAME}-${GOOS}-${GOARCH}"
           cp README.md LICENSE dist/
           if [ "$GOOS" = windows ]; then
             (cd dist && zip -q "${pkg}.zip" jse.exe README.md LICENSE \
@@ -81,7 +81,7 @@ jobs:
         run: |
           set -euo pipefail
           cd dist
-          sha256sum jse_* > checksums.txt
+          sha256sum jse-* > checksums.txt
       - name: Publish
         env:
           GH_TOKEN: ${{ github.token }}
