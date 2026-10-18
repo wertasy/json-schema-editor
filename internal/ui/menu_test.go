@@ -12,6 +12,7 @@ import (
 	"json-schema-editor/internal/icons"
 	"json-schema-editor/internal/jsondoc"
 	"json-schema-editor/internal/smodel"
+	"json-schema-editor/internal/validate"
 )
 
 // Model-level tests for the menuconfig TUI: key-message injection plus
@@ -752,5 +753,126 @@ func TestMenuNextPrevNonNull(t *testing.T) {
 	press(im, "p")
 	if im.top().cursor != 2 {
 		t.Fatalf("p from item2 = %d, want item1 (2)", im.top().cursor)
+	}
+}
+
+func TestParseIssueMissingProperties(t *testing.T) {
+	const plural = "at '$': missing properties 'name', 'description', 'runs'"
+	p, ok := parseIssue(plural)
+	if !ok || jsondoc.PathString(p) != "$.name" {
+		t.Fatalf("plural parseIssue = %v, %v", p, ok)
+	}
+	var got []string
+	for _, f := range issueFlagPaths(plural) {
+		got = append(got, jsondoc.PathString(f))
+	}
+	if strings.Join(got, ",") != "$.name,$.description,$.runs" {
+		t.Fatalf("issueFlagPaths = %v", got)
+	}
+
+	// Singular required errors keep their old behavior.
+	const single = "at '$.server': missing property 'port'"
+	p, ok = parseIssue(single)
+	if !ok || jsondoc.PathString(p) != "$.server.port" {
+		t.Fatalf("singular parseIssue = %v, %v", p, ok)
+	}
+	if got := issueFlagPaths(single); len(got) != 1 || jsondoc.PathString(got[0]) != "$.server.port" {
+		t.Fatalf("singular issueFlagPaths = %v", got)
+	}
+}
+
+func TestSaveErrorJumpRealMultipleRequired(t *testing.T) {
+	dir := t.TempDir()
+	schemaPath := filepath.Join(dir, "multi.schema.json")
+	const schema = `{"type":"object","properties":{
+		"name":{"type":"string","title":"Name"},
+		"description":{"type":"string","title":"Description"},
+		"runs":{"type":"integer","title":"Runs"}},
+		"required":["name","description","runs"]}`
+	if err := os.WriteFile(schemaPath, []byte(schema), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	v, err := validate.New(schemaPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	model, _, err := smodel.Load(schemaPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	doc := tobj()
+	errs := v.Check(doc)
+	if len(errs) != 1 || !strings.Contains(errs[0], "missing properties") {
+		t.Fatalf("validator messages = %q", errs)
+	}
+	m := newListModel(model, doc, Options{
+		Validate: v.Check,
+		Save:     func(*jsondoc.Node) error { return nil },
+	})
+	m.width, m.height = 120, 30
+	press(m, "ctrl+s")
+	if m.errs == nil {
+		t.Fatal("save errors did not open")
+	}
+	press(m, "enter")
+	if m.errs != nil {
+		t.Fatalf("enter did not jump on %q", errs[0])
+	}
+	rows := menuRows(m)
+	if m.top().cursor < 0 || m.top().cursor >= len(rows) {
+		t.Fatalf("cursor %d out of %d rows", m.top().cursor, len(rows))
+	}
+	if got := jsondoc.PathString(rows[m.top().cursor].path); got != "$.name" {
+		t.Fatalf("jumped to %q, want $.name", got)
+	}
+}
+
+func TestSaveErrorJumpMissingProperties(t *testing.T) {
+	cases := []struct {
+		name string
+		msg  string
+		top  string
+		row  string
+	}{
+		{
+			name: "root plural",
+			msg:  "at '$': missing properties 'name', 'description', 'runs'",
+			top:  "$",
+			row:  "$.name",
+		},
+		{
+			name: "nested plural",
+			msg:  "at '$.server': missing properties 'port', 'host'",
+			top:  "$.server",
+			row:  "$.server.port",
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			validate := func(*jsondoc.Node) []string { return []string{tc.msg} }
+			m := newListModel(testModel(), testDoc(), Options{
+				Validate: validate,
+				Save:     func(*jsondoc.Node) error { return nil },
+			})
+			m.width, m.height = 120, 30
+			press(m, "ctrl+s")
+			if m.errs == nil {
+				t.Fatal("save errors did not open")
+			}
+			press(m, "enter")
+			if m.errs != nil {
+				t.Fatalf("enter did not jump: paths=%v", m.errs.paths)
+			}
+			if got := jsondoc.PathString(m.top().path); got != tc.top {
+				t.Fatalf("top path = %q, want %q", got, tc.top)
+			}
+			rows := menuRows(m)
+			if m.top().cursor < 0 || m.top().cursor >= len(rows) {
+				t.Fatalf("cursor %d out of %d rows", m.top().cursor, len(rows))
+			}
+			if got := jsondoc.PathString(rows[m.top().cursor].path); got != tc.row {
+				t.Fatalf("cursor row = %q, want %q", got, tc.row)
+			}
+		})
 	}
 }

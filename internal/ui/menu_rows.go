@@ -1599,16 +1599,17 @@ func splitIssue(msg string) (loc []any, detail string, ok bool) {
 }
 
 // parseIssue extracts the jump target from a validator message: the location
-// itself, extended by the property name for "missing property 'p'" and by the
-// first name of "additional properties 'p', … not allowed". ok is false when
-// the message carries no location or the location is not a document path.
+// itself, extended by the property name for "missing property 'p'" /
+// "missing properties 'p', 'q', …" (the first name wins) and by the first
+// name of "additional properties 'p', … not allowed". ok is false when the
+// message carries no location or the location is not a document path.
 func parseIssue(msg string) (path []any, ok bool) {
 	loc, detail, ok := splitIssue(msg)
 	if !ok {
 		return nil, false
 	}
-	if name, ok := issuePropName(detail, "missing property '"); ok {
-		return pathFor(loc, name), true
+	if names := missingProperties(detail); len(names) > 0 {
+		return pathFor(loc, names[0]), true
 	}
 	if name, ok := issuePropName(detail, "additional properties '"); ok {
 		return pathFor(loc, name), true
@@ -1625,6 +1626,13 @@ func issueFlagPaths(msg string) [][]any {
 	if !ok {
 		return nil
 	}
+	if names := missingProperties(detail); len(names) > 0 {
+		out := make([][]any, 0, len(names))
+		for _, name := range names {
+			out = append(out, pathFor(loc, name))
+		}
+		return out
+	}
 	if i := strings.Index(detail, "additional propert"); i >= 0 {
 		if names := quotedNames(detail[i:]); len(names) > 0 {
 			out := make([][]any, 0, len(names))
@@ -1634,10 +1642,20 @@ func issueFlagPaths(msg string) [][]any {
 			return out
 		}
 	}
-	if name, ok := issuePropName(detail, "missing property '"); ok {
-		return [][]any{pathFor(loc, name)}
-	}
 	return [][]any{loc}
+}
+
+// missingProperties reads the names from a missing-required-property detail,
+// singular ("missing property 'p'") or plural ("missing properties 'p', 'q'").
+func missingProperties(detail string) []string {
+	const plural = "missing properties "
+	if k := strings.Index(detail, plural); k >= 0 {
+		return quotedNames(detail[k+len(plural):])
+	}
+	if name, ok := issuePropName(detail, "missing property '"); ok {
+		return []string{name}
+	}
+	return nil
 }
 
 // issuePropName reads the property name after marker (which includes its
