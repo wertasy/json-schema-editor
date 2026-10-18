@@ -6,8 +6,8 @@ import (
 
 	tea "github.com/charmbracelet/bubbletea"
 
-	"json-schema-editor/internal/jsondoc"
-	"json-schema-editor/internal/smodel"
+	"github.com/wertasy/json-schema-editor/internal/jsondoc"
+	"github.com/wertasy/json-schema-editor/internal/smodel"
 )
 
 // TestSpliceAddEditsInlineOnTheNewRow: a/A splice a placeholder element and

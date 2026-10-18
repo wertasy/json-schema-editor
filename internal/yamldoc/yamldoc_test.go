@@ -5,7 +5,7 @@ import (
 	"strings"
 	"testing"
 
-	"json-schema-editor/internal/jsondoc"
+	"github.com/wertasy/json-schema-editor/internal/jsondoc"
 )
 
 // mustJSON parses expected JSON into the reference tree.

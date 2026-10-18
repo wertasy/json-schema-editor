@@ -11,9 +11,9 @@ import (
 
 	"github.com/charmbracelet/huh"
 
-	"json-schema-editor/internal/icons"
-	"json-schema-editor/internal/jsondoc"
-	"json-schema-editor/internal/smodel"
+	"github.com/wertasy/json-schema-editor/internal/icons"
+	"github.com/wertasy/json-schema-editor/internal/jsondoc"
+	"github.com/wertasy/json-schema-editor/internal/smodel"
 )
 
 // entry couples a huh field with the doc mutation to perform on submit.

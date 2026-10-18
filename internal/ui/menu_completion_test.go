@@ -12,7 +12,7 @@ import (
 
 	tea "github.com/charmbracelet/bubbletea"
 
-	"json-schema-editor/internal/smodel"
+	"github.com/wertasy/json-schema-editor/internal/smodel"
 )
 
 // mustSchema parses a schema document into the form model the menu drives.

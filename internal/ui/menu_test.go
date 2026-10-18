@@ -9,10 +9,10 @@ import (
 
 	tea "github.com/charmbracelet/bubbletea"
 
-	"json-schema-editor/internal/icons"
-	"json-schema-editor/internal/jsondoc"
-	"json-schema-editor/internal/smodel"
-	"json-schema-editor/internal/validate"
+	"github.com/wertasy/json-schema-editor/internal/icons"
+	"github.com/wertasy/json-schema-editor/internal/jsondoc"
+	"github.com/wertasy/json-schema-editor/internal/smodel"
+	"github.com/wertasy/json-schema-editor/internal/validate"
 )
 
 // Model-level tests for the menuconfig TUI: key-message injection plus

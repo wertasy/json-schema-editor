@@ -10,7 +10,7 @@ import (
 	"os"
 	"path/filepath"
 
-	"json-schema-editor/internal/fetch"
+	"github.com/wertasy/json-schema-editor/internal/fetch"
 )
 
 // DefaultURL is the SchemaStore catalog endpoint.

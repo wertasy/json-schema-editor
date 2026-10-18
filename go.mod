@@ -1,4 +1,4 @@
-module json-schema-editor
+module github.com/wertasy/json-schema-editor
 
 go 1.26.4
 

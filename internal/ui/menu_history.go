@@ -7,7 +7,7 @@ package ui
 import (
 	tea "github.com/charmbracelet/bubbletea"
 
-	"json-schema-editor/internal/jsondoc"
+	"github.com/wertasy/json-schema-editor/internal/jsondoc"
 )
 
 // maxHistory caps each history stack; the oldest snapshot is dropped first.

@@ -11,8 +11,8 @@ import (
 
 	"github.com/santhosh-tekuri/jsonschema/v6"
 
-	"json-schema-editor/internal/fetch"
-	"json-schema-editor/internal/jsondoc"
+	"github.com/wertasy/json-schema-editor/internal/fetch"
+	"github.com/wertasy/json-schema-editor/internal/jsondoc"
 )
 
 // httpLoader adapts fetch.Load to jsonschema.URLLoader so remote documents

@@ -20,8 +20,8 @@ import (
 
 	"gopkg.in/yaml.v3"
 
-	"json-schema-editor/internal/icons"
-	"json-schema-editor/internal/jsondoc"
+	"github.com/wertasy/json-schema-editor/internal/icons"
+	"github.com/wertasy/json-schema-editor/internal/jsondoc"
 )
 
 var jseBin string

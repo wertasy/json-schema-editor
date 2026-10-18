@@ -7,8 +7,8 @@ import (
 
 	"github.com/charmbracelet/huh"
 
-	"json-schema-editor/internal/jsondoc"
-	"json-schema-editor/internal/smodel"
+	"github.com/wertasy/json-schema-editor/internal/jsondoc"
+	"github.com/wertasy/json-schema-editor/internal/smodel"
 )
 
 // section renders one object screen: its scalar fields plus a trailing

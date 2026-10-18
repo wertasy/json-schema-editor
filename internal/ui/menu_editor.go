@@ -13,7 +13,7 @@ import (
 
 	tea "github.com/charmbracelet/bubbletea"
 
-	"json-schema-editor/internal/jsondoc"
+	"github.com/wertasy/json-schema-editor/internal/jsondoc"
 )
 
 // rawEditorDoneMsg arrives after the external editor exits.

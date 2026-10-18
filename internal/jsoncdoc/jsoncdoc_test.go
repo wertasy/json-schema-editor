@@ -5,7 +5,7 @@ import (
 	"strings"
 	"testing"
 
-	"json-schema-editor/internal/jsondoc"
+	"github.com/wertasy/json-schema-editor/internal/jsondoc"
 )
 
 func mustJSON(t *testing.T, s string) *jsondoc.Node {

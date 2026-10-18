@@ -8,8 +8,8 @@ import (
 	"github.com/charmbracelet/lipgloss"
 	"github.com/muesli/termenv"
 
-	"json-schema-editor/internal/jsondoc"
-	"json-schema-editor/internal/smodel"
+	"github.com/wertasy/json-schema-editor/internal/jsondoc"
+	"github.com/wertasy/json-schema-editor/internal/smodel"
 )
 
 func TestWrapText(t *testing.T) {

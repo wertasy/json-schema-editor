@@ -21,7 +21,7 @@ import (
 
 	"gopkg.in/yaml.v3"
 
-	"json-schema-editor/internal/jsondoc"
+	"github.com/wertasy/json-schema-editor/internal/jsondoc"
 )
 
 // Meta carries the format state a session needs to write the document back

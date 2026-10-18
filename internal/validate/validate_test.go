@@ -8,7 +8,7 @@ import (
 	"strings"
 	"testing"
 
-	"json-schema-editor/internal/jsondoc"
+	"github.com/wertasy/json-schema-editor/internal/jsondoc"
 )
 
 const schemaSrc = `{

@@ -10,7 +10,7 @@ import (
 
 	"github.com/atotto/clipboard"
 
-	"json-schema-editor/internal/jsondoc"
+	"github.com/wertasy/json-schema-editor/internal/jsondoc"
 )
 
 // copyRow copies the row under the cursor. pair selects the Y form; rows

@@ -13,14 +13,14 @@ import (
 
 	"github.com/charmbracelet/x/term"
 
-	"json-schema-editor/internal/catalog"
-	"json-schema-editor/internal/docfmt"
-	"json-schema-editor/internal/fetch"
-	"json-schema-editor/internal/icons"
-	"json-schema-editor/internal/jsondoc"
-	"json-schema-editor/internal/smodel"
-	"json-schema-editor/internal/ui"
-	"json-schema-editor/internal/validate"
+	"github.com/wertasy/json-schema-editor/internal/catalog"
+	"github.com/wertasy/json-schema-editor/internal/docfmt"
+	"github.com/wertasy/json-schema-editor/internal/fetch"
+	"github.com/wertasy/json-schema-editor/internal/icons"
+	"github.com/wertasy/json-schema-editor/internal/jsondoc"
+	"github.com/wertasy/json-schema-editor/internal/smodel"
+	"github.com/wertasy/json-schema-editor/internal/ui"
+	"github.com/wertasy/json-schema-editor/internal/validate"
 )
 
 var errNoSchema = errors.New(`no schema found: provide -s or record the schema location in the config`)

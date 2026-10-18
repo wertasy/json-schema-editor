@@ -22,7 +22,7 @@ import (
 	"io"
 	"strings"
 
-	"json-schema-editor/internal/jsondoc"
+	"github.com/wertasy/json-schema-editor/internal/jsondoc"
 )
 
 // Meta carries the comments captured while parsing so a session can write

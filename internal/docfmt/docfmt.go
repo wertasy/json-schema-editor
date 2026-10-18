@@ -16,9 +16,9 @@ import (
 	"path/filepath"
 	"strings"
 
-	"json-schema-editor/internal/jsoncdoc"
-	"json-schema-editor/internal/jsondoc"
-	"json-schema-editor/internal/yamldoc"
+	"github.com/wertasy/json-schema-editor/internal/jsoncdoc"
+	"github.com/wertasy/json-schema-editor/internal/jsondoc"
+	"github.com/wertasy/json-schema-editor/internal/yamldoc"
 )
 
 // Format edits one configuration file format.

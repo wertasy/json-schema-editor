@@ -16,9 +16,9 @@ import (
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
 	"github.com/charmbracelet/x/ansi"
-	"json-schema-editor/internal/icons"
-	"json-schema-editor/internal/jsondoc"
-	"json-schema-editor/internal/smodel"
+	"github.com/wertasy/json-schema-editor/internal/icons"
+	"github.com/wertasy/json-schema-editor/internal/jsondoc"
+	"github.com/wertasy/json-schema-editor/internal/smodel"
 )
 
 const menuHelp = "↑/↓ move · enter edit/open · esc back · ctrl+s save · / search · ? help"

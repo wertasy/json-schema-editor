@@ -12,9 +12,9 @@ import (
 	"net/url"
 	"strings"
 
-	"json-schema-editor/internal/fetch"
-	"json-schema-editor/internal/icons"
-	"json-schema-editor/internal/jsondoc"
+	"github.com/wertasy/json-schema-editor/internal/fetch"
+	"github.com/wertasy/json-schema-editor/internal/icons"
+	"github.com/wertasy/json-schema-editor/internal/jsondoc"
 )
 
 // Kind classifies a schema node for the UI.

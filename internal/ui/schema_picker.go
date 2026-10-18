@@ -19,7 +19,7 @@ import (
 	"github.com/charmbracelet/bubbles/textinput"
 	tea "github.com/charmbracelet/bubbletea"
 
-	"json-schema-editor/internal/catalog"
+	"github.com/wertasy/json-schema-editor/internal/catalog"
 )
 
 // PickOptions configures PickSchema.

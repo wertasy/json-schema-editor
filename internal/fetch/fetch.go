@@ -17,7 +17,7 @@ import (
 	"sync"
 	"time"
 
-	"json-schema-editor/internal/icons"
+	"github.com/wertasy/json-schema-editor/internal/icons"
 )
 
 // MaxBytes caps http response bodies (and thus schema documents). Exported

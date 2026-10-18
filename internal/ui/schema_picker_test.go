@@ -8,7 +8,7 @@ import (
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/x/ansi"
 
-	"json-schema-editor/internal/catalog"
+	"github.com/wertasy/json-schema-editor/internal/catalog"
 )
 
 func pickEntries() []catalog.Entry {
