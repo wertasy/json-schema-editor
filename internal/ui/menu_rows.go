@@ -730,7 +730,9 @@ func variantMatches(v *smodel.FormNode, val *jsondoc.Node) bool {
 			}
 		}
 		return false
-	case smodel.KObject:
+	case smodel.KObject, smodel.KMap:
+		// KMap defines no required keys, so any object fits it (the key set
+		// is open); KObject needs a key overlap once it has required keys.
 		if val == nil || val.Object == nil {
 			return false
 		}
@@ -786,7 +788,7 @@ func valueConforms(def *smodel.FormNode, v *jsondoc.Node) bool {
 		return false
 	case smodel.KBoolean:
 		return v != nil && v.Bool != nil
-	case smodel.KObject:
+	case smodel.KObject, smodel.KMap:
 		return v != nil && v.Object != nil
 	case smodel.KArray:
 		return v != nil && v.Array != nil

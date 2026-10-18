@@ -92,3 +92,30 @@ func TestPatternMapAddKeyMatchesPattern(t *testing.T) {
 		t.Fatalf("must land in the new job's object menu:\n%s", m.View())
 	}
 }
+
+// TestMapVariantKeysAreKnown: a oneOf whose branch is an additionalProperties
+// map (workflow env / matrix / step with) matches an object value, so the
+// keys of that object are map members, not unknown keys.
+func TestMapVariantKeysAreKnown(t *testing.T) {
+	root := mustSchema(t, `{
+  "type": "object",
+  "properties": {
+    "env": {
+      "oneOf": [
+        {"type": "object", "additionalProperties": {"oneOf": [
+          {"type": "string"}, {"type": "number"}, {"type": "boolean"}]}},
+        {"type": "string"}
+      ]
+    }
+  }
+}`)
+	doc := tobj(tmem("env", tobj(tmem("GOOS", tstr("linux")), tmem("GOARCH", tstr("amd64")))))
+	m := newListModel(root, doc, Options{})
+	m.Update(tea.WindowSizeMsg{Width: 100, Height: 30})
+	if len(m.issuesNow) != 0 {
+		t.Fatalf("map-variant keys must be known, issues = %+v", m.issuesNow)
+	}
+	if v := m.View(); !contains(v, "env") || strings.Contains(v, "(not in schema)") {
+		t.Fatalf("env row must render as a map:\n%s", v)
+	}
+}
