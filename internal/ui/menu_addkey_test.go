@@ -1,7 +1,7 @@
 package ui
 
 // Confirm-overlay enter/space = yes, and the a add-schema-less-key flow:
-// key-name input → raw-JSON value editor → doc write, with refusals for
+// key-name input → $EDITOR JSON value editor → doc write, with refusals for
 // schema-defined/duplicate keys and non-object menus.
 
 import (
@@ -54,13 +54,11 @@ func TestAddUnknownKey(t *testing.T) {
 		t.Fatalf("a at an object menu must open the key input:\n%s", m.View())
 	}
 	press(m, "e", "x", "t", "r", "a", "enter")
-	if m.add != nil || m.text == nil {
-		t.Fatalf("enter must move to the raw editor, add=%v text=%v", m.add != nil, m.text != nil)
+	if m.add != nil || m.ext == nil || m.text != nil {
+		t.Fatalf("enter must launch the external editor, add=%v ext=%v text=%v",
+			m.add != nil, m.ext != nil, m.text != nil)
 	}
-	press(m, "4", "2", "ctrl+s")
-	if m.text != nil {
-		t.Fatalf("ctrl+s must apply the value, err=%v", m.text != nil && m.text.err != "")
-	}
+	finishExternalValue(t, m, "42")
 	n, ok := m.doc.Get([]any{"extra"})
 	if !ok || n == nil || n.Num == nil || n.Num.String() != "42" {
 		t.Fatalf("extra = %+v, want 42", n)
@@ -80,10 +78,11 @@ func TestAddUnknownKey(t *testing.T) {
 		t.Fatal("a must open the key input in the Server menu")
 	}
 	press(m, "n", "o", "t", "e", "enter")
-	if m.add != nil || m.text == nil {
-		t.Fatalf("enter must move to the raw editor, add=%v text=%v", m.add != nil, m.text != nil)
+	if m.add != nil || m.ext == nil || m.text != nil {
+		t.Fatalf("enter must launch the external editor, add=%v ext=%v text=%v",
+			m.add != nil, m.ext != nil, m.text != nil)
 	}
-	press(m, "\"", "h", "i", "\"", "ctrl+s")
+	finishExternalValue(t, m, `"hi"`)
 	if s := strAt(t, m.doc, "server", "note"); s != "hi" {
 		t.Fatalf("server.note = %q, want hi", s)
 	}
@@ -218,7 +217,7 @@ func TestAddUnknownKeyPositioned(t *testing.T) {
 	// a before zz → name, kk, zz, aa
 	rowOf(rowUnknown, "zz")
 	press(m, "a", "k", "k", "enter")
-	press(m, "3", "ctrl+s")
+	finishExternalValue(t, m, "3")
 	if got := memberOrder(); got != "name kk zz aa" {
 		t.Fatalf("a before zz = %q, want name kk zz aa", got)
 	}
@@ -226,7 +225,7 @@ func TestAddUnknownKeyPositioned(t *testing.T) {
 	// A after zz → name, kk, zz, nn, aa
 	rowOf(rowUnknown, "zz")
 	press(m, "A", "n", "n", "enter")
-	press(m, "4", "ctrl+s")
+	finishExternalValue(t, m, "4")
 	if got := memberOrder(); got != "name kk zz nn aa" {
 		t.Fatalf("A after zz = %q, want name kk zz nn aa", got)
 	}
@@ -234,7 +233,7 @@ func TestAddUnknownKeyPositioned(t *testing.T) {
 	// cursor on the unset Mode row: no doc member to anchor to → append
 	rowOf(rowField, "mode")
 	press(m, "a", "e", "e", "enter")
-	press(m, "5", "ctrl+s")
+	finishExternalValue(t, m, "5")
 	if got := memberOrder(); got != "name kk zz nn aa ee" {
 		t.Fatalf("a on an unset row = %q, want append at the end", got)
 	}

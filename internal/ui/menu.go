@@ -123,13 +123,14 @@ type selState struct {
 	oneOf  *smodel.FormNode // set for enum variant editors: ctrl+t type switch
 }
 
-// textState is the raw-JSON textarea overlay (nil path = whole document).
+// textState is the built-in raw-JSON textarea overlay for schema-defined
+// fields that cannot be form-edited. Values under schema-less keys use the
+// external editor instead.
 type textState struct {
-	path      []any
-	fn        *smodel.FormNode // nil at the root editor
-	ta        textarea.Model
-	err       string
-	insertIdx int // >= 0: a/A positioned add — splice at this member index on apply; -1 = plain Set
+	path []any
+	fn   *smodel.FormNode // schema field edited as raw JSON
+	ta   textarea.Model
+	err  string
 }
 
 // issuesState is the load-time validation issues overlay: each entry can jump
@@ -210,6 +211,7 @@ type listModel struct {
 	add           *addState // key-name input for a schema-less member (a)
 	sel           *selState
 	text          *textState
+	ext           *externalEdit // pending $EDITOR target for a schema-less value
 	errs          *errsState
 	confirm       *confirmState
 	help          bool // "?" keyboard-help overlay
@@ -1584,10 +1586,6 @@ func (m *listModel) textView() string {
 	var b strings.Builder
 	b.WriteString(mTitle.Render(title))
 	b.WriteByte('\n')
-	if m.text.fn == nil && len(m.text.path) > 0 {
-		b.WriteString(clipDisplay(mErr.Render("not in schema — edit the JSON, or esc and press delete to remove the field"), m.width-1))
-		b.WriteByte('\n')
-	}
 	b.WriteString(m.text.ta.View())
 	b.WriteByte('\n')
 	if m.text.err != "" {

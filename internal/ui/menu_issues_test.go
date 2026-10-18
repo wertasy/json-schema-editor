@@ -98,16 +98,16 @@ func TestUnknownKeyRows(t *testing.T) {
 		t.Fatalf("unknown row should be marked:\n%s", v)
 	}
 
-	// enter opens the raw JSON editor with the repair hint
+	// enter launches $EDITOR on the value; a JSON edit updates the key
 	m.top().cursor = idx
 	press(m, "enter")
-	if m.text == nil {
-		t.Fatal("unknown key should open the raw editor")
+	if m.text != nil || m.ext == nil {
+		t.Fatalf("unknown key should open the external editor, text=%v ext=%v", m.text != nil, m.ext != nil)
 	}
-	if v := m.View(); !contains(v, "not in schema") {
-		t.Fatalf("raw editor should explain the repair:\n%s", v)
+	finishExternalValue(t, m, `"y"`)
+	if s := strAt(t, doc, "extra_key"); s != "y" {
+		t.Fatalf("extra_key = %q, want y", s)
 	}
-	press(m, "esc")
 
 	// nested unknown key shows in the sub menu
 	for i, r := range menuRows(m) {

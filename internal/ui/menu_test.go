@@ -69,6 +69,19 @@ func press(m *listModel, keys ...string) {
 	}
 }
 
+// finishExternalValue writes content to the pending $EDITOR temp file and
+// delivers the completion message, as tea.ExecProcess would.
+func finishExternalValue(t *testing.T, m *listModel, content string) {
+	t.Helper()
+	if m.ext == nil || m.ext.path == "" {
+		t.Fatal("no pending external value edit")
+	}
+	if err := os.WriteFile(m.ext.path, []byte(content), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	m.Update(rawEditorDoneMsg{path: m.ext.path})
+}
+
 // countSave returns Options whose Save counts write calls (a successful
 // no-op sink for save-path tests).
 func countSave(calls *int) Options {
@@ -374,12 +387,12 @@ func TestMenuCtrlC(t *testing.T) {
 	}
 }
 
-func TestMenuTextareaRaw(t *testing.T) {
+func TestUnknownKeyExternalEdit(t *testing.T) {
 	doc := testDoc()
 	doc.Set([]any{"extra"}, tstr("old"))
 	m := newListModel(testModel(), doc, Options{})
 	m.Update(tea.WindowSizeMsg{Width: 100, Height: 30})
-	openRaw := func() {
+	open := func() {
 		t.Helper()
 		for i, r := range menuRows(m) {
 			if r.kind == rowUnknown {
@@ -387,39 +400,48 @@ func TestMenuTextareaRaw(t *testing.T) {
 			}
 		}
 		press(m, "enter")
+		if m.text != nil {
+			t.Fatal("unknown key must not open the in-app raw editor")
+		}
+		if m.ext == nil {
+			t.Fatal("unknown key must launch the external editor")
+		}
 	}
-	// an unknown key opens the in-app raw editor for its value
-	openRaw()
-	if m.text == nil || !contains(m.View(), "Edit raw JSON") {
-		t.Fatalf("raw editor should open:\n%s", m.View())
+	// The temp file is prefilled with the current value as JSON.
+	open()
+	data, err := os.ReadFile(m.ext.path)
+	if err != nil {
+		t.Fatal(err)
 	}
-	if !contains(m.View(), `"old"`) {
-		t.Fatalf("raw editor prefill missing:\n%s", m.View())
+	if got := strings.TrimSpace(string(data)); got != `"old"` {
+		t.Fatalf("editor prefill = %q, want %q", got, `"old"`)
 	}
-	// invalid JSON is rejected
-	m.text.ta.SetValue("{oops")
-	press(m, "ctrl+s")
-	if m.text == nil || m.text.err == "" {
-		t.Fatal("invalid JSON must keep the editor open with an error")
+
+	// Invalid JSON leaves the value untouched and closes the editor.
+	finishExternalValue(t, m, "{oops")
+	if s := strAt(t, doc, "extra"); s != "old" {
+		t.Fatalf("extra = %q after invalid JSON, want old", s)
 	}
-	// valid JSON replaces the value
-	m.text.ta.SetValue(`"new"`)
-	press(m, "ctrl+s")
-	if m.text != nil {
-		t.Fatal("apply must close the editor")
+	if !strings.Contains(m.notice, "invalid JSON") {
+		t.Fatalf("notice = %q, want an invalid-JSON error", m.notice)
 	}
+
+	// Valid JSON replaces the value as one undo step.
+	open()
+	finishExternalValue(t, m, `"new"`)
 	if s := strAt(t, doc, "extra"); s != "new" {
 		t.Fatalf("extra = %q, want new", s)
 	}
-	// empty removes the key
-	openRaw()
-	m.text.ta.SetValue("  ")
-	press(m, "ctrl+s")
-	if m.text != nil {
-		t.Fatal("empty apply must close the editor")
+	press(m, "u")
+	if s := strAt(t, doc, "extra"); s != "old" {
+		t.Fatalf("undo restored %q, want old", s)
 	}
+
+	// An empty file removes the key.
+	open()
+	finishExternalValue(t, m, "  ")
 	if _, ok := doc.Get([]any{"extra"}); ok {
-		t.Fatal("empty raw value should remove the key")
+		t.Fatal("empty external value should remove the key")
 	}
 }
 

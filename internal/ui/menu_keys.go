@@ -183,7 +183,7 @@ func (m *listModel) activate(r row) tea.Cmd {
 	case rowToggle:
 		m.toggleEnumMember(r)
 	case rowUnknown:
-		m.openRawAt(nil, r.path) // no schema: raw JSON editor
+		return m.editValueExternal(r.path, -1) // no schema: $EDITOR on the JSON value
 	case rowIssues:
 		m.openIssues()
 	}
@@ -414,7 +414,7 @@ func (m *listModel) openRawAt(fn *smodel.FormNode, path []any) {
 		}
 	}
 	ta.Focus()
-	m.text = &textState{path: path, fn: fn, ta: ta, insertIdx: -1}
+	m.text = &textState{path: path, fn: fn, ta: ta}
 }
 
 // toggleBool flips a boolean field between its current/effective value and
@@ -646,10 +646,10 @@ func (m *listModel) memberInsertIndex(r row, after bool) int {
 	return len(mem)
 }
 
-// keyAdd drives the key-name input: enter validates the name and opens the
-// raw-JSON editor for the new member's value (ctrl+s there writes the pair;
-// esc at either stage writes nothing). Reuses pathFor (app.go) and
-// openRawAt — the same editor unknown-key rows already use.
+// keyAdd drives the key-name input: enter validates the name and launches
+// $EDITOR on an empty file for the new member's JSON value. An empty file
+// cancels; invalid JSON is discarded with a notice. esc at the name stage
+// writes nothing.
 func (m *listModel) keyAdd(msg tea.KeyMsg) tea.Cmd {
 	switch msg.String() {
 	case "enter":
@@ -681,9 +681,7 @@ func (m *listModel) keyAdd(msg tea.KeyMsg) tea.Cmd {
 			// fresh array item does; raw only when no value schema exists
 			items := node.Items
 			if items == nil || items.Kind == smodel.KRaw {
-				m.openRawAt(nil, path)
-				m.text.insertIdx = idx
-				return nil
+				return m.editValueExternal(path, idx)
 			}
 			switch items.Kind {
 			case smodel.KOneOf:
@@ -711,9 +709,7 @@ func (m *listModel) keyAdd(msg tea.KeyMsg) tea.Cmd {
 			}
 			return nil
 		}
-		m.openRawAt(nil, path) // empty textarea; applyText parses + writes
-		m.text.insertIdx = idx
-		return nil
+		return m.editValueExternal(path, idx) // empty file; applyExternalValue writes
 	case "esc":
 		m.add = nil
 		return nil
@@ -1000,11 +996,6 @@ func (m *listModel) applyText() tea.Cmd {
 	}
 	if m.text.path == nil {
 		*m.doc = *n
-	} else if m.text.insertIdx >= 0 {
-		// positioned add (a/A): splice the new member at its member index
-		parent := m.text.path[:len(m.text.path)-1]
-		key := m.text.path[len(m.text.path)-1].(string)
-		m.doc.InsertMember(parent, key, m.text.insertIdx, n)
 	} else {
 		m.doc.Set(m.text.path, n)
 	}

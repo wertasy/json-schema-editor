@@ -682,6 +682,99 @@ func TestPtyExternalRawEditor(t *testing.T) {
 	}
 }
 
+// TestPtyExternalUnknownKeyEditor: enter on a schema-less key opens $EDITOR
+// on a temp file holding only that value; the rewritten JSON is applied as
+// one edit and persists on save.
+func TestPtyExternalUnknownKeyEditor(t *testing.T) {
+	dir := t.TempDir()
+	schema := filepath.Join(dir, "mini.schema.json")
+	cfg := filepath.Join(dir, "o.json")
+	editor := filepath.Join(dir, "editor.sh")
+	writeFile(t, schema, `{"type":"object","properties":{"name":{"type":"string","title":"Name"}}}`)
+	writeFile(t, cfg, `{"name":"z","extra":"old"}`)
+	writeFile(t, editor, "#!/bin/sh\n"+
+		`grep -q '"old"' "$1" || exit 3`+"\n"+
+		`grep -q '"name"' "$1" && exit 4`+"\n"+
+		`echo '"from-editor"' > "$1"`+"\n")
+	if err := os.Chmod(editor, 0o755); err != nil {
+		t.Fatal(err)
+	}
+
+	cmd := exec.Command(jseBin, "-s", schema, cfg)
+	cmd.Dir = ".."
+	cmd.Env = append(os.Environ(), "TERM=xterm-256color", "EDITOR="+editor)
+	tty, err := pty.StartWithSize(cmd, &pty.Winsize{Rows: 30, Cols: 120})
+	if err != nil {
+		t.Skipf("no pty available: %v", err)
+	}
+	defer tty.Close()
+
+	frames := make(chan string, 64)
+	go func() {
+		buf := make([]byte, 4096)
+		var acc bytes.Buffer
+		for {
+			n, err := tty.Read(buf)
+			if n > 0 {
+				acc.Write(buf[:n])
+				frames <- acc.String()
+			}
+			if err != nil {
+				close(frames)
+				return
+			}
+		}
+	}()
+	var lastFrame string
+	waitFrame := func(what string, offset int, want ...string) (string, int) {
+		t.Helper()
+		deadline := time.After(15 * time.Second)
+		for {
+			select {
+			case frame, ok := <-frames:
+				if !ok {
+					t.Fatalf("pty closed while waiting for %s; last output:\n%s", what, lastFrame)
+				}
+				lastFrame = frame
+				ready := true
+				for _, w := range want {
+					if !strings.Contains(frame[offset:], w) {
+						ready = false
+						break
+					}
+				}
+				if ready {
+					return frame, len(frame)
+				}
+			case <-deadline:
+				t.Fatalf("timed out waiting for %s; last output:\n%s", what, lastFrame)
+			}
+		}
+	}
+
+	_, off := waitFrame("root menu", 0, "extra", "(not in schema)")
+	tty.Write([]byte("j")) // issues row → Name
+	_, off = waitFrame("cursor on Name", off, "> Name")
+	tty.Write([]byte("j")) // Name → $schema
+	_, off = waitFrame("cursor on $schema", off, "> $schema")
+	tty.Write([]byte("j")) // $schema → extra
+	_, off = waitFrame("cursor on unknown key", off, "> extra")
+	tty.Write([]byte("\r")) // launch $EDITOR on the value
+	_, off = waitFrame("value edited", off, "Value edited")
+	tty.Write([]byte("\x13")) // ctrl+s save
+	_, _ = waitFrame("saved", off, "Saved")
+	tty.Write([]byte("\x03"))
+
+	waitErr := cmd.Wait()
+	if ee, ok := waitErr.(*exec.ExitError); !ok || ee.ExitCode() != 130 {
+		t.Fatalf("exit after ctrl+c = %v, want 130", waitErr)
+	}
+	got := readJSON(t, cfg).(map[string]any)
+	if got["extra"] != "from-editor" || got["name"] != "z" {
+		t.Fatalf("saved doc = %#v, want extra from-editor and name z", got)
+	}
+}
+
 // TestPtyQuitSavePrompt drives the root esc exit path on a real terminal:
 // an unchanged document quits immediately (exit 0, no write), a changed one
 // asks whether to save, y writes and exits 0, n discards and exits 130.
