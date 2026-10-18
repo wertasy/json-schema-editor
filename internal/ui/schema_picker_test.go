@@ -60,6 +60,8 @@ func pkey(s string) tea.KeyMsg {
 		return tea.KeyMsg{Type: tea.KeyBackspace}
 	case "tab":
 		return tea.KeyMsg{Type: tea.KeyTab}
+	case "shift+tab":
+		return tea.KeyMsg{Type: tea.KeyShiftTab}
 	default:
 		return tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune(s)}
 	}
@@ -192,78 +194,38 @@ func TestPickerTUIPresetReplacedOnFirstKey(t *testing.T) {
 	}
 }
 
-func TestPickerTUITabCompletesCandidates(t *testing.T) {
-	m := newPickerModel(pickEntries(), PickOptions{Filename: "new.yml"})
-	if m.completeIdx != -1 {
-		t.Fatalf("completion active before Tab: %d", m.completeIdx)
-	}
-	m = update(m, "tab")
-	if m.ti.Value() != "Server Config" || m.stale {
-		t.Fatalf("first Tab: value=%q stale=%v", m.ti.Value(), m.stale)
-	}
-	if len(m.filtered) != 1 || pickEntries()[m.filtered[0]].Name != "Server Config" || m.cursor != 0 {
-		t.Fatalf("first Tab filter/cursor: filtered=%v cursor=%d", m.filtered, m.cursor)
-	}
-	m = update(m, "tab")
-	if m.ti.Value() != "Kube Deployment" || m.cursor != 0 {
-		t.Fatalf("second Tab: value=%q cursor=%d", m.ti.Value(), m.cursor)
-	}
-	m = update(m, "tab")
-	if m.ti.Value() != "Plain" {
-		t.Fatalf("third Tab: value=%q", m.ti.Value())
-	}
-	m = update(m, "tab") // wraps over the snapshot taken on the first Tab
-	if m.ti.Value() != "Server Config" {
-		t.Fatalf("wrapped Tab: value=%q", m.ti.Value())
-	}
-	// Enter after completion picks the completed candidate.
-	m = update(m, "enter")
-	if m.chosen == nil || m.chosen.URL != "https://x/server.json" {
-		t.Fatalf("enter after Tab chose %#v", m.chosen)
-	}
-}
-
-func TestPickerTUITabStartsAtHighlightedRow(t *testing.T) {
+func TestPickerTUITabMovesCursor(t *testing.T) {
 	m := newPickerModel(pickEntries(), PickOptions{})
-	m = update(m, "down", "down")
+	m = update(m, "tab")
+	if m.cursor != 1 {
+		t.Fatalf("tab cursor = %d, want 1", m.cursor)
+	}
+	m = update(m, "tab")
 	if m.cursor != 2 {
-		t.Fatalf("cursor = %d", m.cursor)
+		t.Fatalf("second tab cursor = %d, want 2", m.cursor)
 	}
 	m = update(m, "tab")
-	if m.ti.Value() != "Plain" {
-		t.Fatalf("Tab from row 2 = %q, want Plain", m.ti.Value())
+	if m.cursor != 0 {
+		t.Fatalf("tab wrap cursor = %d, want 0", m.cursor)
 	}
-	m = update(m, "tab")
-	if m.ti.Value() != "Server Config" {
-		t.Fatalf("Tab wrap = %q, want Server Config", m.ti.Value())
+	m = update(m, "shift+tab")
+	if m.cursor != 2 {
+		t.Fatalf("shift+tab wrap cursor = %d, want 2", m.cursor)
 	}
-}
-
-func TestPickerTUITabCycleResetsOnTyping(t *testing.T) {
-	m := newPickerModel(pickEntries(), PickOptions{})
-	m = update(m, "tab")
-	if m.completeIdx != 0 {
-		t.Fatalf("completion index = %d", m.completeIdx)
+	m = update(m, "shift+tab")
+	if m.cursor != 1 {
+		t.Fatalf("shift+tab cursor = %d, want 1", m.cursor)
 	}
-	m = update(m, "backspace")
-	if m.completeIdx != -1 || m.complete != nil {
-		t.Fatalf("typing did not reset completion: idx=%d set=%v", m.completeIdx, m.complete)
-	}
-	// The new snapshot is the list filtered by the edited value.
-	m = update(m, "tab")
-	if m.ti.Value() != "Server Config" {
-		t.Fatalf("fresh Tab = %q", m.ti.Value())
-	}
-	if len(m.complete) != 1 {
-		t.Fatalf("fresh snapshot = %v, want one candidate", m.complete)
+	if m.ti.Value() != "" {
+		t.Fatalf("tab keys must not edit the query, got %q", m.ti.Value())
 	}
 }
 
 func TestPickerTUITabWithNoCandidates(t *testing.T) {
 	m := newPickerModel(pickEntries(), PickOptions{Query: "zzz"})
-	m = update(m, "tab")
-	if m.ti.Value() != "zzz" || m.completeIdx != -1 {
-		t.Fatalf("Tab with no matches: value=%q idx=%d", m.ti.Value(), m.completeIdx)
+	m = update(m, "tab", "shift+tab")
+	if m.cursor != 0 || m.ti.Value() != "zzz" {
+		t.Fatalf("tab with no matches: cursor=%d value=%q", m.cursor, m.ti.Value())
 	}
 }
 

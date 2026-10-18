@@ -69,11 +69,6 @@ type pickerModel struct {
 	chosen   *catalog.Entry
 	aborted  bool
 	stale    bool // the preset query is untouched: the first text key replaces it
-
-	// Tab completion: the candidates visible when Tab was first pressed,
-	// cycled in catalog order. completeIdx is -1 while inactive.
-	complete    []int
-	completeIdx int
 }
 
 func newPickerModel(entries []catalog.Entry, opts PickOptions) pickerModel {
@@ -83,13 +78,12 @@ func newPickerModel(entries []catalog.Entry, opts PickOptions) pickerModel {
 	ti.SetValue(opts.Query)
 	ti.CursorEnd()
 	m := pickerModel{
-		entries:     entries,
-		filename:    opts.Filename,
-		ti:          ti,
-		width:       80,
-		height:      24,
-		stale:       opts.Query != "",
-		completeIdx: -1,
+		entries:  entries,
+		filename: opts.Filename,
+		ti:       ti,
+		width:    80,
+		height:   24,
+		stale:    opts.Query != "",
 	}
 	m.refilter()
 	return m
@@ -101,37 +95,6 @@ func (m *pickerModel) refilter() {
 	m.filtered = filterEntries(m.entries, m.ti.Value())
 	m.cursor = 0
 	m.offset = 0
-}
-
-// completeNext fills the search input with the next candidate name from the
-// set visible when Tab was first pressed. The highlighted row is the cycle's
-// starting point; the list then filters to the completed name and the cursor
-// follows that entry. Typing afterwards starts a fresh cycle.
-func (m *pickerModel) completeNext() {
-	if m.completeIdx < 0 {
-		m.complete = append([]int(nil), m.filtered...)
-		if m.cursor > 0 {
-			m.completeIdx = m.cursor - 1
-		}
-		if len(m.complete) == 0 {
-			return
-		}
-	}
-	if len(m.complete) == 0 {
-		return
-	}
-	m.completeIdx = (m.completeIdx + 1) % len(m.complete)
-	idx := m.complete[m.completeIdx]
-	m.ti.SetValue(m.entries[idx].Name)
-	m.ti.CursorEnd()
-	m.stale = false
-	m.refilter()
-	for i, fi := range m.filtered {
-		if fi == idx {
-			m.cursor = i
-			break
-		}
-	}
 }
 
 // modifiesText reports whether the key changes the search input (as opposed
@@ -157,14 +120,11 @@ func (m pickerModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		case "ctrl+c", "esc":
 			m.aborted = true
 			return m, tea.Quit
-		case "up", "ctrl+k":
+		case "up", "ctrl+k", "shift+tab":
 			m.cursor = wrapCursor(m.cursor, -1, len(m.filtered))
 			return m, nil
-		case "down", "ctrl+j":
+		case "down", "ctrl+j", "tab":
 			m.cursor = wrapCursor(m.cursor, 1, len(m.filtered))
-			return m, nil
-		case "tab":
-			m.completeNext()
 			return m, nil
 		case "enter":
 			if len(m.filtered) > 0 {
@@ -187,12 +147,8 @@ func (m pickerModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	m.ti, cmd = m.ti.Update(msg)
 	// Only a query change re-filters (and resets the cursor). Other messages
 	// — cursor blink ticks, key presses that merely move inside the input —
-	// must leave the selection where the user put it. A manual edit also
-	// starts a fresh Tab-completion cycle.
+	// must leave the selection where the user put it.
 	if changed || before != m.ti.Value() {
-		if before != m.ti.Value() {
-			m.complete, m.completeIdx = nil, -1
-		}
 		m.refilter()
 	}
 	return m, cmd
@@ -241,7 +197,7 @@ func (m pickerModel) View() string {
 		b.WriteByte('\n')
 	}
 	b.WriteString(mHelp.Render("search: ") + m.ti.View() + "\n")
-	b.WriteString(clipDisplay(mHelp.Render("type to search · ↑/↓ or ctrl+j/k move · tab complete · enter select · esc cancel"), m.width-1))
+	b.WriteString(clipDisplay(mHelp.Render("type to search · ↑/↓ or tab/shift+tab move · enter select · esc cancel"), m.width-1))
 	return b.String()
 }
 

@@ -46,7 +46,7 @@ jse -s https://example.com/schemas/server.schema.json server.json
 3. 两者皆无 → 查 SchemaStore 公共目录（schemastore.org）：按文件名做 `fileMatch` 匹配，**唯一命中直接采用**；歧义或未命中都打开检索选择器（`--pick` 强制打开）。选中即用，中止 → 报错 `no schema found: …`，exit 2。
 4. 目录里也没有 → 报错 `no schema found: provide -s or record the schema location in the config`，exit 2。
 
-选择器（TUI 全屏：输入过滤、↑/↓ 或 `ctrl+j`/`ctrl+k` 移动、`tab` 用候选名称补全搜索框（从当前高亮项开始循环，继续 `tab` 依次切换，输入即重置循环）、enter 选定、esc 取消；`--accessible` 为行协议：输入搜索词 → 编号列表 → 数字选择，`0` 重搜、空行中止）。自动匹配或选定的 URL 按 `-s` 同样规则写回配置的 schema 指向（JSON/JSONC 顶层 `$schema`；YAML 文件头注释），下次启动直接走第 2 优先级；`-pick` 则强制重选并覆盖既有指向。
+选择器（TUI 全屏：输入过滤、↑/↓ 或 `ctrl+j`/`ctrl+k` 移动（`tab`/`shift+tab` 等同下/上方向键）、enter 选定、esc 取消；`--accessible` 为行协议：输入搜索词 → 编号列表 → 数字选择，`0` 重搜、空行中止）。自动匹配或选定的 URL 按 `-s` 同样规则写回配置的 schema 指向（JSON/JSONC 顶层 `$schema`；YAML 文件头注释），下次启动直接走第 2 优先级；`-pick` 则强制重选并覆盖既有指向。
 
 schema 抓取失败（路径不存在 / HTTP 非 2xx / 超时）→ exit 1（远端 schema 有可用缓存时改为回退到缓存，见下节）。远端 `$ref`（包括相对 base URI、`$id`）同样支持；不可达的 ref 降级为原始 JSON 编辑（见下文）。
 
