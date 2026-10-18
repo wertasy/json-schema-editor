@@ -647,8 +647,11 @@ func TestEditCompletion(t *testing.T) {
 	press(m, "enter")                                 // < Add item > → new item menu
 	press(m, "down", "enter")                         // past < Remove this item >, Source input (isNew)
 
-	if m.edit == nil || len(m.edit.cands) != 2 {
-		t.Fatalf("candidates = %v, want the two existing src values", m.edit.cands)
+	if m.edit == nil || len(m.edit.cands) != 3 {
+		t.Fatalf("candidates = %v, want the two existing src values plus dst", m.edit.cands)
+	}
+	if got := strings.Join(m.edit.cands, " "); got != "/data /data2 /mnt" {
+		t.Fatalf("candidate order = %q, want same-key src values first", got)
 	}
 	if v := m.View(); !contains(v, "tab: ") || !contains(v, "/data2") {
 		t.Fatalf("completion hints should be listed:\n%s", v)
@@ -660,8 +663,8 @@ func TestEditCompletion(t *testing.T) {
 		t.Fatalf("filtered suggestions = %v, want [/data2]", m.edit.sugs)
 	}
 	press(m, "ctrl+u") // clear input
-	if len(m.edit.sugs) != 2 {
-		t.Fatalf("cleared input should restore both candidates: %v", m.edit.sugs)
+	if len(m.edit.sugs) != 3 {
+		t.Fatalf("cleared input should restore all candidates: %v", m.edit.sugs)
 	}
 
 	// tab cycles and fills the input

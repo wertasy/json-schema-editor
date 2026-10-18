@@ -1076,8 +1076,11 @@ func (m *listModel) keyEdit(msg tea.KeyMsg) tea.Cmd {
 // --- value completion ------------------------------------------------------
 
 // completions collects the candidate values for fn at path: for
-// x-tag-reference fields the tag values of the referenced structures, else the
-// existing same-key strings elsewhere in the document.
+// x-tag-reference fields the tag values of the referenced structures; for
+// other string scalars every non-empty string value anywhere in the document,
+// with values sharing the field's key ranked first. Each group keeps document
+// order and duplicates collapse, the same-key group winning. The value at
+// path itself is never offered.
 func (m *listModel) completions(fn *smodel.FormNode, path []any) []string {
 	if fn.Kind == smodel.KScalar && fn.TagRef != "" {
 		return m.tagRefCompletions(fn.TagRef)
@@ -1085,34 +1088,69 @@ func (m *listModel) completions(fn *smodel.FormNode, path []any) []string {
 	if fn.Kind != smodel.KScalar || (fn.JSONType != "string" && fn.JSONType != "") {
 		return nil
 	}
-	var out []string
-	seen := map[string]bool{}
-	var walk func(n *jsondoc.Node, p []any)
-	walk = func(n *jsondoc.Node, p []any) {
+	var same, other []string
+	sameSeen, otherSeen := map[string]bool{}, map[string]bool{}
+	add := func(group *[]string, seen map[string]bool, v string) {
+		if v != "" && !seen[v] {
+			seen[v] = true
+			*group = append(*group, v)
+		}
+	}
+	var walk func(n *jsondoc.Node, p []any, key string)
+	walk = func(n *jsondoc.Node, p []any, key string) {
 		if n == nil {
 			return
 		}
-		if n.Object != nil {
+		switch {
+		case n.Object != nil:
 			for _, mem := range *n.Object {
-				mp := pathFor(p, mem.Key)
-				if mem.Key == fn.Key && mem.Val != nil && mem.Val.Str != nil && !pathEq(mp, path) {
-					v := *mem.Val.Str
-					if v != "" && !seen[v] {
-						seen[v] = true
-						out = append(out, v)
-					}
+				if len(p) == 0 && mem.Key == "$schema" {
+					continue // the editor's own schema pointer, not user data
 				}
-				walk(mem.Val, mp)
+				mp := pathFor(p, mem.Key)
+				if mem.Val != nil && mem.Val.Str != nil {
+					if !pathEq(mp, path) {
+						if mem.Key == fn.Key {
+							add(&same, sameSeen, *mem.Val.Str)
+						} else {
+							add(&other, otherSeen, *mem.Val.Str)
+						}
+					}
+					continue
+				}
+				walk(mem.Val, mp, mem.Key)
 			}
-			return
-		}
-		if n.Array != nil {
+		case n.Array != nil:
 			for i, it := range *n.Array {
-				walk(it, pathIdx(p, i))
+				ip := pathIdx(p, i)
+				if it != nil && it.Str != nil {
+					if !pathEq(ip, path) {
+						if key == fn.Key {
+							add(&same, sameSeen, *it.Str)
+						} else {
+							add(&other, otherSeen, *it.Str)
+						}
+					}
+					continue
+				}
+				walk(it, ip, key)
+			}
+		case n.Str != nil && !pathEq(p, path):
+			if key == fn.Key {
+				add(&same, sameSeen, *n.Str)
+			} else {
+				add(&other, otherSeen, *n.Str)
 			}
 		}
 	}
-	walk(m.doc, nil)
+	walk(m.doc, nil, "")
+	out := make([]string, 0, len(same)+len(other))
+	out = append(out, same...)
+	for _, v := range other {
+		if !sameSeen[v] {
+			out = append(out, v)
+		}
+	}
 	return out
 }
 

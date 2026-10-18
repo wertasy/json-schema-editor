@@ -106,7 +106,39 @@ func TestSharedComboVariantCompletion(t *testing.T) {
 	if m.edit == nil || m.edit.fn.Key != "udp_timeout" {
 		t.Fatalf("edit = %+v, want the udp_timeout string variant:\n%s", m.edit, m.View())
 	}
-	if got := strings.Join(m.edit.cands, " "); got != "keep-me" {
-		t.Fatalf("candidates = %q, want udp_timeout's own values [keep-me]", got)
+	// own key first, then every other string value in the document
+	if got := strings.Join(m.edit.cands, " "); got != "keep-me 5s" {
+		t.Fatalf("candidates = %q, want [keep-me 5s]", got)
+	}
+}
+
+func TestCompletionAllDocumentStrings(t *testing.T) {
+	// string fields without x-tag-reference complete from every non-empty
+	// string in the document, same-key values first; a duplicate reaching the
+	// other group first still ranks with its key
+	doc := tobj(
+		tmem("$schema", tstr("/tmp/probe.schema.json")),
+		tmem("note", tstr("shared")),
+		tmem("mounts", tarr(
+			tobj(tmem("src", tstr("/data")), tmem("dst", tstr("/mnt"))),
+			tobj(tmem("src", tstr("shared"))))),
+		tmem("tags", tarr(tstr("alpha"), tstr("bee"))),
+		tmem("ratio", tnum("1.5")),
+	)
+	lm := lmAt(doc)
+	mounts := childOf(t, testModel(), "mounts")
+	src := childOf(t, mounts.Items, "src")
+	got := strings.Join(lm.completions(src, []any{"mounts", 2, "src"}), " ")
+	if want := "/data shared /mnt alpha bee"; got != want {
+		t.Fatalf("candidates = %q, want %q", got, want)
+	}
+
+	// array items rank their own array's values first and skip the item
+	// being edited
+	logging := childOf(t, testModel(), "logging")
+	tags := childOf(t, logging, "tags")
+	got = strings.Join(lm.completions(tags.Items, []any{"tags", 0}), " ")
+	if want := "bee shared /data /mnt"; got != want {
+		t.Fatalf("array item candidates = %q, want %q", got, want)
 	}
 }
