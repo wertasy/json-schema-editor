@@ -643,11 +643,23 @@ func (m *listModel) listView() string {
 	}
 
 	if m.search.active {
-		h := m.height - header - 2 // search line + help line
+		bottom := 2 // input line + footer line
 		if m.search.replace {
-			h--
+			bottom++
+		}
+		h := m.height - header - bottom
+		if h < 1 {
+			h = 1
 		}
 		m.writeSearchRows(&b, h)
+		// Pin the search/replace inputs and the footer to the bottom of the
+		// terminal; a short result list is padded with blank rows instead of
+		// letting the inputs float under the results.
+		lines := strings.Count(b.String(), "\n")
+		for lines < m.height-bottom {
+			b.WriteByte('\n')
+			lines++
+		}
 		b.WriteString(clipDisplay(mHelp.Render("search: ")+m.search.ti.View(), m.width-1))
 		b.WriteByte('\n')
 		if m.search.replace {
@@ -660,7 +672,6 @@ func (m *listModel) listView() string {
 		}
 		if m.search.reErr != "" {
 			b.WriteString(clipDisplay(mErr.Render(clipRunes("invalid regex: "+m.search.reErr+" · esc close", m.width)), m.width-1))
-			b.WriteByte('\n')
 			return b.String()
 		}
 		modeTxt := "literal"
@@ -668,7 +679,6 @@ func (m *listModel) listView() string {
 			modeTxt = "regex"
 		}
 		b.WriteString(clipDisplay(mHelp.Render("↑/↓ ctrl+j/k · enter jump/replace · tab replace · alt+i "+caseTxt+" · alt+x "+modeTxt), m.width-1))
-		b.WriteByte('\n')
 		return b.String()
 	}
 

@@ -196,6 +196,13 @@ func (m pickerModel) View() string {
 		}
 		b.WriteByte('\n')
 	}
+	// Pin the search input and help to the terminal bottom, like the main
+	// menu: fill the unused result area with blank rows.
+	lines := strings.Count(b.String(), "\n")
+	for lines < m.height-2 {
+		b.WriteByte('\n')
+		lines++
+	}
 	b.WriteString(mHelp.Render("search: ") + m.ti.View() + "\n")
 	b.WriteString(clipDisplay(mHelp.Render("type to search · ↑/↓ or tab/shift+tab move · enter select · esc cancel"), m.width-1))
 	return b.String()

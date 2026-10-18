@@ -229,6 +229,21 @@ func TestPickerTUITabWithNoCandidates(t *testing.T) {
 	}
 }
 
+func TestPickerViewPinsSearchToBottom(t *testing.T) {
+	m := newPickerModel(pickEntries(), PickOptions{Filename: "new.yml"})
+	m.width, m.height = 100, 30
+	lines := strings.Split(ansi.Strip(m.View()), "\n")
+	if len(lines) != 30 {
+		t.Fatalf("view has %d lines, want 30:\n%s", len(lines), strings.Join(lines, "\n"))
+	}
+	if !strings.Contains(lines[28], "search:") {
+		t.Fatalf("search input not at the bottom:\n%s", strings.Join(lines, "\n"))
+	}
+	if !strings.Contains(lines[29], "enter select") {
+		t.Fatalf("help line not last:\n%s", strings.Join(lines, "\n"))
+	}
+}
+
 func TestPickerTUIWindowResize(t *testing.T) {
 	m := newPickerModel(pickEntries(), PickOptions{})
 	nm, _ := m.Update(tea.WindowSizeMsg{Width: 100, Height: 30})

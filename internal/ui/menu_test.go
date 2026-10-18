@@ -789,6 +789,33 @@ func TestMenuNextPrevCtrlJK(t *testing.T) {
 	}
 }
 
+func TestSearchViewPinsInputsToBottom(t *testing.T) {
+	m := newListModel(testModel(), testDoc(), Options{})
+	m.Update(tea.WindowSizeMsg{Width: 100, Height: 30})
+	press(m, "/")
+	lines := strings.Split(m.View(), "\n")
+	if len(lines) != 30 {
+		t.Fatalf("search view has %d lines, want 30:\n%s", len(lines), strings.Join(lines, "\n"))
+	}
+	if !strings.Contains(lines[28], "search:") {
+		t.Fatalf("search input not at the bottom:\n%s", strings.Join(lines, "\n"))
+	}
+	if !strings.Contains(lines[29], "enter jump") {
+		t.Fatalf("search help not last:\n%s", strings.Join(lines, "\n"))
+	}
+
+	// Replace mode stacks two inputs directly above the help line.
+	press(m, "esc", "r")
+	lines = strings.Split(m.View(), "\n")
+	if len(lines) != 30 {
+		t.Fatalf("replace view has %d lines, want 30:\n%s", len(lines), strings.Join(lines, "\n"))
+	}
+	if !strings.Contains(lines[27], "search:") || !strings.Contains(lines[28], "replace:") ||
+		!strings.Contains(lines[29], "enter jump") {
+		t.Fatalf("replace inputs not pinned to the bottom:\n%s", strings.Join(lines, "\n"))
+	}
+}
+
 func TestParseIssueMissingProperties(t *testing.T) {
 	const plural = "at '$': missing properties 'name', 'description', 'runs'"
 	p, ok := parseIssue(plural)
