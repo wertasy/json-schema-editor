@@ -238,3 +238,36 @@ func TestAddUnknownKeyPositioned(t *testing.T) {
 		t.Fatalf("a on an unset row = %q, want append at the end", got)
 	}
 }
+
+// TestAddUnknownKeyCreatesMissingParents: adding a key inside a menu whose
+// objects the document never wrote (defaults.run unset) must build the chain
+// instead of panicking with "InsertMember into non-object".
+func TestAddUnknownKeyCreatesMissingParents(t *testing.T) {
+	root := mustSchema(t, `{
+  "type": "object",
+  "properties": {
+    "defaults": {"type": "object", "properties": {
+      "run": {"type": "object", "properties": {"shell": {"type": "string"}}}
+    }}
+  }
+}`)
+	m := newListModel(root, tobj(), Options{}) // no defaults, no run
+	m.Update(tea.WindowSizeMsg{Width: 100, Height: 30})
+
+	press(m, "enter", "enter") // defaults -> run
+	if m.top().path[0] != "defaults" || m.top().path[1] != "run" {
+		t.Fatalf("stack top = %v, want $.defaults.run", m.top().path)
+	}
+	press(m, "a", "x", "y", "z", "enter")
+	if m.add != nil || m.ext == nil {
+		t.Fatalf("enter must launch the value editor, add=%v ext=%v", m.add != nil, m.ext != nil)
+	}
+	finishExternalValue(t, m, `"v"`)
+
+	if got := strAt(t, m.doc, "defaults", "run", "xyz"); got != "v" {
+		t.Fatalf("defaults.run.xyz = %q, want v (doc %+v)", got, m.doc)
+	}
+	if v := m.View(); !contains(v, "xyz") {
+		t.Fatalf("the new member must show up:\n%s", v)
+	}
+}

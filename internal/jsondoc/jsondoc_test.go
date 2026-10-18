@@ -194,6 +194,23 @@ func TestInsertAndInsertMember(t *testing.T) {
 	if err := wrapPanic(func() { n.InsertMember([]any{"list"}, "k", 0, FromAny(1)) }); err == nil {
 		t.Fatal("InsertMember into array should panic")
 	}
+
+	// a target the document never created builds its parent chain, like Set
+	fresh := &Node{Object: &[]Member{}}
+	fresh.InsertMember([]any{"defaults", "run"}, "shell", 0, FromAny("bash"))
+	if got, ok := fresh.Get([]any{"defaults", "run", "shell"}); !ok || got.Str == nil || *got.Str != "bash" {
+		t.Fatalf("missing parents not created: %+v", fresh)
+	}
+	// null ancestors and missing array elements resolve to containers too
+	fresh.InsertMember([]any{"items", 0}, "k", 0, FromAny(1))
+	if got, ok := fresh.Get([]any{"items", 0, "k"}); !ok || got.Num == nil || got.Num.String() != "1" {
+		t.Fatalf("array element parents not created: %+v", fresh)
+	}
+	// a real scalar in the chain is still a structural conflict
+	conflict := &Node{Object: &[]Member{{Key: "a", Val: FromAny(1)}}}
+	if err := wrapPanic(func() { conflict.InsertMember([]any{"a", "b"}, "k", 0, FromAny(1)) }); err == nil {
+		t.Fatal("InsertMember through a scalar should panic")
+	}
 }
 
 func TestMove(t *testing.T) {

@@ -444,14 +444,19 @@ func (n *Node) Move(path []any, from, to int) bool {
 // InsertMember adds key=v to the object at path at member index idx,
 // shifting the members from idx on by one; idx clamps to [0, len]. An
 // existing key keeps its position and only gets its value replaced.
+// Auto-creates missing intermediates and the object itself, like Append and
+// Insert do for arrays; it panics if the path resolves to a non-object.
 func (n *Node) InsertMember(path []any, key string, idx int, v *Node) {
 	obj, ok := n.Get(path)
-	if !ok || obj.Object == nil {
-		if ok && empty(obj) {
-			*obj = *containerFor("")
-		} else {
+	if !ok {
+		// the menu target was never written to the document: build the chain
+		n.Set(path, &Node{Object: &[]Member{}})
+		obj, _ = n.Get(path)
+	} else if obj.Object == nil {
+		if !empty(obj) {
 			panic("jsondoc: InsertMember into non-object")
 		}
+		*obj = *containerFor("")
 	}
 	for i := range *obj.Object {
 		if (*obj.Object)[i].Key == key {
