@@ -8,6 +8,8 @@
 
 源码构建：`go build -o jse ./cmd/jse`（Linux / macOS）。`jse --version` 输出发布版本、提交与构建时间。
 
+`go install github.com/wertasy/json-schema-editor/cmd/jse@latest` 安装最新发布版本；版本号取自模块 build info，`jse --version` 显示 `jse vX.Y.Z`（没有 ldflags 注入的提交/构建时间时省略括号部分）。
+
 ## 用法
 
 ```
