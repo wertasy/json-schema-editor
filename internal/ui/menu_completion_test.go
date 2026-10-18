@@ -262,3 +262,95 @@ func TestCompletionShiftTabReverses(t *testing.T) {
 		t.Fatalf("shift+tab must wrap to the last candidate: idx=%d value=%q", m.edit.sugIdx, m.edit.ti.Value())
 	}
 }
+
+// TestCompletionSkipsMultilineValues: script blocks and other multiline text
+// never become candidates — they cannot complete a one-line field and would
+// break the hint row — whatever their source (document, tags, schema options).
+func TestCompletionSkipsMultilineValues(t *testing.T) {
+	root := mustSchema(t, `{
+  "type": "object",
+  "properties": {
+    "note": {"type": "string"},
+    "run": {"type": "string"},
+    "steps": {"type": "array", "items": {"type": "object", "properties": {"cmd": {"type": "string"}}}}
+  }
+}`)
+	doc := tobj(
+		tmem("note", tstr("hello")),
+		tmem("run", tstr("set -euo pipefail\nmkdir -p dist")),
+		tmem("steps", tarr(
+			tobj(tmem("cmd", tstr("line1\nline2"))),
+			tobj(tmem("cmd", tstr("one-liner"))))))
+	m := newListModel(root, doc, Options{})
+	m.Update(tea.WindowSizeMsg{Width: 120, Height: 30})
+
+	press(m, "enter", "ctrl+u") // note editor, empty prefix
+	if m.edit == nil {
+		t.Fatalf("note must edit in place:\n%s", m.View())
+	}
+	if got := strings.Join(m.edit.cands, " "); got != "one-liner" {
+		t.Fatalf("candidates = %q, want only the single-line value", got)
+	}
+	if got := strings.Join(m.edit.sugs, " "); got != "one-liner" {
+		t.Fatalf("suggestions = %q, want only the single-line value", got)
+	}
+	var hint string
+	for _, l := range strings.Split(m.View(), "\n") {
+		if contains(l, "tab:") {
+			hint = l
+		}
+	}
+	if !contains(hint, "one-liner") || contains(hint, "line1") || contains(hint, "pipefail") {
+		t.Fatalf("hint row = %q, want one-liner only", hint)
+	}
+	// block values still summarise on one row: line breaks fold to spaces
+	for _, l := range strings.Split(m.View(), "\n") {
+		if strings.HasPrefix(strings.TrimSpace(l), "mkdir") {
+			t.Fatalf("a multiline value split the row: %q", l)
+		}
+	}
+
+	// the display filter drops multiline candidates from any source
+	if got := strings.Join(filterCompletions([]string{"a\nb", "ab", "c"}, ""), " "); got != "ab c" {
+		t.Fatalf("filterCompletions kept a multiline candidate: %q", got)
+	}
+}
+
+// TestMapVariantOpensMapMenu: entering a oneOf value whose current variant is
+// an additionalProperties map (workflow env / matrix / step with) opens the
+// key/value menu, never the raw JSON textarea.
+func TestMapVariantOpensMapMenu(t *testing.T) {
+	root := mustSchema(t, `{
+  "type": "object",
+  "properties": {
+    "env": {"oneOf": [
+      {"type": "object", "additionalProperties": {"oneOf": [{"type": "string"}, {"type": "number"}]}},
+      {"type": "string"}
+    ]}
+  }
+}`)
+	doc := tobj(tmem("env", tobj(tmem("GOOS", tstr("linux")))))
+	m := newListModel(root, doc, Options{})
+	m.Update(tea.WindowSizeMsg{Width: 120, Height: 30})
+
+	press(m, "enter") // env row
+	if m.text != nil {
+		t.Fatalf("the map variant must not open the raw editor:\n%s", m.textView())
+	}
+	if m.top().kind != menuObject || m.top().node.Kind != smodel.KMap {
+		t.Fatalf("menu = %v node %v, want the map menu", m.top().kind, m.top().node.Kind)
+	}
+	if v := m.View(); !contains(v, "GOOS") || contains(v, "(not in schema)") {
+		t.Fatalf("the map menu must list the document keys:\n%s", v)
+	}
+
+	// its values still edit in place
+	press(m, "enter")
+	if m.edit == nil || m.edit.path[1] != "GOOS" {
+		t.Fatalf("edit = %+v, want the GOOS value editor", m.edit)
+	}
+	press(m, "ctrl+u", "d", "a", "r", "w", "i", "n", "enter")
+	if got := strAt(t, doc, "env", "GOOS"); got != "darwin" {
+		t.Fatalf("env.GOOS = %q, want darwin", got)
+	}
+}

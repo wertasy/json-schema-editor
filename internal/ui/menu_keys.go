@@ -789,7 +789,7 @@ func (m *listModel) enterVariant(r row) tea.Cmd {
 
 func (m *listModel) enterVariantEditor(variant *smodel.FormNode, path []any, oneOf *smodel.FormNode) {
 	switch variant.Kind {
-	case smodel.KObject, smodel.KArray:
+	case smodel.KObject, smodel.KMap, smodel.KArray:
 		// the variant is chosen: the editor replaces the picker (esc lands
 		// on the parent menu; ctrl+t still offers the type switch)
 		if m.top() != nil && m.top().kind == menuOneOf && len(m.stack) > 1 {
@@ -1090,7 +1090,7 @@ func (m *listModel) completions(fn *smodel.FormNode, path []any) []string {
 	var same, other []string
 	sameSeen, otherSeen := map[string]bool{}, map[string]bool{}
 	add := func(group *[]string, seen map[string]bool, v string) {
-		if v != "" && !seen[v] {
+		if completionCandidate(v) && !seen[v] {
 			seen[v] = true
 			*group = append(*group, v)
 		}
@@ -1251,12 +1251,23 @@ func (m *listModel) refreshEditSuggestions() {
 	m.edit.sugIdx = -1
 }
 
+// completionCandidate reports whether v can be offered as a completion: empty
+// text never is, and multiline values (script blocks, embedded documents) are
+// skipped — they are useless to complete to and would break the one-line hint.
+func completionCandidate(v string) bool {
+	return v != "" && !strings.ContainsAny(v, "\r\n")
+}
+
 // filterCompletions keeps candidates starting with prefix (case-insensitive);
-// an empty prefix keeps everything.
+// an empty prefix keeps everything. Non-candidates (multiline text) are
+// dropped whatever their source: document values, tags or schema options.
 func filterCompletions(cands []string, prefix string) []string {
 	var out []string
 	lp := strings.ToLower(prefix)
 	for _, c := range cands {
+		if !completionCandidate(c) {
+			continue
+		}
 		if lp == "" || strings.HasPrefix(strings.ToLower(c), lp) {
 			out = append(out, c)
 		}

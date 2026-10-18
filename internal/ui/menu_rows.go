@@ -462,9 +462,19 @@ func objectSummary(fn *smodel.FormNode, n *jsondoc.Node) string {
 	return s
 }
 
-// valueClip truncates a scalar value for the summary column (24 runes,
-// ellipsis included).
-func valueClip(s string) string { return clipRunes(s, 24) }
+// valueClip truncates a scalar value for the single-line summary column (24
+// runes, ellipsis included). Line breaks and tab runs fold into single spaces
+// so block values (scripts, embedded documents) never split a row.
+func valueClip(s string) string { return clipRunes(squashSpace(s), 24) }
+
+// squashSpace folds every whitespace run into one space; values without
+// line breaks or tabs are returned untouched (their own spacing is kept).
+func squashSpace(s string) string {
+	if !strings.ContainsAny(s, "\r\n\t") {
+		return s
+	}
+	return strings.Join(strings.Fields(s), " ")
+}
 
 // arraySummary renders an array value column: any list that is not purely
 // object-valued previews its members ("[4] a 1 {…} +1" — bracketed count,
