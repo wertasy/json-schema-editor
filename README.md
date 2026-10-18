@@ -154,8 +154,8 @@ go run ./cmd/jse -s examples/server.schema.json examples/server.config.json
 发布由 `.github/workflows/release.yml` 完成：推送 `v*` 标签即交叉编译 Linux / macOS / Windows 的 amd64 与 arm64 版本（`CGO_ENABLED=0`，`-trimpath`，版本号/提交/构建时间经 `-ldflags -X` 注入），生成带校验和的压缩包并创建 GitHub Release。
 
 ```sh
-git tag -a v0.1.0 -m "jse v0.1.0"
-git push origin v0.1.0
+git tag -a vX.Y.Z -m "jse vX.Y.Z"
+git push origin vX.Y.Z
 ```
 
 ## 许可证
