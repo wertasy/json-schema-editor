@@ -63,6 +63,7 @@ type EnumOpt struct {
 // FormNode is one editable schema node.
 type FormNode struct {
 	Key, Title, Desc string // Title fallback: title → key; root: "$"
+	titleFallback    bool   // Title is the key fallback, not a schema title
 	Kind             Kind
 	JSONType         string // KScalar: "string"|"integer"|"number"
 	NullOnly         bool   // KRaw: schema admits only JSON null
@@ -214,9 +215,12 @@ func (p *parser) schema(n *jsondoc.Node, ctx *refCtx, key string, required bool,
 	fn := p.build(n, ctx, key, required, depth)
 	// Memoize before applying the key fallback: the fallback title belongs
 	// to the property that references this node, not to the node itself.
-	// The same $ref target (e.g. sing-box's shared duration definitions) is
-	// reachable under several property keys; storing the first key's
-	// fallback would leak it as the title of every other referencing key.
+	// Nested $refs already applied a fallback for the first referencing key,
+	// so strip it here; forkNode names each property correctly.
+	if fn.titleFallback {
+		fn.Title = ""
+		fn.titleFallback = false
+	}
 	p.memo[n] = fn
 	return forkNode(fn, key, required)
 }
@@ -232,6 +236,7 @@ func forkNode(fn *FormNode, key string, required bool) *FormNode {
 	cp.Required = required
 	if cp.Title == "" {
 		cp.Title = titleFallback(key)
+		cp.titleFallback = true
 	}
 	cp.Variants = rekeyVariants(cp.Variants, key)
 	return &cp
@@ -288,6 +293,7 @@ func (p *parser) build(n *jsondoc.Node, ctx *refCtx, key string, required bool, 
 		merged := p.schema(target, tctx, key, required, depth+1)
 		if t := titleOf(n); t != "" {
 			merged.Title = t
+			merged.titleFallback = false
 		}
 		if d := descOf(n); d != "" {
 			merged.Desc = d
@@ -406,6 +412,7 @@ func (p *parser) buildVariants(combo []*jsondoc.Node, ctx *refCtx, key string, d
 			// no schema title: clear the key fallback too — the UI shows
 			// the structural signature instead of a meaningless "variant N"
 			fn.Title = ""
+			fn.titleFallback = false
 		}
 		variants = append(variants, fn)
 	}

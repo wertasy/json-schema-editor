@@ -691,3 +691,49 @@ func TestAdditionalPropertiesMap(t *testing.T) {
 		t.Fatalf("mixed = %+v, want plain KObject (properties take precedence)", m)
 	}
 }
+
+func TestSharedRefPropertyTitles(t *testing.T) {
+	// GitHub workflow on.push: several properties share a definition through
+	// a chain of $refs. Every row keeps its own key-derived title instead of
+	// the first referencing property's title ("branches" for all four).
+	fn := mustLoad(t, `{
+  "type": "object",
+  "properties": {
+    "push": {"type": "object", "properties": {
+      "branches": {"$ref": "#/definitions/branch"},
+      "branches-ignore": {"$ref": "#/definitions/branch"},
+      "tags": {"$ref": "#/definitions/branch"},
+      "tags-ignore": {"$ref": "#/definitions/branch"},
+      "paths": {"$ref": "#/definitions/path"},
+      "paths-ignore": {"$ref": "#/definitions/path"}
+    }}
+  },
+  "definitions": {
+    "branch": {"$ref": "#/definitions/globs", "description": "branch filter"},
+    "path": {"$ref": "#/definitions/globs", "description": "path filter"},
+    "globs": {"type": "array", "items": {"type": "string"}, "minItems": 1}
+  }
+}`)
+	push := child(t, fn, "push")
+	for _, key := range []string{"branches", "branches-ignore", "tags", "tags-ignore", "paths", "paths-ignore"} {
+		c := child(t, push, key)
+		if c.Key != key || c.Title != key {
+			t.Errorf("%s: Key=%q Title=%q, want both %q", key, c.Key, c.Title, key)
+		}
+	}
+
+	// An explicit title on the shared target is preserved for every reference.
+	titled := mustLoad(t, `{
+  "type": "object",
+  "properties": {
+    "a": {"$ref": "#/$defs/globs"},
+    "b": {"$ref": "#/$defs/globs"}
+  },
+  "$defs": {"globs": {"title": "Glob List", "type": "array", "items": {"type": "string"}}}
+}`)
+	for _, key := range []string{"a", "b"} {
+		if c := child(t, titled, key); c.Key != key || c.Title != "Glob List" {
+			t.Errorf("%s: Key=%q Title=%q, want key %q and title %q", key, c.Key, c.Title, key, "Glob List")
+		}
+	}
+}

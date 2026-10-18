@@ -141,6 +141,37 @@ func TestNullOnlyVariantDoesNotShadowObject(t *testing.T) {
 	}
 }
 
+func TestSharedRefRowLabels(t *testing.T) {
+	root := mustSchema(t, `{
+  "type": "object",
+  "properties": {
+    "push": {"type": "object", "properties": {
+      "branches": {"$ref": "#/definitions/branch"},
+      "branches-ignore": {"$ref": "#/definitions/branch"},
+      "tags": {"$ref": "#/definitions/branch"},
+      "tags-ignore": {"$ref": "#/definitions/branch"},
+      "paths": {"$ref": "#/definitions/path"},
+      "paths-ignore": {"$ref": "#/definitions/path"}
+    }}
+  },
+  "definitions": {
+    "branch": {"$ref": "#/definitions/globs"},
+    "path": {"$ref": "#/definitions/globs"},
+    "globs": {"type": "array", "items": {"type": "string"}}
+  }
+}`)
+	doc := tobj(tmem("push", tobj(tmem("branches", tarr(tstr("main"))))))
+	m := newListModel(root, doc, Options{})
+	m.Update(tea.WindowSizeMsg{Width: 120, Height: 30})
+	press(m, "enter") // push → object menu
+	v := m.View()
+	for _, label := range []string{"branches", "branches-ignore", "tags", "tags-ignore", "paths", "paths-ignore"} {
+		if !contains(v, label) {
+			t.Errorf("row label %q missing:\n%s", label, v)
+		}
+	}
+}
+
 func TestOneOfItemAddInfer(t *testing.T) {
 	root, oneOf, _ := inferModel()
 	doc := tobj()
