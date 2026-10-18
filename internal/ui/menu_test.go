@@ -789,7 +789,7 @@ func TestMenuNextPrevCtrlJK(t *testing.T) {
 	}
 }
 
-func TestSearchViewPinsInputsToBottom(t *testing.T) {
+func TestSearchViewInputsAboveResults(t *testing.T) {
 	m := newListModel(testModel(), testDoc(), Options{})
 	m.Update(tea.WindowSizeMsg{Width: 100, Height: 30})
 	press(m, "/")
@@ -797,22 +797,32 @@ func TestSearchViewPinsInputsToBottom(t *testing.T) {
 	if len(lines) != 30 {
 		t.Fatalf("search view has %d lines, want 30:\n%s", len(lines), strings.Join(lines, "\n"))
 	}
-	if !strings.Contains(lines[28], "search:") {
-		t.Fatalf("search input not at the bottom:\n%s", strings.Join(lines, "\n"))
+	if !strings.Contains(lines[2], "search:") {
+		t.Fatalf("search input not above the results:\n%s", strings.Join(lines, "\n"))
 	}
 	if !strings.Contains(lines[29], "enter jump") {
 		t.Fatalf("search help not last:\n%s", strings.Join(lines, "\n"))
 	}
+	found := false
+	for i := 3; i < 29; i++ {
+		if strings.Contains(lines[i], "$.") {
+			found = true
+			break
+		}
+	}
+	if !found {
+		t.Fatalf("result rows not below the input:\n%s", strings.Join(lines, "\n"))
+	}
 
-	// Replace mode stacks two inputs directly above the help line.
+	// Replace mode stacks two inputs above the results.
 	press(m, "esc", "r")
 	lines = strings.Split(m.View(), "\n")
 	if len(lines) != 30 {
 		t.Fatalf("replace view has %d lines, want 30:\n%s", len(lines), strings.Join(lines, "\n"))
 	}
-	if !strings.Contains(lines[27], "search:") || !strings.Contains(lines[28], "replace:") ||
+	if !strings.Contains(lines[2], "search:") || !strings.Contains(lines[3], "replace:") ||
 		!strings.Contains(lines[29], "enter jump") {
-		t.Fatalf("replace inputs not pinned to the bottom:\n%s", strings.Join(lines, "\n"))
+		t.Fatalf("replace inputs not above the results:\n%s", strings.Join(lines, "\n"))
 	}
 }
 

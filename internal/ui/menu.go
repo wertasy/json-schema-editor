@@ -643,28 +643,27 @@ func (m *listModel) listView() string {
 	}
 
 	if m.search.active {
-		bottom := 2 // input line + footer line
+		inputs := 1
 		if m.search.replace {
-			bottom++
-		}
-		h := m.height - header - bottom
-		if h < 1 {
-			h = 1
-		}
-		m.writeSearchRows(&b, h)
-		// Pin the search/replace inputs and the footer to the bottom of the
-		// terminal; a short result list is padded with blank rows instead of
-		// letting the inputs float under the results.
-		lines := strings.Count(b.String(), "\n")
-		for lines < m.height-bottom {
-			b.WriteByte('\n')
-			lines++
+			inputs++
 		}
 		b.WriteString(clipDisplay(mHelp.Render("search: ")+m.search.ti.View(), m.width-1))
 		b.WriteByte('\n')
 		if m.search.replace {
 			b.WriteString(clipDisplay(mHelp.Render("replace: ")+m.search.rti.View(), m.width-1))
 			b.WriteByte('\n')
+		}
+		// Results fill the space between the inputs and the footer; a short
+		// list is padded so the footer stays on the terminal's last line.
+		h := m.height - header - inputs - 1
+		if h < 1 {
+			h = 1
+		}
+		m.writeSearchRows(&b, h)
+		lines := strings.Count(b.String(), "\n")
+		for lines < m.height-1 {
+			b.WriteByte('\n')
+			lines++
 		}
 		caseTxt := "case-insensitive"
 		if !m.search.foldCase {

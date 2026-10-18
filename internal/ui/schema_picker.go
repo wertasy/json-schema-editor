@@ -159,6 +159,7 @@ func (m pickerModel) View() string {
 	b.WriteString(mTitle.Render("Select a schema") + "\n")
 	b.WriteString(mStatus.Render(fmt.Sprintf("for %s — %d of %d",
 		m.filename, len(m.filtered), len(m.entries))) + "\n")
+	b.WriteString(mHelp.Render("search: ") + m.ti.View() + "\n")
 	height := m.height - 4 // title, status, search, help
 	if height < 1 {
 		height = 1
@@ -196,14 +197,13 @@ func (m pickerModel) View() string {
 		}
 		b.WriteByte('\n')
 	}
-	// Pin the search input and help to the terminal bottom, like the main
-	// menu: fill the unused result area with blank rows.
+	// The help stays on the terminal's last line; blank rows fill the gap
+	// under a short result list.
 	lines := strings.Count(b.String(), "\n")
-	for lines < m.height-2 {
+	for lines < m.height-1 {
 		b.WriteByte('\n')
 		lines++
 	}
-	b.WriteString(mHelp.Render("search: ") + m.ti.View() + "\n")
 	b.WriteString(clipDisplay(mHelp.Render("type to search · ↑/↓ or tab/shift+tab move · enter select · esc cancel"), m.width-1))
 	return b.String()
 }
