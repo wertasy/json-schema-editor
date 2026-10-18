@@ -74,6 +74,7 @@ type FormNode struct {
 	MinLen, MaxLen             *int
 	Pattern                    string
 	Enum                       []EnumOpt
+	Suggestions                []string // KScalar string: schema values offered as tab completions (free text stays valid)
 	Default                    *jsondoc.Node
 	Placeholder                string
 	Required                   bool
@@ -339,6 +340,15 @@ func (p *parser) build(n *jsondoc.Node, ctx *refCtx, key string, required bool, 
 	case t == "boolean":
 		fn.Kind = KBoolean
 	case len(combo) > 0 && !hasProps && t == "":
+		// an open string plus a closed set of strings (workflow shell:
+		// anyOf[plain string, enum of builtins]) is a text field with the
+		// enum values as completions, not a variant picker
+		if sugg, ok := p.stringCombo(combo, ctx, key, depth); ok {
+			fn.Kind = KScalar
+			fn.JSONType = "string"
+			fn.Suggestions = sugg
+			break
+		}
 		fn.Kind, fn.Enum, fn.Variants = p.buildVariants(combo, ctx, key, depth)
 	case t == "object" || hasProps || hasAdditional:
 		if !hasProps && hasAdditional && usableAdditional(n) {
@@ -417,6 +427,43 @@ func patternMap(n *jsondoc.Node) (string, *jsondoc.Node, bool) {
 		return "", nil, false
 	}
 	return pattern, (*pp.Object)[0].Val, true
+}
+
+// stringCombo collapses a oneOf/anyOf whose branches are all strings into one
+// text input: a branch must be an unconstrained string (any text stays valid)
+// and the other branches may be enums of strings, whose options become tab
+// completions. Strings the schema does not list stay editable — save-time
+// validation remains authoritative.
+func (p *parser) stringCombo(combo []*jsondoc.Node, ctx *refCtx, key string, depth int) ([]string, bool) {
+	var sugg []string
+	seen := map[string]bool{}
+	open := false
+	for _, vn := range combo {
+		fn := p.schema(vn, ctx, key, false, depth+1)
+		switch fn.Kind {
+		case KScalar:
+			if fn.JSONType != "string" || fn.Pattern != "" || fn.MinLen != nil || fn.MaxLen != nil {
+				return nil, false
+			}
+			open = true
+		case KEnum:
+			for _, o := range fn.Enum {
+				if o.Val == nil || o.Val.Str == nil {
+					return nil, false // a non-string option closes the set
+				}
+				if !seen[o.Display] {
+					seen[o.Display] = true
+					sugg = append(sugg, o.Display)
+				}
+			}
+		default:
+			return nil, false
+		}
+	}
+	if !open {
+		return nil, false
+	}
+	return sugg, true
 }
 
 // buildVariants handles oneOf/anyOf: if every variant is a const or single

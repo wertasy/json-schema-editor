@@ -823,3 +823,49 @@ func TestPatternPropertiesMap(t *testing.T) {
 		t.Fatalf("uncompilable pattern: Kind=%v children=%d, want an empty object", j.Kind, len(j.Children))
 	}
 }
+
+// TestStringComboCollapsesToText: a oneOf/anyOf mixing an open string with a
+// closed set of strings (workflow shell) is a text field whose completions are
+// the listed values; closed sets, constrained strings and non-string branches
+// keep the variant picker.
+func TestStringComboCollapsesToText(t *testing.T) {
+	fn := mustLoad(t, `{
+  "type": "object",
+  "properties": {
+    "shell": {"anyOf": [
+      {"type": "string"},
+      {"type": "string", "enum": ["bash", "pwsh", "python", "sh", "cmd", "powershell"]}
+    ]}
+  }
+}`)
+	s := child(t, fn, "shell")
+	if s.Kind != KScalar || s.JSONType != "string" {
+		t.Fatalf("shell: Kind=%v JSONType=%q, want a string input", s.Kind, s.JSONType)
+	}
+	if got := strings.Join(s.Suggestions, ","); got != "bash,pwsh,python,sh,cmd,powershell" {
+		t.Fatalf("shell suggestions = %q, want the enum options in schema order", got)
+	}
+
+	// A pattern-restricted branch means not every string is valid: keep the picker.
+	pat := mustLoad(t, `{"type": "object", "properties": {"shell": {"anyOf": [
+		{"type": "string", "pattern": "^/"},
+		{"type": "string", "enum": ["a"]}]}}}`)
+	if p := child(t, pat, "shell"); p.Kind != KOneOf {
+		t.Fatalf("pattern branch: Kind=%v, want the picker", p.Kind)
+	}
+
+	// Two closed sets have no open branch: typing anything would be invalid.
+	two := mustLoad(t, `{"type": "object", "properties": {"shell": {"oneOf": [
+		{"type": "string", "enum": ["a"]},
+		{"type": "string", "enum": ["b", "c"]}]}}}`)
+	if c := child(t, two, "shell"); c.Kind != KOneOf {
+		t.Fatalf("no open branch: Kind=%v, want the picker", c.Kind)
+	}
+
+	// A non-string branch is not free text either.
+	num := mustLoad(t, `{"type": "object", "properties": {"v": {"anyOf": [
+		{"type": "string"}, {"type": "integer"}]}}}`)
+	if v := child(t, num, "v"); v.Kind != KOneOf {
+		t.Fatalf("mixed types: Kind=%v, want the picker", v.Kind)
+	}
+}

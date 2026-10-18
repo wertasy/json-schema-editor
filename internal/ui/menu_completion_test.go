@@ -142,3 +142,57 @@ func TestCompletionAllDocumentStrings(t *testing.T) {
 		t.Fatalf("array item candidates = %q, want %q", got, want)
 	}
 }
+
+// TestStringComboEditsAsTextWithTabOptions: a shell-style anyOf (open string
+// plus a set of strings) edits as free text, and the listed values are tab
+// completions rather than a variant picker.
+func TestStringComboEditsAsTextWithTabOptions(t *testing.T) {
+	root := mustSchema(t, `{
+  "type": "object",
+  "properties": {
+    "defaults": {"type": "object", "properties": {"run": {"type": "object", "properties": {
+      "shell": {"anyOf": [
+        {"type": "string"},
+        {"type": "string", "enum": ["bash", "pwsh", "python", "sh", "cmd", "powershell"]}
+      ]}
+    }}}}
+  }
+}`)
+	doc := tobj(tmem("defaults", tobj(tmem("run", tobj(tmem("shell", tstr("bash")))))))
+	m := newListModel(root, doc, Options{})
+	m.Update(tea.WindowSizeMsg{Width: 120, Height: 30})
+
+	press(m, "enter", "enter", "enter") // defaults -> run -> shell
+	if m.edit == nil || m.edit.fn.Key != "shell" {
+		t.Fatalf("shell must edit as text, edit = %+v\n%s", m.edit, m.View())
+	}
+	if got := strings.Join(m.edit.cands, " "); got != "bash pwsh python sh cmd powershell" {
+		t.Fatalf("candidates = %q, want the enum options", got)
+	}
+	if v := m.View(); !contains(v, "tab: ") || !contains(v, "shell") {
+		t.Fatalf("completion hint missing:\n%s", v)
+	}
+
+	// tab completes to a listed value
+	press(m, "ctrl+u", "p", "w")
+	if len(m.edit.sugs) != 1 || m.edit.sugs[0] != "pwsh" {
+		t.Fatalf("filtered suggestions = %v, want [pwsh]", m.edit.sugs)
+	}
+	press(m, "tab", "enter")
+	if m.edit != nil {
+		t.Fatalf("enter must commit the completion, edit = %+v", m.edit)
+	}
+	if got := strAt(t, doc, "defaults", "run", "shell"); got != "pwsh" {
+		t.Fatalf("shell = %q, want pwsh", got)
+	}
+
+	// an unlisted value is still accepted (the open branch allows it)
+	press(m, "enter")
+	press(m, "ctrl+u", "z", "s", "h", "enter")
+	if m.edit != nil {
+		t.Fatalf("free text must commit, edit = %+v", m.edit)
+	}
+	if got := strAt(t, doc, "defaults", "run", "shell"); got != "zsh" {
+		t.Fatalf("shell = %q, want the typed zsh", got)
+	}
+}

@@ -1141,6 +1141,14 @@ func (m *listModel) completions(fn *smodel.FormNode, path []any) []string {
 			out = append(out, v)
 		}
 	}
+	// schema-provided values (a collapsed oneOf/anyOf of strings, e.g. the
+	// workflow shell builtins) complete the document-derived ones
+	for _, v := range fn.Suggestions {
+		if v != "" && !sameSeen[v] && !otherSeen[v] {
+			sameSeen[v] = true
+			out = append(out, v)
+		}
+	}
 	return out
 }
 
