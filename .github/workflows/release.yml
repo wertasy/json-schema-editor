@@ -1,13 +1,11 @@
+# yaml-language-server: $schema=https://www.schemastore.org/github-workflow.json
 name: release
-
 on:
   push:
     tags:
-      - "v*"
-
+      - v*
 permissions:
   contents: write
-
 jobs:
   build:
     name: build (${{ matrix.goos }}/${{ matrix.goarch }})
@@ -15,20 +13,22 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        goos: [linux, darwin, windows]
-        goarch: [amd64, arm64]
+        goos:
+          - linux
+          - darwin
+          - windows
+        goarch:
+          - amd64
+          - arm64
     steps:
       - uses: actions/checkout@v4
-
       - uses: actions/setup-go@v5
         with:
           go-version-file: go.mod
           cache: true
-
       - name: Test
         if: matrix.goos == 'linux' && matrix.goarch == 'amd64'
         run: go test -p 1 ./...
-
       - name: Build
         env:
           GOOS: ${{ matrix.goos }}
@@ -45,7 +45,6 @@ jobs:
               -X main.commit=${GITHUB_SHA::7} \
               -X main.buildDate=$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
             -o "dist/$bin" ./cmd/jse
-
       - name: Package
         env:
           GOOS: ${{ matrix.goos }}
@@ -61,13 +60,11 @@ jobs:
             (cd dist && tar -czf "${pkg}.tar.gz" jse README.md LICENSE \
               && rm jse README.md LICENSE)
           fi
-
       - uses: actions/upload-artifact@v4
         with:
-          name: jse_${{ matrix.goos }}_${{ matrix.goarch }}
+          name: jse-${{ matrix.goos }}-${{ matrix.goarch }}
           path: dist/*
           if-no-files-found: error
-
   release:
     name: publish release
     needs: build
@@ -76,18 +73,15 @@ jobs:
       - uses: actions/checkout@v4
         with:
           fetch-depth: 0
-
       - uses: actions/download-artifact@v4
         with:
           path: dist
           merge-multiple: true
-
       - name: Checksums
         run: |
           set -euo pipefail
           cd dist
           sha256sum jse_* > checksums.txt
-
       - name: Publish
         env:
           GH_TOKEN: ${{ github.token }}
