@@ -10,6 +10,7 @@ import (
 	"io/fs"
 	"os"
 	"path/filepath"
+	"runtime/debug"
 	"strings"
 
 	"github.com/charmbracelet/x/term"
@@ -27,12 +28,64 @@ import (
 
 var errNoSchema = errors.New(`no schema found: provide -s or record the schema location in the config`)
 
-// Build metadata. Release builds override these with -ldflags -X.
+// Build metadata. Release builds override these with -ldflags -X; builds
+// installed with `go install module@version` carry the module version in the
+// build info instead, and a plain build from a VCS checkout stamps the
+// revision there — see withBuildInfo.
 var (
 	version   = "dev"
 	commit    = "none"
 	buildDate = "unknown"
 )
+
+func init() {
+	info, _ := debug.ReadBuildInfo()
+	version, commit, buildDate = withBuildInfo(version, commit, buildDate, info)
+}
+
+// withBuildInfo fills the metadata ldflags left empty from the module build
+// info: `go install pkg@version` reports the module version as Main.Version
+// ("(devel)" for a plain checkout build), and a build inside a repository
+// stamps vcs.revision and vcs.time. Values already injected by ldflags win,
+// so release binaries keep their exact metadata.
+func withBuildInfo(v, c, d string, info *debug.BuildInfo) (string, string, string) {
+	if info == nil {
+		return v, c, d
+	}
+	if v == "dev" && info.Main.Version != "" && info.Main.Version != "(devel)" {
+		v = info.Main.Version
+	}
+	for _, s := range info.Settings {
+		switch s.Key {
+		case "vcs.revision":
+			if c == "none" && len(s.Value) >= 7 {
+				c = s.Value[:7]
+			}
+		case "vcs.time":
+			if d == "unknown" {
+				d = s.Value
+			}
+		}
+	}
+	return v, c, d
+}
+
+// versionLine renders the -version output. Unknown extras are left out, so an
+// installed build reads "jse v0.2.1" rather than naming missing metadata.
+func versionLine(v, c, d string) string {
+	line := "jse " + v
+	var extra []string
+	if c != "none" {
+		extra = append(extra, "commit "+c)
+	}
+	if d != "unknown" {
+		extra = append(extra, "built "+d)
+	}
+	if len(extra) > 0 {
+		line += " (" + strings.Join(extra, ", ") + ")"
+	}
+	return line
+}
 
 const usageText = `Usage: jse [-s <schema path|http(s)://URL>] [--pick] [--force] [--accessible] [--version] <config.(json|jsonc|yaml|yml)>
 
@@ -91,7 +144,7 @@ func run() int {
 	_ = flag.CommandLine.Parse(flagArgs)
 
 	if *showVersion {
-		fmt.Printf("jse %s (commit %s, built %s)\n", version, commit, buildDate)
+		fmt.Println(versionLine(version, commit, buildDate))
 		return 0
 	}
 
