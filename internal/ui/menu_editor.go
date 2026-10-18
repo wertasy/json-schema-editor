@@ -1,11 +1,11 @@
 package ui
 
-// External raw-JSON editing: the root "< Edit raw JSON >" row, values under
-// schema-less keys and newly added schema-less members suspend the TUI and
-// run $EDITOR (falling back to $VISUAL, then vi). The temp file holds the
-// whole document for the root row, or just one JSON value otherwise. On a
-// successful exit the JSON is parsed and applied as one undo step; invalid
-// JSON keeps the old document and surfaces a notice.
+// External raw editing: the root raw row, values under schema-less keys and
+// newly added schema-less members suspend the TUI and run $EDITOR (falling
+// back to $VISUAL, then vi). The temp file holds the whole document for the
+// root row, or just one value otherwise; its syntax follows Options.Raw
+// (JSON or YAML). A successful exit parses and applies the text as one undo
+// step; invalid syntax keeps the old document and surfaces a notice.
 
 import (
 	"bytes"
@@ -14,8 +14,6 @@ import (
 	"strings"
 
 	tea "github.com/charmbracelet/bubbletea"
-
-	"github.com/wertasy/json-schema-editor/internal/jsondoc"
 )
 
 // rawEditorDoneMsg arrives after the external editor exits.
@@ -24,33 +22,33 @@ type rawEditorDoneMsg struct {
 	err  error
 }
 
-// externalEdit is the target of a pending $EDITOR run: the JSON value at
-// target. A non-negative insertIdx splices a new member instead of Set.
+// externalEdit is the target of a pending $EDITOR run: the value at target.
+// A non-negative insertIdx splices a new member instead of Set.
 type externalEdit struct {
 	target    []any
 	insertIdx int
 	path      string // temp file the editor is working on
 }
 
-// editRawExternal writes the whole document to a temp file and launches
-// $EDITOR. tea.ExecProcess restores the terminal for the editor and repaints
-// the TUI afterwards.
+// editRawExternal writes the whole document to a temp file in the document's
+// raw syntax and launches $EDITOR. tea.ExecProcess restores the terminal for
+// the editor and repaints the TUI afterwards.
 func (m *listModel) editRawExternal() tea.Cmd {
 	var buf bytes.Buffer
-	if err := m.doc.Write(&buf); err != nil {
+	if err := m.opts.encodeRawDoc(&buf, m.doc); err != nil {
 		m.notice = "editor: " + err.Error()
 		return nil
 	}
 	return m.editExternalJSON(buf.Bytes(), nil)
 }
 
-// editValueExternal edits one JSON value in $EDITOR. A new member
+// editValueExternal edits one value in $EDITOR. A new member
 // (insertIdx >= 0) starts with an empty file; an existing value is written
-// as pretty JSON.
+// in the document's raw syntax.
 func (m *listModel) editValueExternal(path []any, insertIdx int) tea.Cmd {
 	var buf bytes.Buffer
 	if cur, ok := m.doc.Get(path); ok && cur != nil && !cur.Null {
-		if err := cur.Write(&buf); err != nil {
+		if err := m.opts.encodeRawValue(&buf, cur); err != nil {
 			m.notice = "editor: " + err.Error()
 			return nil
 		}
@@ -62,7 +60,7 @@ func (m *listModel) editValueExternal(path []any, insertIdx int) tea.Cmd {
 // editExternalJSON writes data to a temp file and launches $EDITOR. edit is
 // nil for the whole-document editor.
 func (m *listModel) editExternalJSON(data []byte, edit *externalEdit) tea.Cmd {
-	f, err := os.CreateTemp("", "jse-*.json")
+	f, err := os.CreateTemp("", "jse-*"+m.opts.rawExt())
 	if err != nil {
 		m.notice = "editor: " + err.Error()
 		return nil
@@ -119,14 +117,14 @@ func (m *listModel) applyExternalEdit(msg rawEditorDoneMsg) (tea.Model, tea.Cmd)
 		return m.applyExternalValue(edit, data)
 	}
 
-	nd, err := jsondoc.Parse(bytes.NewReader(data))
+	nd, err := m.opts.decodeRawDoc(data)
 	if err != nil {
-		m.notice = "editor: invalid JSON: " + err.Error()
+		m.notice = "editor: invalid " + m.opts.rawLabel() + ": " + err.Error()
 		return m, nil
 	}
 	pre := m.doc.Clone()
 	if nodesEqual(pre, nd) {
-		m.notice = "Raw JSON unchanged"
+		m.notice = "Raw " + m.opts.rawLabel() + " unchanged"
 		return m, nil
 	}
 	// Edit in place: the live tree is shared with the session and the
@@ -137,7 +135,7 @@ func (m *listModel) applyExternalEdit(msg rawEditorDoneMsg) (tea.Model, tea.Cmd)
 	m.refreshVariantMenu()
 	m.refreshIssues()
 	m.clampCursor(menuRows(m))
-	m.notice = "Raw JSON edited"
+	m.notice = "Raw " + m.opts.rawLabel() + " edited"
 	return m, nil
 }
 
@@ -160,9 +158,9 @@ func (m *listModel) applyExternalValue(edit *externalEdit, data []byte) (tea.Mod
 		return m, nil
 	}
 
-	n, err := jsondoc.Parse(strings.NewReader(s))
+	n, err := m.opts.decodeRawValue([]byte(s))
 	if err != nil {
-		m.notice = "editor: invalid JSON: " + err.Error()
+		m.notice = "editor: invalid " + m.opts.rawLabel() + ": " + err.Error()
 		return m, nil
 	}
 	if edit.insertIdx >= 0 {

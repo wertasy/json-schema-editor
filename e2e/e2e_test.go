@@ -682,6 +682,96 @@ func TestPtyExternalRawEditor(t *testing.T) {
 	}
 }
 
+// TestPtyExternalRawYAMLEditor: for a YAML file the root raw editor opens
+// $EDITOR on YAML text (not JSON) and parses the result back as YAML.
+func TestPtyExternalRawYAMLEditor(t *testing.T) {
+	dir := t.TempDir()
+	schema := filepath.Join(dir, "mini.schema.json")
+	cfg := filepath.Join(dir, "o.yaml")
+	editor := filepath.Join(dir, "editor.sh")
+	writeFile(t, schema, `{"type":"object","properties":{"name":{"type":"string","title":"Name"}}}`)
+	writeFile(t, cfg, "name: demo\n")
+	writeFile(t, editor, "#!/bin/sh\n"+
+		`case "$1" in *.yaml) ;; *) exit 5;; esac`+"\n"+
+		`grep -q '^name: demo$' "$1" || exit 3`+"\n"+
+		`grep -q '"name"' "$1" && exit 4`+"\n"+
+		`printf 'name: edited\n' > "$1"`+"\n")
+	if err := os.Chmod(editor, 0o755); err != nil {
+		t.Fatal(err)
+	}
+
+	cmd := exec.Command(jseBin, "-s", schema, cfg)
+	cmd.Dir = ".."
+	cmd.Env = append(os.Environ(), "TERM=xterm-256color", "EDITOR="+editor)
+	tty, err := pty.StartWithSize(cmd, &pty.Winsize{Rows: 30, Cols: 120})
+	if err != nil {
+		t.Skipf("no pty available: %v", err)
+	}
+	defer tty.Close()
+
+	frames := make(chan string, 64)
+	go func() {
+		buf := make([]byte, 4096)
+		var acc bytes.Buffer
+		for {
+			n, err := tty.Read(buf)
+			if n > 0 {
+				acc.Write(buf[:n])
+				frames <- acc.String()
+			}
+			if err != nil {
+				close(frames)
+				return
+			}
+		}
+	}()
+	var lastFrame string
+	waitFrame := func(what string, offset int, want ...string) (string, int) {
+		t.Helper()
+		deadline := time.After(15 * time.Second)
+		for {
+			select {
+			case frame, ok := <-frames:
+				if !ok {
+					t.Fatalf("pty closed while waiting for %s; last output:\n%s", what, lastFrame)
+				}
+				lastFrame = frame
+				ready := true
+				for _, w := range want {
+					if !strings.Contains(frame[offset:], w) {
+						ready = false
+						break
+					}
+				}
+				if ready {
+					return frame, len(frame)
+				}
+			case <-deadline:
+				t.Fatalf("timed out waiting for %s; last output:\n%s", what, lastFrame)
+			}
+		}
+	}
+
+	_, off := waitFrame("root menu", 0, "Save and exit", "Edit raw YAML")
+	tty.Write([]byte("G\r")) // jump to the last row: <Edit raw YAML>
+	_, off = waitFrame("YAML editor applied", off, "Raw YAML edited")
+	tty.Write([]byte("\x13")) // ctrl+s save
+	_, _ = waitFrame("saved", off, "Saved")
+	tty.Write([]byte("\x03"))
+
+	waitErr := cmd.Wait()
+	if ee, ok := waitErr.(*exec.ExitError); !ok || ee.ExitCode() != 130 {
+		t.Fatalf("exit after ctrl+c = %v, want 130", waitErr)
+	}
+	data, err := os.ReadFile(cfg)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(data), "name: edited") || strings.Contains(string(data), `"name"`) {
+		t.Fatalf("saved config is not YAML:\n%s", data)
+	}
+}
+
 // TestPtyExternalUnknownKeyEditor: enter on a schema-less key opens $EDITOR
 // on a temp file holding only that value; the rewritten JSON is applied as
 // one edit and persists on save.

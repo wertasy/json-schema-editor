@@ -4,6 +4,7 @@ package ui
 
 import (
 	"fmt"
+	"io"
 	"os"
 	"strconv"
 
@@ -14,10 +15,25 @@ import (
 	"github.com/wertasy/json-schema-editor/internal/smodel"
 )
 
+// RawCodec is the text syntax used by raw editors. The zero value is JSON,
+// the historical behavior; YAML documents pass a codec backed by yamldoc.
+// MarshalDoc writes the whole live document (comments included when the
+// codec captures the session); MarshalValue writes one subtree.
+type RawCodec struct {
+	Label          string // "JSON" (default) or "YAML"
+	Ext            string // temp-file extension; default ".json"
+	MarshalDoc     func(io.Writer) error
+	UnmarshalDoc   func([]byte) (*jsondoc.Node, error)
+	MarshalValue   func(io.Writer, *jsondoc.Node) error
+	UnmarshalValue func([]byte) (*jsondoc.Node, error)
+}
+
 // Options configures a Run.
 type Options struct {
 	Accessible bool
 	Force      bool
+	// Raw selects the syntax of raw editors (JSON unless set).
+	Raw RawCodec
 	// Validate checks a config document; nil disables save-time validation.
 	Validate func(*jsondoc.Node) []string
 	// Save writes the document to its destination. Every save action goes

@@ -51,7 +51,7 @@ const (
 	rowAdd                    // "< Add item >"
 	rowRemove                 // "< Remove this item >"
 	rowSave                   // "< Save and exit >"
-	rowRaw                    // "< Edit raw JSON >"
+	rowRaw                    // "< Edit raw JSON/YAML >"
 	rowVariant                // oneOf variant picker line
 	rowNoItems                // placeholder for empty menus
 	rowUnknown                // document key the schema does not define
@@ -192,7 +192,7 @@ func menuRowsFor(lm *listModel, st *menuState) []row {
 	if len(lm.stack) > 0 && lm.stack[0] == st {
 		rows = append(rows,
 			row{kind: rowSave, label: "< Save and exit >", idx: -1},
-			row{kind: rowRaw, label: "< Edit raw JSON >", idx: -1})
+			row{kind: rowRaw, label: "< Edit raw " + lm.opts.rawLabel() + " >", idx: -1})
 	}
 	return rows
 }
@@ -1156,7 +1156,7 @@ func unknownValueRows(lm *listModel, path []any, v *jsondoc.Node, seen map[strin
 // warnings for the issues list. JSON Schema permits them (unless
 // additionalProperties: false), so they never gate saving. Only the
 // outermost unknown key is reported: everything nested inside shares its
-// fate and is edited as raw JSON. The walk is value-aware: under a oneOf
+// fate and is edited as raw text. The walk is value-aware: under a oneOf
 // the matched variant's fields define what is known.
 func unknownKeyIssues(model *smodel.FormNode, doc *jsondoc.Node) []issue {
 	if model == nil || doc == nil {

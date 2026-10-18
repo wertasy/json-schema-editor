@@ -1,6 +1,7 @@
 package ui
 
 import (
+	"bytes"
 	"encoding/json"
 	"fmt"
 	"math"
@@ -95,23 +96,6 @@ func ValidateInput(fn *smodel.FormNode, s string) error {
 				return fmt.Errorf("must match %s", fn.Pattern)
 			}
 		}
-	}
-	return nil
-}
-
-// ValidateJSON validates raw-JSON textarea content (empty allowed unless
-// required).
-func ValidateJSON(fn *smodel.FormNode, s string) error {
-	s = strings.TrimSpace(s)
-	if s == "" {
-		if fn.Required {
-			return fmt.Errorf("required")
-		}
-		return nil
-	}
-	var v any
-	if err := json.Unmarshal([]byte(s), &v); err != nil {
-		return fmt.Errorf("invalid JSON: %v", err)
 	}
 	return nil
 }
@@ -337,24 +321,37 @@ func (a *app) rawEntry(fn *smodel.FormNode, path []any) entry {
 	cur, _ := a.doc.Get(path)
 	prefill := ""
 	if cur != nil && !cur.Null {
-		if buf, err := json.Marshal(cur.ToAny()); err == nil {
-			prefill = string(buf)
+		var buf bytes.Buffer
+		if err := a.opts.encodeRawValue(&buf, cur); err == nil {
+			prefill = buf.String()
 		}
 	}
 	b := prefill
 	txt := huh.NewText().
 		Title(fn.Title).
-		Description(fieldDesc(fn, "edit as JSON")).
+		Description(fieldDesc(fn, "edit as "+a.opts.rawLabel())).
 		Value(&b).
 		Lines(5).
 		CharLimit(0).
-		Validate(func(s string) error { return ValidateJSON(fn, strings.TrimSpace(s)) })
+		Validate(func(s string) error {
+			s = strings.TrimSpace(s)
+			if s == "" {
+				if fn.Required {
+					return fmt.Errorf("required")
+				}
+				return nil
+			}
+			if _, err := a.opts.decodeRawValue([]byte(s)); err != nil {
+				return fmt.Errorf("invalid %s: %v", a.opts.rawLabel(), err)
+			}
+			return nil
+		})
 	return entry{
 		field: txt,
 		apply: func(doc *jsondoc.Node) {
 			s := strings.TrimSpace(b)
 			omitOrSet(doc, path, s == "", fn, func() *jsondoc.Node {
-				n, err := jsondoc.Parse(strings.NewReader(s))
+				n, err := a.opts.decodeRawValue([]byte(s))
 				if err != nil {
 					return nil
 				}

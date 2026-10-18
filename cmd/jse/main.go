@@ -22,6 +22,7 @@ import (
 	"github.com/wertasy/json-schema-editor/internal/smodel"
 	"github.com/wertasy/json-schema-editor/internal/ui"
 	"github.com/wertasy/json-schema-editor/internal/validate"
+	"github.com/wertasy/json-schema-editor/internal/yamldoc"
 )
 
 var errNoSchema = errors.New(`no schema found: provide -s or record the schema location in the config`)
@@ -73,7 +74,7 @@ Keys: ↑/↓ move · space toggle · enter select · tab next · esc back · ct
 Supported form keywords: type, enum/const, numeric and string constraints,
 properties/required, items/minItems/maxItems, local and remote $ref,
 oneOf/anyOf/allOf. Everything else is still validated on save; unsupported
-constructs fall back to a raw JSON editor.`
+constructs fall back to a raw editor in the file's format (JSON or YAML).`
 
 func main() {
 	os.Exit(run())
@@ -229,10 +230,33 @@ func run() int {
 	}
 
 	// The UI edits sess.Doc() in place; Write emits it in the file's own
-	// format. The raw JSON editor deliberately still shows JSON text.
+	// format. Raw editors use that format too (YAML for .yaml/.yml).
+	raw := ui.RawCodec{}
+	switch strings.ToLower(filepath.Ext(config)) {
+	case ".yaml", ".yml":
+		raw = ui.RawCodec{
+			Label: "YAML",
+			Ext:   ".yaml",
+			MarshalDoc: func(w io.Writer) error {
+				return sess.Write(w)
+			},
+			UnmarshalDoc: func(data []byte) (*jsondoc.Node, error) {
+				d, _, err := yamldoc.Parse(data)
+				return d, err
+			},
+			MarshalValue: func(w io.Writer, n *jsondoc.Node) error {
+				return yamldoc.Write(w, n, nil)
+			},
+			UnmarshalValue: func(data []byte) (*jsondoc.Node, error) {
+				d, _, err := yamldoc.Parse(data)
+				return d, err
+			},
+		}
+	}
 	outcome := ui.Run(model, cfg, ui.Options{
 		Accessible: *accessible,
 		Force:      *force,
+		Raw:        raw,
 		Validate:   check,
 		Save:       func(*jsondoc.Node) error { return atomicWrite(config, sess.Write) },
 		Status:     strings.Join(status, "\n"),

@@ -1,11 +1,11 @@
 package ui
 
 // Key handling for the menuconfig TUI: list navigation, in-place editing,
-// overlays (enum picker, raw JSON textarea, save errors, y/n confirm) and
-// the full-tree search. Every edit writes through to the doc immediately.
+// overlays (enum picker, raw textarea, save errors, y/n confirm) and the
+// full-tree search. Every edit writes through to the doc immediately.
 
 import (
-	"encoding/json"
+	"bytes"
 	"fmt"
 	"regexp"
 	"strings"
@@ -183,7 +183,7 @@ func (m *listModel) activate(r row) tea.Cmd {
 	case rowToggle:
 		m.toggleEnumMember(r)
 	case rowUnknown:
-		return m.editValueExternal(r.path, -1) // no schema: $EDITOR on the JSON value
+		return m.editValueExternal(r.path, -1) // no schema: $EDITOR on the raw value
 	case rowIssues:
 		m.openIssues()
 	}
@@ -409,8 +409,9 @@ func (m *listModel) openRawAt(fn *smodel.FormNode, path []any) {
 		cur, _ = m.doc.Get(path)
 	}
 	if cur != nil && !cur.Null {
-		if buf, err := json.Marshal(cur.ToAny()); err == nil {
-			ta.SetValue(string(buf))
+		var buf bytes.Buffer
+		if err := m.opts.encodeRawValue(&buf, cur); err == nil {
+			ta.SetValue(buf.String())
 		}
 	}
 	ta.Focus()
@@ -647,9 +648,9 @@ func (m *listModel) memberInsertIndex(r row, after bool) int {
 }
 
 // keyAdd drives the key-name input: enter validates the name and launches
-// $EDITOR on an empty file for the new member's JSON value. An empty file
-// cancels; invalid JSON is discarded with a notice. esc at the name stage
-// writes nothing.
+// $EDITOR on an empty file for the new member's value. An empty file
+// cancels; invalid JSON/YAML is discarded with a notice. esc at the name
+// stage writes nothing.
 func (m *listModel) keyAdd(msg tea.KeyMsg) tea.Cmd {
 	switch msg.String() {
 	case "enter":
@@ -981,17 +982,9 @@ func (m *listModel) applyText() tea.Cmd {
 		m.text = nil
 		return nil
 	}
-	fn := m.text.fn
-	if fn == nil {
-		fn = &smodel.FormNode{Title: "Edit raw JSON"}
-	}
-	if err := ValidateJSON(fn, s); err != nil {
-		m.text.err = err.Error()
-		return nil
-	}
-	n, err := jsondoc.Parse(strings.NewReader(s))
+	n, err := m.opts.decodeRawValue([]byte(s))
 	if err != nil {
-		m.text.err = err.Error()
+		m.text.err = "invalid " + m.opts.rawLabel() + ": " + err.Error()
 		return nil
 	}
 	if m.text.path == nil {

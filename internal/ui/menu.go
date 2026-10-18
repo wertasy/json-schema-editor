@@ -123,12 +123,12 @@ type selState struct {
 	oneOf  *smodel.FormNode // set for enum variant editors: ctrl+t type switch
 }
 
-// textState is the built-in raw-JSON textarea overlay for schema-defined
-// fields that cannot be form-edited. Values under schema-less keys use the
-// external editor instead.
+// textState is the built-in raw textarea overlay for schema-defined fields
+// that cannot be form-edited; its syntax follows Options.Raw (JSON or YAML).
+// Values under schema-less keys use the external editor instead.
 type textState struct {
 	path []any
-	fn   *smodel.FormNode // schema field edited as raw JSON
+	fn   *smodel.FormNode // schema field edited as raw text
 	ta   textarea.Model
 	err  string
 }
@@ -235,7 +235,7 @@ type listModel struct {
 	issuesOrigin  []*menuState    // stack captured when the jump parked the list
 }
 
-// newMenuTextarea builds the raw-JSON editor sized for the current screen.
+// newMenuTextarea builds the raw editor sized for the current screen.
 func newMenuTextarea(m *listModel) textarea.Model {
 	ta := textarea.New()
 	ta.ShowLineNumbers = false
@@ -1579,7 +1579,7 @@ func (m *listModel) errsView() string {
 }
 
 func (m *listModel) textView() string {
-	title := "Edit raw JSON"
+	title := "Edit raw " + m.opts.rawLabel()
 	if m.text.fn != nil && m.text.fn.Title != "" {
 		title = m.text.fn.Title
 	}

@@ -1,7 +1,7 @@
 package ui
 
 import (
-	"encoding/json"
+	"bytes"
 	"fmt"
 	"strings"
 
@@ -60,7 +60,7 @@ func (a *app) section(node *smodel.FormNode, path []any, root bool) result {
 			label = "Save and exit"
 			navs = append(navs,
 				navOpt{key: first, label: label},
-				navOpt{key: "raw", label: "Edit raw JSON"})
+				navOpt{key: "raw", label: "Edit raw " + a.opts.rawLabel()})
 		} else {
 			navs = append([]navOpt{{key: first, label: label}}, navs...)
 		}
@@ -305,8 +305,10 @@ func (a *app) editSingle(fn *smodel.FormNode, path []any) bool {
 	return true
 }
 
-// rawEditor edits a whole subtree (nil path = entire document) as JSON.
+// rawEditor edits a whole subtree (nil path = entire document) in the raw
+// syntax selected by Options.Raw.
 func (a *app) rawEditor(path []any) {
+	label := a.opts.rawLabel()
 	var cur *jsondoc.Node
 	if path == nil {
 		cur = a.doc
@@ -315,19 +317,41 @@ func (a *app) rawEditor(path []any) {
 	}
 	prefill := ""
 	if cur != nil && !cur.Null {
-		if buf, err := json.Marshal(cur.ToAny()); err == nil {
-			prefill = string(buf)
+		var buf bytes.Buffer
+		var err error
+		if path == nil {
+			err = a.opts.encodeRawDoc(&buf, cur)
+		} else {
+			err = a.opts.encodeRawValue(&buf, cur)
+		}
+		if err == nil {
+			prefill = buf.String()
 		}
 	}
 	b := prefill
-	fn := &smodel.FormNode{Key: "$", Title: "Edit raw JSON"}
+	fn := &smodel.FormNode{Key: "$", Title: "Edit raw " + label}
 	txt := huh.NewText().
 		Title(fn.Title).
-		Description(fieldDesc(fn, "edit as JSON, submit to apply")).
+		Description(fieldDesc(fn, "edit as "+label+", submit to apply")).
 		Value(&b).
 		Lines(12).
 		CharLimit(0).
-		Validate(func(s string) error { return ValidateJSON(fn, strings.TrimSpace(s)) })
+		Validate(func(s string) error {
+			s = strings.TrimSpace(s)
+			if s == "" {
+				return nil
+			}
+			var err error
+			if path == nil {
+				_, err = a.opts.decodeRawDoc([]byte(s))
+			} else {
+				_, err = a.opts.decodeRawValue([]byte(s))
+			}
+			if err != nil {
+				return fmt.Errorf("invalid %s: %v", label, err)
+			}
+			return nil
+		})
 	form := huh.NewForm(huh.NewGroup(txt).Description(helpLine))
 	if err := a.runForm(form); err != nil {
 		return
@@ -339,7 +363,13 @@ func (a *app) rawEditor(path []any) {
 		}
 		return
 	}
-	n, err := jsondoc.Parse(strings.NewReader(s))
+	var n *jsondoc.Node
+	var err error
+	if path == nil {
+		n, err = a.opts.decodeRawDoc([]byte(s))
+	} else {
+		n, err = a.opts.decodeRawValue([]byte(s))
+	}
 	if err != nil {
 		return
 	}

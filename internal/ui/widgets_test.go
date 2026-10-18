@@ -66,23 +66,7 @@ func TestValidateInputStrings(t *testing.T) {
 	}
 }
 
-func TestValidateJSON(t *testing.T) {
-	req := smodel.FormNode{Required: true}
-	if err := ValidateJSON(&req, ""); err == nil {
-		t.Error("empty required JSON should fail")
-	}
-	if err := ValidateJSON(&smodel.FormNode{}, ""); err != nil {
-		t.Errorf("empty optional: %v", err)
-	}
-	if err := ValidateJSON(&smodel.FormNode{}, "{invalid"); err == nil {
-		t.Error("invalid JSON should fail")
-	}
-	if err := ValidateJSON(&smodel.FormNode{}, `{"a": [1, 2]}`); err != nil {
-		t.Errorf("valid JSON: %v", err)
-	}
-}
-
-func TestShouldOmit(t *testing.T) {
+func TestScalarValidation(t *testing.T) {
 	cases := []struct {
 		empty, required, hasDefault, want bool
 	}{
