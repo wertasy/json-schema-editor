@@ -23,8 +23,12 @@ func (a *app) section(node *smodel.FormNode, path []any, root bool) result {
 		var entries []entry
 		var navs []navOpt
 
-		if root && a.opts.Status != "" {
-			fields = append(fields, huh.NewNote().Title(a.opts.Status))
+		if root && (a.opts.Status != "" || a.opts.StartupNotice != "") {
+			// info notices (StartupNotice) lead, warnings follow; the
+			// accessible flow has no persistent status area, so the root
+			// note carries both
+			note := strings.TrimSpace(a.opts.StartupNotice + "\n" + a.opts.Status)
+			fields = append(fields, huh.NewNote().Title(note))
 		}
 		for _, c := range node.Children {
 			cpath := pathFor(path, c.Key)
@@ -431,7 +435,7 @@ func (a *app) variantRoot(node *smodel.FormNode) result {
 		}
 		opts := make([]navOpt, 0, len(node.Variants))
 		for i, v := range node.Variants {
-		opts = append(opts, navOpt{key: "v:" + itoa(i), label: displayTitle(v)})
+			opts = append(opts, navOpt{key: "v:" + itoa(i), label: displayTitle(v)})
 		}
 		choice, ok := a.choose(node.Title, "choose a variant", opts, opts[0].key)
 		if !ok {

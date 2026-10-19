@@ -185,8 +185,9 @@ func run() int {
 		cfg = sess.Doc()
 	}
 
-	var status []string
-	status = append(status, sess.Notices()...)
+	var status []string  // warnings, shown for the whole session
+	var startup []string // info notices, hidden after the first key press
+	startup = append(startup, sess.Notices()...)
 
 	// A -s location is recorded in the file's own convention (a top-level
 	// "$schema" member, or a yaml-language-server comment for YAML) when the
@@ -251,7 +252,7 @@ func run() int {
 		}
 		schemaLoc = chosen.URL
 		sess.SetSchemaLocation(schemaLoc)
-		status = append(status, "schema from SchemaStore: "+chosen.Name)
+		startup = append(startup, "schema from SchemaStore: "+chosen.Name)
 	}
 
 	model, _, err := smodel.Load(schemaLoc)
@@ -311,13 +312,14 @@ func run() int {
 		}
 	}
 	outcome := ui.Run(model, cfg, ui.Options{
-		Accessible: *accessible,
-		Force:      *force,
-		Raw:        raw,
-		Validate:   check,
-		Save:       func(*jsondoc.Node) error { return atomicWrite(config, sess.Write) },
-		Status:     strings.Join(status, "\n"),
-		LoadErrors: loadErrors,
+		Accessible:    *accessible,
+		Force:         *force,
+		Raw:           raw,
+		Validate:      check,
+		Save:          func(*jsondoc.Node) error { return atomicWrite(config, sess.Write) },
+		Status:        strings.Join(status, "\n"),
+		StartupNotice: strings.Join(startup, "\n"),
+		LoadErrors:    loadErrors,
 	})
 	if outcome.Err != nil {
 		fmt.Fprintf(os.Stderr, "ui: %v\n", outcome.Err)

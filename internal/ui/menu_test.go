@@ -154,6 +154,29 @@ func TestMenuStatusAboveHelpBar(t *testing.T) {
 	}
 }
 
+// TestStartupNoticeHidesOnKey: informational session notices (YAML aliases
+// kept, the SchemaStore source) show in the status block until the first key
+// press, while warning lines (opts.Status) stay for the session.
+func TestStartupNoticeHidesOnKey(t *testing.T) {
+	m := newListModel(testModel(), testDoc(), Options{
+		Status:        icons.Warn + " using the cached schema: offline",
+		StartupNotice: "yaml: 1 alias kept: edits write through to the anchored object (< Expand > detaches a copy)\nschema from SchemaStore: GitHub Workflow",
+	})
+	m.Update(tea.WindowSizeMsg{Width: 100, Height: 30})
+	for _, want := range []string{"alias kept", "schema from SchemaStore", "using the cached schema"} {
+		if !contains(m.View(), want) {
+			t.Fatalf("startup view missing %q:\n%s", want, m.View())
+		}
+	}
+	press(m, "j") // the first user operation retires the info notices
+	if contains(m.View(), "alias kept") || contains(m.View(), "schema from SchemaStore") {
+		t.Fatalf("info notices must hide after a key press:\n%s", m.View())
+	}
+	if !contains(m.View(), "using the cached schema") {
+		t.Fatalf("warning status must survive:\n%s", m.View())
+	}
+}
+
 func TestMenuHelpPinnedToBottom(t *testing.T) {
 	m := newListModel(testModel(), testDoc(), Options{})
 	m.Update(tea.WindowSizeMsg{Width: 100, Height: 30})

@@ -50,6 +50,11 @@ type Options struct {
 	// Status is a warning line shown on the root screen (e.g. compile
 	// failure).
 	Status string
+	// StartupNotice holds informational session notices (YAML aliases kept,
+	// the SchemaStore source). The TUI shows them in the status block on the
+	// root screen and drops them on the first key press; the accessible mode
+	// folds them into the root note.
+	StartupNotice string
 	// LoadErrors are the validation messages of the file as loaded; the root
 	// menu shows them as a jumpable status row.
 	LoadErrors []string

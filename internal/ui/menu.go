@@ -236,6 +236,7 @@ type listModel struct {
 	search        searchState
 	menuCache     map[*smodel.FormNode]*smodel.FormNode
 	notice        string          // transient list-mode message, cleared on the next key
+	startup       string          // session info notices (aliases kept, schema source), dropped on the first key
 	gArm          time.Time       // nonzero while a lone g is waiting for its gg partner
 	recording     bool            // macro capture armed
 	recBuf        []tea.KeyMsg    // keys captured so far
@@ -283,12 +284,13 @@ func newListModel(model *smodel.FormNode, doc *jsondoc.Node, opts Options) *list
 		seedVariantCursor(stack[0], doc) // oneOf root: open on the matched variant
 	}
 	m := &listModel{
-		model:  model,
-		doc:    doc,
-		opts:   opts,
-		width:  80,
-		height: 24,
-		stack:  stack,
+		model:   model,
+		doc:     doc,
+		opts:    opts,
+		width:   80,
+		height:  24,
+		stack:   stack,
+		startup: opts.StartupNotice,
 	}
 	if doc != nil {
 		m.baseline = jsondoc.FromAny(doc.ToAny())
@@ -566,6 +568,7 @@ func (m *listModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			msg = tea.KeyMsg{Type: tea.KeyEsc}
 		}
 		m.notice = ""
+		m.startup = "" // session info notices live until the first key press
 		if cmd, consumed := m.macroControl(msg); consumed {
 			return m, cmd
 		}
@@ -772,15 +775,28 @@ func (m *listModel) listView() string {
 
 // statusLines renders the session status notices (schema source, offline
 // fallback, compile failure, alias count): the root screen shows them as the
-// block directly above the bottom hint bar. Lines wrap to the terminal width
-// (plain text first, styled after — wrapText counts display cells, not ANSI
-// bytes) so the renderer's cell accounting stays intact.
+// block directly above the bottom hint bar. Informational notices
+// (m.startup) lead the block and vanish on the first key press; warnings
+// stay. Lines wrap to the terminal width (plain text first, styled after —
+// wrapText counts display cells, not ANSI bytes) so the renderer's cell
+// accounting stays intact.
 func (m *listModel) statusLines() []string {
-	if len(m.stack) != 1 || m.opts.Status == "" {
+	if len(m.stack) != 1 {
+		return nil
+	}
+	combined := m.opts.Status
+	if m.startup != "" {
+		if combined != "" {
+			combined = m.startup + "\n" + combined
+		} else {
+			combined = m.startup
+		}
+	}
+	if combined == "" {
 		return nil
 	}
 	var out []string
-	for _, line := range strings.Split(m.opts.Status, "\n") {
+	for _, line := range strings.Split(combined, "\n") {
 		for _, w := range wrapText(line, m.width-1) {
 			out = append(out, mStatus.Render(w))
 		}
