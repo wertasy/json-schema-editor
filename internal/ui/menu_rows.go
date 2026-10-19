@@ -1321,32 +1321,44 @@ func rowSearchText(lm *listModel, r row) (string, bool) {
 
 // filterSearch narrows the index to rows matching q. A query starting with
 // "$" — alone, "$.", or "$[" — is a document-path query in the rendered path
-// style ("$.a.b[0]"): the row path is the only match target (title/key/value
-// matching is suspended) and the match is anchored at the document root, with
-// prefix semantics so a partially typed last segment still matches. Any other
-// query is ordinary text: title and key, plus the value for rows carrying a
-// scalar value (container overviews are roll-ups of child rows and never
-// match); fold=true compares case-insensitively, fold=false requires an
-// exact-case match. An empty query keeps everything. Hits whose full path
-// equals the query (path mode) or whose leaf key equals q (text mode) rank
-// first; ties keep document order. Variant rows match schema identity only:
-// their jump target is the picker row. Schema-less rows (unknown keys) match
-// their key and value overview.
+// style ("$.a.b[0]"): the match is anchored at the document root, with prefix
+// semantics so a partially typed last segment still matches. A query starting
+// with "." matches the keyword against path segments from any node: its
+// dot-separated parts must match a run of consecutive segments, each as a
+// segment prefix, infix or — last — fuzzy subsequence; a run ending in the
+// leaf segment (the node itself) ranks before one ending higher up, whose
+// descendants report the hit. Both path queries list the ordinary text match
+// after their path hits as the value fallback — a literal containment match
+// (case per fold) in both modes, so values carrying "$…"/".…" style path
+// text are found without re-listing parents through their roll-up overviews;
+// rows already listed by path are not repeated. Any other query is ordinary
+// text: title and key, plus the value
+// for rows carrying a scalar value (container overviews are roll-ups of child
+// rows and never match); fold=true compares case-insensitively, fold=false
+// requires an exact-case match. An empty query keeps everything. Hits whose
+// full path equals the query (path mode) or whose leaf key equals q (text
+// mode) rank first; ties keep document order. Variant rows match schema
+// identity only: their jump target is the picker row. Schema-less rows
+// (unknown keys) match their key and value overview.
 //
-// When re != nil the query is a regular expression. Path queries still match
-// the path body: refilter compiles them via pathPattern (leading "$" stripped,
-// [N] index brackets escaped), so a pasted breadcrumb stays literal. Full
-// path matches rank first.
+// When re != nil the query is a regular expression. Root path queries still
+// match the path body: refilter compiles them via pathPattern (leading "$"
+// stripped, [N] index brackets escaped), so a pasted breadcrumb stays
+// literal. Full path matches rank first. Any-node queries keep the tiered
+// literal segment matcher in both modes — fuzzy matching has no regex form —
+// and their value fallback is literal too.
 func filterSearch(lm *listModel, all []row, q string, fold bool, re *regexp.Regexp) []row {
 	if q == "" {
 		return all
 	}
 	if isPathQuery(q) {
+		picked := make([]bool, len(all))
+		var out []row
 		if re != nil {
-			var out []row
-			for _, r := range all {
+			for i, r := range all {
 				body := pathBody(r.path)
 				if loc := re.FindStringIndex(body); loc != nil && loc[0] == 0 {
+					picked[i] = true
 					out = append(out, r)
 				}
 			}
@@ -1356,36 +1368,173 @@ func filterSearch(lm *listModel, all []row, q string, fold bool, re *regexp.Rege
 				return loc != nil && loc[0] == 0 && loc[1] == len(body)
 			}
 			sort.SliceStable(out, func(i, j int) bool { return full(out[i]) && !full(out[j]) })
-			return out
+		} else {
+			needle := q
+			if fold {
+				needle = strings.ToLower(needle)
+			}
+			for i, r := range all {
+				p := jsondoc.PathString(r.path)
+				if fold {
+					p = strings.ToLower(p)
+				}
+				if strings.HasPrefix(p, needle) {
+					picked[i] = true
+					out = append(out, r)
+				}
+			}
+			exact := func(r row) bool {
+				p := jsondoc.PathString(r.path)
+				if fold {
+					p = strings.ToLower(p)
+				}
+				return p == needle
+			}
+			sort.SliceStable(out, func(i, j int) bool { return exact(out[i]) && !exact(out[j]) })
 		}
-		needle := q
+		return append(out, textSearchRows(lm, all, q, fold, nil, picked, true)...)
+	}
+	if isDotQuery(q) {
+		picked := make([]bool, len(all))
+		out := dotQueryRows(all, picked, q, fold)
+		return append(out, textSearchRows(lm, all, q, fold, nil, picked, true)...)
+	}
+	return textSearchRows(lm, all, q, fold, re, nil, false)
+}
+
+// isPathQuery reports whether q is a document-path query: "$", "$.", or "$["
+// prefix. Requiring the "$" keeps ordinary text searches for values containing
+// dots or slashes working; a leading "." is the any-node path query (isDotQuery).
+func isPathQuery(q string) bool {
+	return q == "$" || strings.HasPrefix(q, "$.") || strings.HasPrefix(q, "$[")
+}
+
+// isDotQuery reports whether q is an any-node path query: "." plus at least
+// one more character. Where "$" anchors at the document root, a leading "."
+// matches the keyword against path segments from any level down.
+func isDotQuery(q string) bool {
+	return len(q) > 1 && q[0] == '.'
+}
+
+// dotQueryRows ranks rows whose path matches a leading-dot query from any
+// node (dotQueryRank); ties keep document order. Rows it lists are marked in
+// picked so the text fallback skips them.
+func dotQueryRows(all []row, picked []bool, q string, fold bool) []row {
+	type hit struct {
+		r    row
+		rank int
+	}
+	var hits []hit
+	for i, r := range all {
+		if rank, ok := dotQueryRank(r.path, q[1:], fold); ok {
+			picked[i] = true
+			hits = append(hits, hit{r, rank})
+		}
+	}
+	sort.SliceStable(hits, func(i, j int) bool { return hits[i].rank < hits[j].rank })
+	out := make([]row, 0, len(hits))
+	for _, h := range hits {
+		out = append(out, h.r)
+	}
+	return out
+}
+
+// dotQueryRank scores one row path against the keyword after the leading
+// dot: its "."-separated parts must match a run of consecutive segments,
+// each as a segment prefix, infix or — last — fuzzy subsequence (the
+// weakest part's tier counts). The rank is 0+ for a run ending in the leaf
+// segment — the node itself — and 16+ for one ending higher up, whose
+// descendants report the hit; ok=false when nothing matches.
+func dotQueryRank(path []any, keyword string, fold bool) (rank int, ok bool) {
+	parts := strings.Split(keyword, ".")
+	if fold {
+		for i := range parts {
+			parts[i] = strings.ToLower(parts[i])
+		}
+	}
+	segs := make([]string, len(path))
+	for i, seg := range path {
+		s := fmt.Sprint(seg)
 		if fold {
-			needle = strings.ToLower(needle)
+			s = strings.ToLower(s)
 		}
-		var out []row
-		for _, r := range all {
-			p := jsondoc.PathString(r.path)
-			if fold {
-				p = strings.ToLower(p)
+		segs[i] = s
+	}
+	best := -1
+	for s := 0; s+len(parts) <= len(segs); s++ {
+		tier := 0
+		for k, part := range parts {
+			t := segMatch(segs[s+k], part)
+			if t == 0 {
+				tier = 0
+				break
 			}
-			if strings.HasPrefix(p, needle) {
-				out = append(out, r)
+			if t > tier {
+				tier = t
 			}
 		}
-		exact := func(r row) bool {
-			p := jsondoc.PathString(r.path)
-			if fold {
-				p = strings.ToLower(p)
-			}
-			return p == needle
+		if tier == 0 {
+			continue
 		}
-		sort.SliceStable(out, func(i, j int) bool { return exact(out[i]) && !exact(out[j]) })
-		return out
+		r := 16 + tier - 1 // the run ends above the leaf: a descendant hit
+		if s+len(parts) == len(segs) {
+			r = tier - 1 // ends in the leaf segment: the node itself
+		}
+		if best < 0 || r < best {
+			best = r
+		}
+	}
+	return best, best >= 0
+}
+
+// segMatch scores keyword against one path segment: 1 = segment prefix,
+// 2 = infix, 3 = fuzzy subsequence, 0 = no match. The loose tiers let a
+// half-remembered key (".build_app_store") still land on
+// "build_apple_app_store", ranked behind exact segment hits.
+func segMatch(seg, keyword string) int {
+	switch {
+	case strings.HasPrefix(seg, keyword):
+		return 1
+	case strings.Contains(seg, keyword):
+		return 2
+	case subsequenceMatch(seg, keyword):
+		return 3
+	}
+	return 0
+}
+
+// subsequenceMatch reports whether keyword's runes appear in seg in order.
+func subsequenceMatch(seg, keyword string) bool {
+	rs := []rune(keyword)
+	i := 0
+	for _, r := range seg {
+		if i < len(rs) && r == rs[i] {
+			i++
+		}
+	}
+	return i == len(rs)
+}
+
+// textSearchRows is the ordinary title/key/value match shared by plain text
+// queries and the value fallback of path queries. Rows with picked[i] set
+// are skipped (nil picks nothing), so a row matching both groups lists once,
+// in its path group. Regex mode (re != nil) matches the row text; otherwise
+// q is a substring, case per fold. raw selects the path-query fallback's
+// match text: the scalar value enters unclipped, where rowSearchText reuses
+// the display summary that clips long values with an ellipsis. Hits whose
+// leaf key equals q rank first; ties keep document order.
+func textSearchRows(lm *listModel, all []row, q string, fold bool, re *regexp.Regexp, picked []bool, raw bool) []row {
+	textOf := rowSearchText
+	if raw {
+		textOf = rowFallbackText
 	}
 	var out []row
 	if re != nil {
-		for _, r := range all {
-			text, ok := rowSearchText(lm, r)
+		for i, r := range all {
+			if picked != nil && picked[i] {
+				continue
+			}
+			text, ok := textOf(lm, r)
 			if !ok {
 				continue
 			}
@@ -1404,10 +1553,12 @@ func filterSearch(lm *listModel, all []row, q string, fold bool, re *regexp.Rege
 	if fold {
 		q = strings.ToLower(q)
 	}
-	for _, r := range all {
-		var ok bool
-		var text string
-		if text, ok = rowSearchText(lm, r); !ok {
+	for i, r := range all {
+		if picked != nil && picked[i] {
+			continue
+		}
+		text, ok := textOf(lm, r)
+		if !ok {
 			continue
 		}
 		if fold {
@@ -1433,11 +1584,51 @@ func filterSearch(lm *listModel, all []row, q string, fold bool, re *regexp.Rege
 	return out
 }
 
-// isPathQuery reports whether q is a document-path query: "$", "$.", or "$["
-// prefix. Requiring the "$" keeps ordinary text searches for values containing
-// dots or slashes working.
-func isPathQuery(q string) bool {
-	return q == "$" || strings.HasPrefix(q, "$.") || strings.HasPrefix(q, "$[")
+// rowFallbackText is the path-query value fallback's match target: like
+// rowSearchText, but the row's own scalar value enters the match unclipped —
+// the display summary clips long values with an ellipsis, which would hide
+// path text in the middle of a longer string.
+func rowFallbackText(lm *listModel, r row) (string, bool) {
+	if r.fn == nil {
+		if r.kind != rowUnknown {
+			return "", false
+		}
+		key := ""
+		if n := len(r.path); n > 0 {
+			key = fmt.Sprint(r.path[n-1])
+		}
+		if s, ok := rowRawScalar(lm, r); ok {
+			return key + " " + s, true
+		}
+		return key, true
+	}
+	text := r.fn.Title + " " + r.fn.Key
+	if s, ok := rowRawScalar(lm, r); ok {
+		text += " " + s
+	}
+	return text, true
+}
+
+// rowRawScalar returns the row's own scalar value — the document value, else
+// the schema default — in its text form, mirroring rowScalarValue's
+// selection; false for containers and unset rows without a default.
+func rowRawScalar(lm *listModel, r row) (string, bool) {
+	n, ok := lm.doc.Get(r.path)
+	if !ok || n == nil || n.Null {
+		if r.fn == nil || r.fn.Default == nil {
+			return "", false
+		}
+		n = r.fn.Default
+	}
+	switch {
+	case n.Str != nil:
+		return *n.Str, true
+	case n.Num != nil:
+		return n.Num.String(), true
+	case n.Bool != nil:
+		return fmt.Sprintf("%v", *n.Bool), true
+	}
+	return "", false
 }
 
 // pathBody is a row path as a path-query match subject: the rendered path
@@ -1447,7 +1638,9 @@ func pathBody(path []any) string {
 }
 
 // pathPattern turns a document-path query into a regex over pathBody: the
-// leading "$" is dropped and JSON-path index brackets are escaped, so a pasted
+// leading "$" is dropped (a no-op for the leading "." any-node form, whose
+// dot stays as the regex wildcard feeding the text fallback) and JSON-path
+// index brackets are escaped, so a pasted
 // breadcrumb stays literal in the default regex mode ("$.tags[0]" matches
 // ".tags[0]", not ".tags0"). A bracket still being typed is escaped as soon as
 // it is followed only by digits, keeping the incremental pattern valid; other

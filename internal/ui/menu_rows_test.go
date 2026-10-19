@@ -571,6 +571,83 @@ func TestSearchIndexAndFilter(t *testing.T) {
 	}
 }
 
+// TestSearchDotQuery: a "."-prefixed query matches the keyword against path
+// segments from any node — the node itself first, its descendants after — and
+// both path queries fall back to values carrying the query text (with its
+// "$"/"." prefix) after their path hits.
+func TestSearchDotQuery(t *testing.T) {
+	root := mustSchema(t, `{
+	  "type": "object",
+	  "properties": {
+	    "jobs": {"type": "object", "properties": {
+	      "build_apple_app_store": {"type": "object", "properties": {
+	        "runs_on": {"type": "string"},
+	        "timeout": {"type": "number"}
+	      }},
+	      "lint": {"type": "object", "properties": {
+	        "runs_on": {"type": "string"}
+	      }}
+	    }},
+	    "notes": {"type": "string"}
+	  }
+	}`)
+	jobs := tobj(
+		tmem("build_apple_app_store", tobj(
+			tmem("runs_on", tstr("macos-14")),
+			tmem("timeout", tnum("30")))),
+		tmem("lint", tobj(tmem("runs_on", tstr("ubuntu-24.04")))))
+	doc := tobj(
+		tmem("jobs", jobs),
+		tmem("notes", tstr("release: see $.jobs.build_apple_app_store")))
+	lm := newListModel(root, doc, Options{})
+	all := searchIndex(lm, lm.top())
+	join := func(rows []row) string {
+		var out []string
+		for _, r := range rows {
+			out = append(out, jsondoc.PathString(r.path))
+		}
+		return strings.Join(out, " ")
+	}
+	subtree := "$.jobs.build_apple_app_store $.jobs.build_apple_app_store.runs_on $.jobs.build_apple_app_store.timeout"
+
+	// the node and its subtree, node first — the keyword need not be the
+	// whole key ("build_app_store" lands on "build_apple_app_store"); the
+	// notes value carries no ".build_app_store" text, so no fallback here
+	if got := filterSearch(lm, all, ".build_app_store", true, nil); join(got) != subtree {
+		t.Fatalf("fuzzy dot query = %q, want %q", join(got), subtree)
+	}
+	// an exact key prefix hits the same rows plus the value fallback: the
+	// notes value contains ".build_app"
+	if got := filterSearch(lm, all, ".build_app", true, nil); join(got) != subtree+" $.notes" {
+		t.Fatalf("prefix dot query = %q, want %q", join(got), subtree+" $.notes")
+	}
+	// dotted parts match a run of consecutive segments from any node
+	if got := filterSearch(lm, all, ".lint.runs_on", true, nil); join(got) != "$.jobs.lint.runs_on" {
+		t.Fatalf("multi-part dot query = %q, want the lint runs_on row", join(got))
+	}
+	// fold off demands the exact case
+	if got := filterSearch(lm, all, ".BUILD_APP", false, nil); len(got) != 0 {
+		t.Fatalf("exact-case dot query = %q, want none", join(got))
+	}
+	// regex mode keeps the tiered literal matcher on the path (the re only
+	// feeds ordinary text queries), and the fallback stays a literal
+	// containment: identical results to the literal query above
+	re, err := regexp.Compile("(?i)" + pathPattern(".build_app"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := filterSearch(lm, all, ".build_app", true, re); join(got) != subtree+" $.notes" {
+		t.Fatalf("regex-mode dot query = %q, want %q", join(got), subtree+" $.notes")
+	}
+
+	// "$" query: root-anchored path hits first (exact path on top), then the
+	// value fallback — the notes value carries the queried path text
+	want := "$.jobs.build_apple_app_store $.jobs.build_apple_app_store.runs_on $.jobs.build_apple_app_store.timeout $.notes"
+	if got := filterSearch(lm, all, "$.jobs.build_apple_app_store", true, nil); join(got) != want {
+		t.Fatalf("$ query = %q, want %q", join(got), want)
+	}
+}
+
 func TestSearchIndexVariantRowsOnlyWithoutValue(t *testing.T) {
 	count := func(rows []row) int {
 		n := 0

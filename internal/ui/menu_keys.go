@@ -1466,12 +1466,13 @@ func (m *listModel) refilter() {
 	m.search.re, m.search.reErr = nil, ""
 	if m.search.regex && q != "" {
 		pattern := q
-		// Row search keeps the path syntax breadcrumbs print: a "$"-prefixed
-		// query is matched against the path body (the leading "$" would reach
-		// the regexp engine as an end-of-text anchor) with its [N] index
-		// brackets escaped so a pasted breadcrumb stays literal. Replace mode
-		// matches string values instead: the query is verbatim.
-		if !m.search.replace && isPathQuery(q) {
+		// Row search keeps the path syntax breadcrumbs print: "$"-prefixed
+		// root-anchored and "."-prefixed any-node path queries are matched
+		// against the path body (the leading "$" would reach the regexp
+		// engine as an end-of-text anchor) with [N] index brackets escaped so
+		// a pasted breadcrumb stays literal. Replace mode matches string
+		// values instead: the query is verbatim.
+		if !m.search.replace && (isPathQuery(q) || isDotQuery(q)) {
 			pattern = pathPattern(q)
 		}
 		if m.search.foldCase {
