@@ -593,3 +593,94 @@ func TestDetachBreaksAliasSharing(t *testing.T) {
 		t.Fatal("Detach reported success on a missing path")
 	}
 }
+
+// mergeDoc builds {"base":&b1 {env,out}, "b2":&b2 {env2, out2}, "child": {<<:
+// [*b1,*b2], own}} with the merge spec pointing at the anchor nodes.
+func mergeDoc(t *testing.T) *Node {
+	t.Helper()
+	base := mustParse(t, `{"env":"e1","out":"o2"}`)
+	base.Anchor = "b1"
+	b2 := mustParse(t, `{"env":"e2","extra":"x"}`)
+	b2.Anchor = "b2"
+	child := &Node{Object: &[]Member{
+		{Key: "<<", Val: &Node{Merge: []*Node{base, b2}}},
+		{Key: "own", Val: FromAny("yes")},
+	}}
+	return &Node{Object: &[]Member{
+		{Key: "base", Val: base},
+		{Key: "b2", Val: b2},
+		{Key: "child", Val: child},
+	}}
+}
+
+func mustParse(t *testing.T, s string) *Node {
+	t.Helper()
+	n, err := Parse(strings.NewReader(s))
+	if err != nil {
+		t.Fatal(err)
+	}
+	return n
+}
+
+func TestMergeRefsAndResolution(t *testing.T) {
+	n := mergeDoc(t)
+	child, _ := n.Get([]any{"child"})
+	refs := child.MergeRefs()
+	if len(refs) != 2 || refs[0].Anchor != "b1" || refs[1].Anchor != "b2" {
+		t.Fatalf("MergeRefs = %v", refs)
+	}
+	// ToAny applies YAML precedence: own wins, earlier anchor wins
+	got := n.ToAny()
+	childMap := got.(map[string]any)["child"].(map[string]any)
+	if childMap["own"] != "yes" || childMap["env"] != "e1" || childMap["out"] != "o2" ||
+		childMap["extra"] != "x" || len(childMap) != 4 {
+		t.Fatalf("resolved child = %v", childMap)
+	}
+}
+
+func TestMergeJSONOutputResolves(t *testing.T) {
+	n := mergeDoc(t)
+	// pretty JSON and Compact both resolve merges inline
+	want := `{"base":{"env":"e1","out":"o2"},"b2":{"env":"e2","extra":"x"},` +
+		`"child":{"own":"yes","env":"e1","out":"o2","extra":"x"}}`
+	if got := n.Compact(); got != want {
+		t.Fatalf("Compact = %s\nwant %s", got, want)
+	}
+}
+
+func TestMergeCloneKeepsSpecAndSharing(t *testing.T) {
+	n := mergeDoc(t)
+	cp := n.Clone()
+	child, _ := cp.Get([]any{"child"})
+	base, _ := cp.Get([]any{"base"})
+	refs := child.MergeRefs()
+	if len(refs) != 2 || refs[0] != base {
+		t.Fatalf("cloned merge must point at the cloned anchor: %v", refs)
+	}
+	// a write through the cloned anchor is what the merged view resolves
+	base.Set([]any{"env"}, FromAny("changed"))
+	if got := cp.ToAny().(map[string]any)["child"].(map[string]any)["env"]; got != "changed" {
+		t.Fatalf("merged view did not follow the anchor: %v", got)
+	}
+}
+
+func TestMergeCloneDetachedFlattens(t *testing.T) {
+	n := mergeDoc(t)
+	child, _ := n.Get([]any{"child"})
+	detached := child.CloneDetached()
+	if refs := detached.MergeRefs(); len(refs) != 0 {
+		t.Fatalf("detached copy must carry no merge refs: %v", refs)
+	}
+	var keys []string
+	for _, m := range *detached.Object {
+		keys = append(keys, m.Key)
+	}
+	if strings.Join(keys, ",") != "own,env,out,extra" {
+		t.Fatalf("flattened members = %v", keys)
+	}
+	// edits to the detached copy never reach the anchor
+	detached.Set([]any{"env"}, FromAny("mine"))
+	if v := n.ToAny().(map[string]any)["base"].(map[string]any)["env"]; v != "e1" {
+		t.Fatalf("anchor changed through the detached copy: %v", v)
+	}
+}

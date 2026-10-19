@@ -15,6 +15,7 @@ import (
 	"github.com/charmbracelet/lipgloss"
 	"github.com/muesli/termenv"
 
+	"github.com/wertasy/json-schema-editor/internal/icons"
 	"github.com/wertasy/json-schema-editor/internal/jsondoc"
 	"github.com/wertasy/json-schema-editor/internal/smodel"
 	"github.com/wertasy/json-schema-editor/internal/yamldoc"
@@ -155,20 +156,20 @@ func TestAliasExpandDetachesCopy(t *testing.T) {
 func TestAliasExpandShortcutE(t *testing.T) {
 	m, doc, _ := aliasTestModel(t, "base: &x\n  p: 1\ncopy: *x\n")
 	drillCopy(t, m)
-	press(m, "e") // the menu itself is a reference
+	press(m, "E") // the menu itself is a reference
 	if cp, _ := doc.Get([]any{"copy"}); cp.Anchor != "" {
-		t.Fatal("e must expand the reference menu")
+		t.Fatal("E must expand the reference menu")
 	}
 	if _, ok := m.aliasAt([]any{"copy"}); ok {
 		t.Fatal("e must leave an independent copy behind")
 	}
 
-	// e on a reference row in the parent menu expands that row.
+	// E on a reference row in the parent menu expands that row.
 	m2, doc2, _ := aliasTestModel(t, "base: &x\n  p: 1\ncopy: *x\n")
 	press(m2, "down") // cursor on the copy row
-	press(m2, "e")
+	press(m2, "E")
 	if cp, _ := doc2.Get([]any{"copy"}); cp.Anchor != "" {
-		t.Fatal("e on a reference row must expand it")
+		t.Fatal("E on a reference row must expand it")
 	}
 	if b, _ := doc2.Get([]any{"base"}); b.Anchor != "x" {
 		t.Fatalf("base anchor must survive: %#v", b)
@@ -539,4 +540,328 @@ func TestAnchorJumpGaGr(t *testing.T) {
 		}
 		press(m, "esc")
 	})
+}
+
+// aliasIssueModel: base and field share the same shape (a integer / b string)
+// so the document loads clean; pointing field at *b makes it carry a's value,
+// which is unknown to Field.
+func aliasIssueModel(t *testing.T, validateFn func(*jsondoc.Node) []string) *listModel {
+	t.Helper()
+	doc, _, err := yamldoc.Parse([]byte("base: &b\n  a: 1\nfield:\n  b: x\n"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	obj := func(k, title, kidKey, kidTitle, typ string, req bool) *smodel.FormNode {
+		return &smodel.FormNode{Key: k, Title: title, Kind: smodel.KObject,
+			Children: []*smodel.FormNode{{Key: kidKey, Title: kidTitle,
+				Kind: smodel.KScalar, JSONType: typ, Required: req}}}
+	}
+	model := &smodel.FormNode{Key: "$", Title: "Root", Kind: smodel.KObject,
+		Children: []*smodel.FormNode{
+			obj("base", "Base", "a", "A", "integer", false),
+			obj("field", "Field", "b", "B", "string", true),
+		}}
+	m := newListModel(model, doc, Options{Validate: validateFn})
+	m.Update(tea.WindowSizeMsg{Width: 100, Height: 30})
+	return m
+}
+
+// pointFieldAtReference drives * on the Field row and targets &b.
+func pointFieldAtReference(t *testing.T, m *listModel) {
+	t.Helper()
+	m.top().cursor = 1 // Field
+	press(m, "*")
+	if m.anc == nil {
+		t.Fatal("reference input did not open")
+	}
+	m.anc.ti.SetValue("b")
+	press(m, "enter")
+}
+
+func TestAliasWarningReachesParentRow(t *testing.T) {
+	// a clean document re-validated after the reference: the unknown key
+	// under the field must mark the field row (and the root status row)
+	m := aliasIssueModel(t, func(*jsondoc.Node) []string { return nil })
+	if len(m.issuesNow) != 0 {
+		t.Fatalf("document should load clean, issues=%v", m.issuesNow)
+	}
+	pointFieldAtReference(t, m)
+	// the new issue status row must not shift the cursor off the edited row
+	if r := menuRows(m)[m.top().cursor]; r.fn == nil || r.fn.Key != "field" {
+		t.Fatalf("cursor moved off the field row: %+v", r)
+	}
+	if !m.hasWarn([]any{"field"}) {
+		t.Fatalf("warnPaths = %v, want the field subtree marked", m.warnPaths)
+	}
+	var fieldRow row
+	for _, r := range menuRows(m) {
+		if r.fn != nil && r.fn.Key == "field" {
+			fieldRow = r
+		}
+	}
+	if line := m.rowLine(fieldRow, false, 20); !contains(line, icons.Warn) {
+		t.Fatalf("field row must carry the warning icon: %q", line)
+	}
+	// the root menu surfaces the new warning immediately
+	if v := m.View(); !contains(v, "1 warning") {
+		t.Fatalf("root status row missing the warning count:\n%s", v)
+	}
+	// inside the field menu the unknown key is listed as before
+	press(m, "enter")
+	if v := m.View(); !contains(v, "(not in schema)") {
+		t.Fatalf("unknown key row missing inside the mapping:\n%s", v)
+	}
+}
+
+func TestAliasErrorReachesParentRow(t *testing.T) {
+	// the validator rejects the referenced content: the field row shows the
+	// error icon (errors outrank the unknown-key warning)
+	m := aliasIssueModel(t, func(n *jsondoc.Node) []string {
+		if _, ok := n.Get([]any{"field", "a"}); ok {
+			return []string{"at '$.field.a': got integer, want string"}
+		}
+		return nil
+	})
+	pointFieldAtReference(t, m)
+	if !m.hasErr([]any{"field"}) {
+		t.Fatalf("errPaths = %v, want the field subtree marked", m.errPaths)
+	}
+	var fieldRow row
+	for _, r := range menuRows(m) {
+		if r.fn != nil && r.fn.Key == "field" {
+			fieldRow = r
+		}
+	}
+	if line := m.rowLine(fieldRow, false, 20); !contains(line, icons.Err) {
+		t.Fatalf("field row must carry the error icon: %q", line)
+	}
+	if contains(m.rowLine(fieldRow, false, 20), icons.Warn) {
+		t.Fatalf("error must outrank the warning icon: %q", m.rowLine(fieldRow, false, 20))
+	}
+}
+
+func TestAliasExpandUndoable(t *testing.T) {
+	m, doc, _ := aliasTestModel(t, "base: &x\n  p: 1\ncopy: *x\n")
+	drillCopy(t, m)
+
+	// < Expand > is one edit: it is undoable and marks the document dirty
+	// even though the copy's content equals the anchored original.
+	press(m, "enter")
+	if cp, _ := doc.Get([]any{"copy"}); cp.Anchor != "" {
+		t.Fatal("expand must detach the copy")
+	}
+	if len(m.undoStack) != 1 {
+		t.Fatalf("expand must push one undo step, got %d", len(m.undoStack))
+	}
+	if !m.dirty() {
+		t.Fatal("expand must mark the document dirty")
+	}
+	press(m, "u")
+	if _, ok := m.aliasAt([]any{"copy"}); !ok {
+		t.Fatalf("undo must restore the reference, copy anchor = %q", mustGetNode(t, doc, "copy").Anchor)
+	}
+	if m.dirty() {
+		t.Fatal("undo must clear the dirty state again")
+	}
+	// the < Expand > row is back
+	found := false
+	for _, r := range menuRows(m) {
+		if r.kind == rowExpand {
+			found = true
+		}
+	}
+	if !found {
+		t.Fatalf("undo must restore the Expand row:\n%s", m.View())
+	}
+}
+
+func TestAnchorEditUndoableAndDirty(t *testing.T) {
+	m, doc, _ := aliasTestModel(t, "base: &x\n  p: 1\ncopy: *x\n")
+	// rename the anchor through & on the Base row (row 0)
+	press(m, "&")
+	if m.anc == nil {
+		t.Fatal("& must open the anchor input")
+	}
+	m.anc.ti.SetValue("renamed")
+	press(m, "enter")
+	if n, _ := doc.Get([]any{"base"}); n.Anchor != "renamed" {
+		t.Fatalf("anchor = %q", n.Anchor)
+	}
+	if len(m.undoStack) == 0 || !m.dirty() {
+		t.Fatalf("anchor rename must be undoable and dirty: undo=%d dirty=%v",
+			len(m.undoStack), m.dirty())
+	}
+	press(m, "u")
+	if n, _ := doc.Get([]any{"base"}); n.Anchor != "x" {
+		t.Fatalf("undo must restore the anchor name, got %q", n.Anchor)
+	}
+	if m.dirty() {
+		t.Fatal("undo must clear the dirty state")
+	}
+	// the renamed occurrence count feeds the view again (reference badge)
+	if v := m.View(); !contains(v, "*x") {
+		t.Fatalf("reference rendering lost after undo:\n%s", v)
+	}
+}
+
+func mustGetNode(t *testing.T, doc *jsondoc.Node, path ...any) *jsondoc.Node {
+	t.Helper()
+	n, ok := doc.Get(path)
+	if !ok {
+		t.Fatalf("missing %v", path)
+	}
+	return n
+}
+
+// completionModel builds a flat form with string, integer, object and enum
+// fields, plus target fields of each kind to open the reference input on.
+func completionModel(t *testing.T, src string) *listModel {
+	t.Helper()
+	doc, _, err := yamldoc.Parse([]byte(src))
+	if err != nil {
+		t.Fatal(err)
+	}
+	str := func(k, title string) *smodel.FormNode {
+		return &smodel.FormNode{Key: k, Title: title, Kind: smodel.KScalar, JSONType: "string"}
+	}
+	num := func(k, title string) *smodel.FormNode {
+		return &smodel.FormNode{Key: k, Title: title, Kind: smodel.KScalar, JSONType: "integer"}
+	}
+	obj := func(k, title string) *smodel.FormNode {
+		return &smodel.FormNode{Key: k, Title: title, Kind: smodel.KObject,
+			Children: []*smodel.FormNode{str("k", "K")}}
+	}
+	enum := func(k, title string) *smodel.FormNode {
+		return &smodel.FormNode{Key: k, Title: title, Kind: smodel.KEnum, Enum: tenum("a", "b")}
+	}
+	model := &smodel.FormNode{Key: "$", Title: "Root", Kind: smodel.KObject,
+		Children: []*smodel.FormNode{
+			str("sname", "Sname"), num("snum", "Snum"), obj("sobj", "Sobj"), enum("senum", "Senum"),
+			str("target", "Target"), num("intTarget", "Int target"),
+			obj("objTarget", "Obj target"), enum("enumTarget", "Enum target"),
+		}}
+	m := newListModel(model, doc, Options{})
+	m.Update(tea.WindowSizeMsg{Width: 120, Height: 40})
+	return m
+}
+
+func openReferenceOn(t *testing.T, m *listModel, key string) {
+	t.Helper()
+	if m.anc != nil { // close a previous input: keys would type into it
+		press(m, "esc")
+	}
+	for i, r := range menuRows(m) {
+		if r.fn != nil && r.fn.Key == key {
+			m.top().cursor = i
+			press(m, "*")
+			if m.anc == nil {
+				t.Fatalf("* did not open on %q", key)
+			}
+			return
+		}
+	}
+	t.Fatalf("row %q not found", key)
+}
+
+func TestReferenceCompletionFiltersByType(t *testing.T) {
+	m := completionModel(t, `sname: &n1 hello
+snum: &n2 42
+sobj: &n3
+  k: v
+senum: &n4 a
+`)
+	cases := []struct {
+		field string
+		want  string
+	}{
+		{"target", "n1,n4"},  // strings (the enum value is a string too)
+		{"intTarget", "n2"},  // numbers only
+		{"objTarget", "n3"},  // mappings only
+		{"enumTarget", "n4"}, // enum membership
+	}
+	for _, tc := range cases {
+		openReferenceOn(t, m, tc.field)
+		got := strings.Join(m.anc.cands, ",")
+		if got != tc.want {
+			t.Errorf("%s candidates = %q, want %q", tc.field, got, tc.want)
+		}
+	}
+	// a schema-less key has no type to check: every anchor is offered
+	m2 := completionModel(t, "sname: &n1 hello\nsnum: &n2 42\nextra: x\n")
+	for i, r := range menuRows(m2) {
+		if r.kind == rowUnknown && r.label == "extra" {
+			m2.top().cursor = i
+		}
+	}
+	press(m2, "*")
+	if got := strings.Join(m2.anc.cands, ","); got != "n1,n2" {
+		t.Fatalf("schema-less candidates = %q", got)
+	}
+}
+
+func TestReferenceCompletionFollowsInput(t *testing.T) {
+	m := completionModel(t, `sname: &alpha one
+snum: &beta 2
+sobj: &gamma
+  k: v
+`)
+	openReferenceOn(t, m, "target")
+	if got := strings.Join(m.anc.cands, ","); got != "alpha" {
+		t.Fatalf("string field candidates = %q", got)
+	}
+
+	// another field where all three anchors are type-compatible (raw-ish
+	// enum accepts only strings, so use the schema-less key instead)
+	openReferenceOn(t, m, "senum") // enum: none of the anchors match "a"/"b"
+	if len(m.anc.cands) != 0 {
+		t.Fatalf("enum candidates = %v, want none", m.anc.cands)
+	}
+	m.anc.ti.SetValue("al")
+	if got := m.anchorFiltered(); len(got) != 0 {
+		t.Fatalf("filtered enum candidates = %v", got)
+	}
+	press(m, "tab") // nothing to complete: the input is untouched
+	if got := m.anc.ti.Value(); got != "al" {
+		t.Fatalf("tab without candidates changed the input: %q", got)
+	}
+	press(m, "esc")
+
+	// type-compatible anchors are filtered by what the user typed
+	m2 := completionModel(t, `sname: &alpha one
+snum: &beta 2
+sobj: &gamma
+  k: v
+extra: x
+`)
+	for i, r := range menuRows(m2) {
+		if r.kind == rowUnknown && r.label == "extra" {
+			m2.top().cursor = i
+		}
+	}
+	press(m2, "*")
+	if got := strings.Join(m2.anc.cands, ","); got != "alpha,beta,gamma" {
+		t.Fatalf("schema-less candidates = %q", got)
+	}
+	m2.anc.ti.SetValue("be")
+	if got := strings.Join(m2.anchorFiltered(), ","); got != "beta" {
+		t.Fatalf("filtered candidates = %q", got)
+	}
+	if hint := m2.anchorSugView(); !strings.Contains(hint, "beta") || strings.Contains(hint, "alpha") {
+		t.Fatalf("hint must follow the typed prefix: %q", hint)
+	}
+	press(m2, "tab")
+	if got := m2.anc.ti.Value(); got != "beta" {
+		t.Fatalf("tab must complete the filtered candidate, got %q", got)
+	}
+	// typing on re-filters from the full list
+	m2.anc.ti.SetValue("g")
+	if got := strings.Join(m2.anchorFiltered(), ","); got != "gamma" {
+		t.Fatalf("re-filtered candidates = %q", got)
+	}
+	// case-insensitive prefix matching, exact case inserted
+	m2.anc.ti.SetValue("AL")
+	press(m2, "tab")
+	if got := m2.anc.ti.Value(); got != "alpha" {
+		t.Fatalf("case-insensitive completion = %q", got)
+	}
 }

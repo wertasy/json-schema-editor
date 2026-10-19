@@ -249,17 +249,21 @@ func walk(n *yaml.Node, path []any, meta *Meta) (*jsondoc.Node, error) {
 			if k.Kind == yaml.AliasNode && k.Alias != nil {
 				k = k.Alias
 			}
+			var val *jsondoc.Node
+			var err error
 			switch {
 			case k.ShortTag() == "!!merge":
-				return nil, errors.New("YAML merge keys are not supported")
+				val, err = mergeRefs(v, meta, out)
 			case k.Kind != yaml.ScalarNode || k.ShortTag() != "!!str":
 				return nil, fmt.Errorf("non-string mapping key at %s: only string keys are supported", jsondoc.PathString(path))
+			default:
+				mpath := appendPath(path, k.Value)
+				val, err = walk(v, mpath, meta)
 			}
-			mpath := appendPath(path, k.Value)
-			val, err := walk(v, mpath, meta)
 			if err != nil {
 				return nil, err
 			}
+			mpath := appendPath(path, k.Value)
 			cs := commentSet{
 				KeyHead: k.HeadComment,
 				KeyLine: k.LineComment,
@@ -306,6 +310,41 @@ func walk(n *yaml.Node, path []any, meta *Meta) (*jsondoc.Node, error) {
 		return out, nil
 	}
 	return nil, fmt.Errorf("unsupported YAML node kind %d", n.Kind)
+}
+
+// mergeRefs resolves the value of a "<<" merge key into the anchored mapping
+// nodes it merges: one alias ("<<: *a") or a sequence of aliases
+// ("<<: [*a, *b]"), kept in sequence order. self is the mapping the merge
+// belongs to; merging it into itself is refused.
+func mergeRefs(n *yaml.Node, meta *Meta, self *jsondoc.Node) (*jsondoc.Node, error) {
+	var aliases []*yaml.Node
+	switch n.Kind {
+	case yaml.AliasNode:
+		aliases = []*yaml.Node{n}
+	case yaml.SequenceNode:
+		aliases = n.Content
+	default:
+		return nil, errors.New("YAML merge keys: the value must be an alias or a sequence of aliases")
+	}
+	var refs []*jsondoc.Node
+	for _, a := range aliases {
+		if a.Kind != yaml.AliasNode {
+			return nil, errors.New("YAML merge keys: the value must be an alias or a sequence of aliases")
+		}
+		meta.Aliases++
+		j, ok := meta.built[a.Alias]
+		if !ok {
+			return nil, fmt.Errorf("YAML merge key references unknown anchor &%s", a.Value)
+		}
+		if j == self {
+			return nil, fmt.Errorf("YAML merge key &%s would merge the mapping into itself", a.Value)
+		}
+		if j.Object == nil {
+			return nil, fmt.Errorf("YAML merge key requires a mapping anchor: &%s", a.Value)
+		}
+		refs = append(refs, j)
+	}
+	return &jsondoc.Node{Merge: refs}, nil
 }
 
 // anchorNode records n's YAML anchor on the freshly built jsondoc node: the
@@ -383,16 +422,51 @@ func normalizeNum(tag, raw string) (string, error) {
 // Write emits the document as YAML with two-space indentation, restoring the
 // comments recorded in meta. Anchors are written at the first occurrence of
 // the anchored node and later occurrences become alias references
-// ("*name"); nodes without anchor identity emit plain content. meta may be
-// nil, which also disables anchor/alias handling (plain value export).
+// ("*name"); nodes without anchor identity emit plain content. Merge-key
+// members ("<<") are written back as an alias or a sequence of aliases. meta
+// may be nil, which also disables anchor/alias handling (plain value export).
 func Write(w io.Writer, doc *jsondoc.Node, meta *Meta) error {
 	root := build(doc, nil, meta, map[string]bool{})
+	if err := checkAliases(root); err != nil {
+		return err
+	}
 	enc := yaml.NewEncoder(w)
 	enc.SetIndent(2)
 	if err := enc.Encode(&yaml.Node{Kind: yaml.DocumentNode, Content: []*yaml.Node{root}}); err != nil {
 		return err
 	}
 	return enc.Close()
+}
+
+// checkAliases verifies every alias in the built tree follows its anchor's
+// definition. Direct alias occurrences cannot dangle — build tags the first
+// occurrence of an anchored node with the anchor — but a merge key's alias
+// can: its anchor may have been deleted from the document, or moved behind
+// the merge by an array reorder. Refusing to write keeps the file loadable.
+func checkAliases(n *yaml.Node) error {
+	seen := map[string]bool{}
+	var walk func(n *yaml.Node) error
+	walk = func(n *yaml.Node) error {
+		if n == nil {
+			return nil
+		}
+		if n.Kind == yaml.AliasNode {
+			if !seen[n.Value] {
+				return fmt.Errorf("YAML alias *%s is used before its anchor is defined (a merge key references a deleted or moved anchor)", n.Value)
+			}
+			return nil
+		}
+		if n.Anchor != "" {
+			seen[n.Anchor] = true
+		}
+		for _, c := range n.Content {
+			if err := walk(c); err != nil {
+				return err
+			}
+		}
+		return nil
+	}
+	return walk(n)
 }
 
 // build converts one jsondoc node to a YAML node. Value-node comments come
@@ -424,9 +498,19 @@ func build(n *jsondoc.Node, path []any, meta *Meta, emitted map[string]bool) *ya
 		case n.Object != nil:
 			y.Kind, y.Tag = yaml.MappingNode, "!!map"
 			members := *n.Object
+			if meta == nil {
+				// plain value export: merge keys resolve into their members
+				// (no anchor identity is emitted, so aliases must not be)
+				members = n.ResolvedMembers()
+			}
 			y.Content = make([]*yaml.Node, 0, len(members)*2)
 			for _, m := range members {
 				mpath := appendPath(path, m.Key)
+				if m.Val != nil && m.Val.Merge != nil {
+					mk, mv := mergeYAML(m, mpath, meta)
+					y.Content = append(y.Content, mk, mv)
+					continue
+				}
 				k := &yaml.Node{Kind: yaml.ScalarNode, Tag: "!!str", Value: m.Key}
 				if meta != nil {
 					if cs, ok := meta.ByPath[pathKey(mpath)]; ok {
@@ -463,4 +547,29 @@ func build(n *jsondoc.Node, path []any, meta *Meta, emitted map[string]bool) *ya
 		}
 	}
 	return y
+}
+
+// mergeYAML renders one merge-key member as the "<<" key plus its alias
+// value: a single reference ("<<: *a") or a sequence of them
+// ("<<: [*a, *b]"). The key keeps the comments captured at parse time.
+func mergeYAML(m jsondoc.Member, mpath []any, meta *Meta) (*yaml.Node, *yaml.Node) {
+	// no explicit tag: the plain "<<" scalar resolves back to !!merge
+	k := &yaml.Node{Kind: yaml.ScalarNode, Value: m.Key}
+	aliases := make([]*yaml.Node, 0, len(m.Val.Merge))
+	for _, ref := range m.Val.Merge {
+		aliases = append(aliases, &yaml.Node{Kind: yaml.AliasNode, Value: ref.Anchor})
+	}
+	var val *yaml.Node
+	if len(aliases) == 1 {
+		val = aliases[0]
+	} else {
+		val = &yaml.Node{Kind: yaml.SequenceNode, Tag: "!!seq", Content: aliases}
+	}
+	if meta != nil {
+		if cs, ok := meta.ByPath[pathKey(mpath)]; ok {
+			k.HeadComment, k.LineComment, k.FootComment = cs.KeyHead, cs.KeyLine, cs.KeyFoot
+			val.HeadComment, val.LineComment, val.FootComment = cs.Head, cs.Line, cs.Foot
+		}
+	}
+	return k, val
 }

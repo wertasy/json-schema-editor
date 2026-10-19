@@ -49,13 +49,19 @@ func (m *listModel) keyList(msg tea.KeyMsg) tea.Cmd {
 	case "z":
 		m.toggleEmptyKeys()
 	case "e":
-		if path, ok := m.expandTarget(r); ok {
+		return m.editValueExternalRow(r)
+	case "E":
+		if r.merged != "" {
+			m.expandMerged(r)
+		} else if path, ok := m.expandTarget(r); ok {
 			m.expandAlias(path)
 		}
 	case "&":
 		m.openAnchor(r, anchorSet)
 	case "*":
 		m.openAnchor(r, refSet)
+	case "<":
+		m.openMerge()
 	case "enter", "right", "l":
 		if (msg.String() == "right" || msg.String() == "l") && r.kind == rowField && r.fn.Kind == smodel.KEnum {
 			m.cycleEnum(r, 1)
@@ -92,14 +98,12 @@ func (m *listModel) keyList(msg tea.KeyMsg) tea.Cmd {
 		m.deletePair(r)
 	case "a":
 		if st.kind == menuItems {
-			m.insertItem(r, false)
-			return nil
+			return m.insertItem(r, false)
 		}
 		m.addKey(r, false)
 	case "A":
 		if st.kind == menuItems {
-			m.insertItem(r, true)
-			return nil
+			return m.insertItem(r, true)
 		}
 		m.addKey(r, true)
 	case "?":
@@ -181,11 +185,11 @@ func sameMenuRow(a, b row) bool {
 func (m *listModel) activate(r row) tea.Cmd {
 	switch r.kind {
 	case rowField:
-		m.openField(r.fn, r.path, false)
+		return m.openField(r.fn, r.path, false)
 	case rowDrill:
-		m.pushChildMenu(r.fn, r.path)
+		return m.pushChildMenu(r.fn, r.path)
 	case rowAdd:
-		m.addItem()
+		return m.addItem()
 	case rowRemove:
 		path := clonePath(r.path)
 		m.confirm = &confirmState{
@@ -276,11 +280,12 @@ func (m *listModel) back() tea.Cmd {
 // push drills into fn's menu. A classic oneOf picker opens on the variant
 // matching the current value (the ● row) instead of blindly on the first
 // row; unset values keep the first row.
-func (m *listModel) push(fn *smodel.FormNode, path []any) {
+func (m *listModel) push(fn *smodel.FormNode, path []any) tea.Cmd {
 	m.navForward() // the menu drilled out of becomes a ctrl+o back step
 	st := &menuState{kind: menuKindFor(fn), node: fn, path: path}
 	seedVariantCursor(st, m.doc)
 	m.stack = append(m.stack, st)
+	return nil
 }
 
 // pushChildMenu drills into a child node: all-object oneOfs open the
@@ -288,21 +293,20 @@ func (m *listModel) push(fn *smodel.FormNode, path []any) {
 // A classic oneOf with an existing value skips the variant picker and
 // edits the current variant directly (ctrl+t offers the type switch); no
 // value keeps the pick-a-type-first flow.
-func (m *listModel) pushChildMenu(fn *smodel.FormNode, path []any) {
+func (m *listModel) pushChildMenu(fn *smodel.FormNode, path []any) tea.Cmd {
 	if fn.Kind == smodel.KOneOf && dynamicVariants(fn) != nil {
 		m.navForward() // bypasses push; record the drill like every other
 		m.stack = append(m.stack, m.dynamicMenu(fn, path))
-		return
+		return nil
 	}
 	if fn.Kind == smodel.KOneOf {
 		if v, ok := m.doc.Get(path); ok && v != nil && !v.Null {
 			if idx := currentVariant(fn, v); idx >= 0 {
-				m.enterVariantEditor(fn.Variants[idx], path, fn)
-				return
+				return m.enterVariantEditor(fn.Variants[idx], path, fn)
 			}
 		}
 	}
-	m.push(fn, path)
+	return m.push(fn, path)
 }
 
 // wrapCursor advances cur by delta over n items, wrapping at both ends (a
@@ -328,11 +332,16 @@ func (m *listModel) jumpKeys(msg tea.KeyMsg, cursor *int, n int) bool {
 	key := msg.String()
 	if len(m.cmdBuf) > 0 { // a g-family combo is pending
 		m.cmdBuf = nil
-		if key == "g" {
+		switch key {
+		case "g":
 			if m.listMode() { // the menu cursor moved; overlay lists stay put
 				m.navForward()
 			}
 			*cursor = 0
+			return true
+		case "esc":
+			// esc cancels the pending combo and nothing else: the key is
+			// swallowed instead of back/close/quit
 			return true
 		}
 		return false // unrelated key: runs normally once the buffer clears
@@ -421,6 +430,18 @@ func (m *listModel) playMacro() tea.Cmd {
 
 // --- field editing -------------------------------------------------------
 
+// editValueExternalRow opens $EDITOR on the value under the cursor: field,
+// schema-less row, or a container's whole value. Action rows carry no
+// document value.
+func (m *listModel) editValueExternalRow(r row) tea.Cmd {
+	switch r.kind {
+	case rowField, rowUnknown, rowDrill:
+		return m.editValueExternal(r.path, -1)
+	}
+	m.notice = "no value to edit"
+	return nil
+}
+
 // activateUnknown edits the value of a schema-less key: scalars edit in
 // place using the value's own JSON type (string/number input, boolean
 // toggle), while a missing/null value or a container stays in the external
@@ -434,9 +455,9 @@ func (m *listModel) activateUnknown(path []any) tea.Cmd {
 	case cur.Bool != nil:
 		m.toggleUnknownBool(path)
 	case cur.Num != nil:
-		m.openUnknownScalar(path, "number")
+		return m.openUnknownScalar(path, "number")
 	case cur.Str != nil:
-		m.openUnknownScalar(path, "string")
+		return m.openUnknownScalar(path, "string")
 	default:
 		return m.editValueExternal(path, -1)
 	}
@@ -447,9 +468,9 @@ func (m *listModel) activateUnknown(path []any) tea.Cmd {
 // synthetic form node borrows the key for value completion and carries only
 // the current JSON type, so validation matches the value being edited
 // (number vs. string) rather than an inferred schema.
-func (m *listModel) openUnknownScalar(path []any, jsonType string) {
+func (m *listModel) openUnknownScalar(path []any, jsonType string) tea.Cmd {
 	key, _ := path[len(path)-1].(string)
-	m.openField(&smodel.FormNode{Key: key, Title: key, Kind: smodel.KScalar,
+	return m.openField(&smodel.FormNode{Key: key, Title: key, Kind: smodel.KScalar,
 		JSONType: jsonType}, path, false)
 }
 
@@ -464,10 +485,18 @@ func (m *listModel) unknownBool(path []any) bool {
 }
 
 // openField starts the appropriate editor for a field row (isNew marks the
-// append-a-new-array-item flow where cancelling writes nothing).
-func (m *listModel) openField(fn *smodel.FormNode, path []any, isNew bool) {
+// append-a-new-array-item flow where cancelling writes nothing). It returns
+// the editor command: the $EDITOR escape hatch for multiline strings runs
+// via tea.ExecProcess and must reach bubbletea.
+func (m *listModel) openField(fn *smodel.FormNode, path []any, isNew bool) tea.Cmd {
 	switch fn.Kind {
 	case smodel.KScalar:
+		if cur, _ := m.doc.Get(path); cur != nil && cur.Str != nil &&
+			strings.ContainsAny(*cur.Str, "\r\n") {
+			// multiline text cannot live in the one-line input — edit the
+			// raw value in $EDITOR instead (JSON escape or YAML block)
+			return m.editValueExternal(path, -1)
+		}
 		ti := textinput.New()
 		ti.Prompt = ""
 		ti.CharLimit = 0
@@ -490,6 +519,7 @@ func (m *listModel) openField(fn *smodel.FormNode, path []any, isNew bool) {
 	default: // KRaw / item-less arrays
 		m.openRawAt(fn, path)
 	}
+	return nil
 }
 
 func (m *listModel) openRawAt(fn *smodel.FormNode, path []any) {
@@ -566,14 +596,14 @@ func enumIndex(fn *smodel.FormNode, v *jsondoc.Node) int {
 // nested-array items drill into a fresh item menu, scalar and enum items
 // open their editors aimed at the append position, booleans get their
 // default appended.
-func (m *listModel) addItem() {
-	m.insertItemAt(docArrayLen(m.doc, m.top().path), false)
+func (m *listModel) addItem() tea.Cmd {
+	return m.insertItemAt(docArrayLen(m.doc, m.top().path), false)
 }
 
 // insertItem inserts a fresh item before (after=false) or after
 // (after=true) the item under the cursor; a cursor that is not on an item
 // row clamps to the list position (top row: first, bottom: append).
-func (m *listModel) insertItem(r row, after bool) {
+func (m *listModel) insertItem(r row, after bool) tea.Cmd {
 	idx := 0
 	if r.kind == rowField || r.kind == rowDrill {
 		idx = r.idx
@@ -583,7 +613,7 @@ func (m *listModel) insertItem(r row, after bool) {
 	} else if after {
 		idx = docArrayLen(m.doc, m.top().path)
 	}
-	m.insertItemAt(idx, true)
+	return m.insertItemAt(idx, true)
 }
 
 // insertItemAt splices a fresh item at idx and opens its editor or drill —
@@ -593,11 +623,11 @@ func (m *listModel) insertItem(r row, after bool) {
 // placeholder lands immediately — null for variant pickers and scalar
 // editors, {} / [] for drill targets; a cancelled scalar edit leaves the
 // placeholder, deletable with d).
-func (m *listModel) insertItemAt(idx int, splice bool) {
+func (m *listModel) insertItemAt(idx int, splice bool) tea.Cmd {
 	st := m.top()
 	items := st.node.Items
 	if items == nil {
-		return
+		return nil
 	}
 	ipath := pathIdx(st.path, idx)
 	ins := func(v *jsondoc.Node) {
@@ -611,15 +641,15 @@ func (m *listModel) insertItemAt(idx int, splice bool) {
 		if dynamicVariants(items) != nil {
 			m.navForward() // bypasses push; record the drill like every other
 			m.stack = append(m.stack, m.dynamicMenu(items, ipath))
-			return
+			return nil
 		}
-		m.push(items, ipath)
+		return m.push(items, ipath)
 	case smodel.KObject:
 		ins(&jsondoc.Node{Object: &[]jsondoc.Member{}})
-		m.push(items, ipath)
+		return m.push(items, ipath)
 	case smodel.KArray:
 		ins(&jsondoc.Node{Array: &[]*jsondoc.Node{}})
-		m.push(items, ipath)
+		return m.push(items, ipath)
 	case smodel.KBoolean:
 		b := false
 		if items.Default != nil && items.Default.Bool != nil {
@@ -630,14 +660,16 @@ func (m *listModel) insertItemAt(idx int, splice bool) {
 		} else {
 			m.doc.Set(ipath, &jsondoc.Node{Bool: &b})
 		}
+		return nil
 	default: // scalar / enum / raw item
 		ins(&jsondoc.Node{Null: true})
-		m.openField(items, ipath, true)
+		cmd := m.openField(items, ipath, true)
 		if splice {
 			// the placeholder row carries the inline editor: keep the
 			// cursor there (rows[0] is the < Add item > row)
 			st.cursor = idx + 1
 		}
+		return cmd
 	}
 }
 
@@ -659,8 +691,24 @@ func (m *listModel) deletePair(r row) {
 		m.deleteItem(r) // array item rows (any menu they appear in)
 		return
 	}
-	if r.fn != nil && r.fn.Required {
+	// a required key stays satisfied while a merge key provides it: removing
+	// the mapping's own (expanded) copy just falls back to the merged value.
+	// A merged row itself deletes the anchor mapping's field, so required
+	// still refuses it — the merge would lose the key everywhere.
+	key, _ := r.path[len(r.path)-1].(string)
+	required := r.fn != nil && r.fn.Required
+	if required && r.merged == "" && m.mergeProvides(st.path, key) {
+		required = false
+	}
+	if required {
 		m.notice = r.fn.Title + " is required"
+		return
+	}
+	// deleting the carrier of an anchor a merge key references would leave
+	// the merge dangling; the write-time alias check refuses such saves
+	if n, ok := m.doc.Get(r.path); ok && n != nil && n.Anchor != "" &&
+		m.countAnchorUses(n) <= 1 && m.mergeRefUses(n) > 0 {
+		m.notice = "delete the << merge key referencing &" + n.Anchor + " first"
 		return
 	}
 	m.doc.Remove(r.path)
@@ -791,13 +839,13 @@ func (m *listModel) keyAdd(msg tea.KeyMsg) tea.Cmd {
 					m.stack = append(m.stack, m.dynamicMenu(items, path))
 					return nil
 				}
-				m.push(items, path)
+				return m.push(items, path)
 			case smodel.KObject:
 				m.doc.Set(path, &jsondoc.Node{Object: &[]jsondoc.Member{}})
-				m.push(items, path)
+				return m.push(items, path)
 			case smodel.KArray:
 				m.doc.Set(path, &jsondoc.Node{Array: &[]*jsondoc.Node{}})
-				m.push(items, path)
+				return m.push(items, path)
 			case smodel.KBoolean:
 				b := false
 				if items.Default != nil && items.Default.Bool != nil {
@@ -806,7 +854,7 @@ func (m *listModel) keyAdd(msg tea.KeyMsg) tea.Cmd {
 				m.doc.Set(path, &jsondoc.Node{Bool: &b})
 			default:
 				m.doc.Set(path, &jsondoc.Node{Null: true})
-				m.openField(items, path, true)
+				return m.openField(items, path, true)
 			}
 			return nil
 		}
@@ -858,8 +906,7 @@ func (m *listModel) enterVariant(r row) tea.Cmd {
 	v, hasV := m.doc.Get(r.path)
 	cur := currentVariant(st.node, v)
 	if cur >= 0 && st.node.Variants[cur] == r.variant {
-		m.enterVariantEditor(r.variant, r.path, st.node)
-		return nil
+		return m.enterVariantEditor(r.variant, r.path, st.node)
 	}
 	if hasV && v != nil && !v.Null {
 		variant, path, oneOf := r.variant, r.path, st.node
@@ -871,17 +918,15 @@ func (m *listModel) enterVariant(r row) tea.Cmd {
 				} else {
 					m.doc.Remove(path)
 				}
-				m.enterVariantEditor(variant, path, oneOf)
-				return nil
+				return m.enterVariantEditor(variant, path, oneOf)
 			},
 		}
 		return nil
 	}
-	m.enterVariantEditor(r.variant, r.path, st.node)
-	return nil
+	return m.enterVariantEditor(r.variant, r.path, st.node)
 }
 
-func (m *listModel) enterVariantEditor(variant *smodel.FormNode, path []any, oneOf *smodel.FormNode) {
+func (m *listModel) enterVariantEditor(variant *smodel.FormNode, path []any, oneOf *smodel.FormNode) tea.Cmd {
 	switch variant.Kind {
 	case smodel.KObject, smodel.KMap, smodel.KArray:
 		// the variant is chosen: the editor replaces the picker (esc lands
@@ -889,24 +934,28 @@ func (m *listModel) enterVariantEditor(variant *smodel.FormNode, path []any, one
 		if m.top() != nil && m.top().kind == menuOneOf && len(m.stack) > 1 {
 			m.stack = m.stack[:len(m.stack)-1]
 		}
-		m.push(variant, path)
+		cmd := m.push(variant, path)
 		m.top().oneOf = oneOf // ctrl+t offers the type switch
+		return cmd
 	case smodel.KBoolean:
 		m.toggleBool(variant, path)
+		return nil
 	case smodel.KEnum:
 		cur, _ := m.doc.Get(path)
 		m.sel = &selState{fn: variant, path: path, opts: variant.Enum,
 			cursor: enumIndex(variant, cur), oneOf: oneOf}
+		return nil
 	default:
 		// scalar / raw: leave the picker and edit at the field row of the
 		// parent menu, like any other value
 		if m.top() != nil && m.top().kind == menuOneOf && len(m.stack) > 1 {
 			m.stack = m.stack[:len(m.stack)-1]
 		}
-		m.openField(variant, path, false)
+		cmd := m.openField(variant, path, false)
 		if m.edit != nil {
 			m.edit.oneOf = oneOf // ctrl+t offers the type switch
 		}
+		return cmd
 	}
 }
 
@@ -960,7 +1009,7 @@ func (m *listModel) write(exit, forced bool) tea.Cmd {
 	}
 	m.saved = true
 	m.withErrors = forced
-	m.baseline = jsondoc.FromAny(m.doc.ToAny()) // markers clear once saved
+	m.baseline = m.doc.Clone() // markers clear once saved; merges stay structural
 	if exit {
 		m.exiting = true
 		return tea.Quit

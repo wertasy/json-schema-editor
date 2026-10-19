@@ -803,6 +803,73 @@ func TestJumpKeys(t *testing.T) {
 	}
 }
 
+func TestEscClearsCommandBuffer(t *testing.T) {
+	m := newListModel(testModel(), testDoc(), Options{})
+	m.Update(tea.WindowSizeMsg{Width: 100, Height: 30})
+
+	// a pending g buffered at the root: esc only cancels it
+	press(m, "g")
+	if len(m.cmdBuf) != 1 {
+		t.Fatalf("lone g must park, got %v", m.cmdBuf)
+	}
+	press(m, "esc")
+	if len(m.cmdBuf) != 0 {
+		t.Fatalf("esc must clear the command buffer, got %v", m.cmdBuf)
+	}
+	if m.exiting || m.aborted || m.confirm != nil || len(m.stack) != 1 {
+		t.Fatalf("esc with a pending combo must not quit or navigate: exiting=%v aborted=%v confirm=%v depth=%d",
+			m.exiting, m.aborted, m.confirm != nil, len(m.stack))
+	}
+
+	// q aliases esc outside inputs: same buffer-clearing rule
+	press(m, "g", "q")
+	if len(m.cmdBuf) != 0 || m.exiting || m.aborted {
+		t.Fatalf("q with a pending combo must only clear it: buffer=%v exiting=%v", m.cmdBuf, m.exiting)
+	}
+
+	// without a pending combo esc keeps its normal meaning (root quit)
+	press(m, "esc")
+	if !m.exiting {
+		t.Fatal("esc without a pending combo must still leave the root")
+	}
+}
+
+func TestEscClearsBufferInSubmenuAndOverlay(t *testing.T) {
+	m := newListModel(testModel(), testDoc(), Options{})
+	m.Update(tea.WindowSizeMsg{Width: 100, Height: 30})
+	press(m, "down", "down", "enter") // root → Server
+	if len(m.stack) != 2 {
+		t.Fatalf("stack = %d", len(m.stack))
+	}
+	press(m, "g", "esc")
+	if len(m.cmdBuf) != 0 || len(m.stack) != 2 {
+		t.Fatalf("esc with a pending combo must only clear the buffer: buffer=%v depth=%d",
+			m.cmdBuf, len(m.stack))
+	}
+	press(m, "esc") // now it goes back
+	if len(m.stack) != 1 {
+		t.Fatalf("esc without a pending combo must go back, depth = %d", len(m.stack))
+	}
+
+	// the issues overlay shares the g buffer: esc cancels the combo there
+	m.issues = &issuesState{items: []issue{{msg: "boom", path: []any{"name"}}}}
+	press(m, "g")
+	if len(m.cmdBuf) != 1 {
+		t.Fatalf("g must arm in the issues list, got %v", m.cmdBuf)
+	}
+	press(m, "esc")
+	if m.issues == nil {
+		t.Fatal("esc with a pending combo must not close the issues list")
+	}
+	if len(m.cmdBuf) != 0 {
+		t.Fatalf("buffer must be cleared, got %v", m.cmdBuf)
+	}
+	press(m, "esc")
+	if m.issues != nil {
+		t.Fatal("esc without a pending combo must close the issues list")
+	}
+}
+
 func TestJumpKeysOverlays(t *testing.T) {
 	// issues overlay
 	msgs := []string{

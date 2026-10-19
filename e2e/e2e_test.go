@@ -1761,3 +1761,126 @@ func TestPtyYAMLAnchorRename(t *testing.T) {
 		t.Errorf("the old anchor name must be gone:\n%s", text)
 	}
 }
+
+// TestPtyMergeKeys drives YAML merge keys end to end: the merged rows show
+// their anchor badges, the breadcrumb follows the cursor, E materializes one
+// merged key, and saving writes the merge list back as YAML.
+func TestPtyMergeKeys(t *testing.T) {
+	dir := t.TempDir()
+	schema := filepath.Join(dir, "wf.schema.json")
+	outFile := filepath.Join(dir, "wf.yaml")
+	writeFile(t, schema, `{"type":"object","title":"Workflow","properties":{"jobs":{"type":"object","title":"Jobs","additionalProperties":{"type":"object","title":"Job","properties":{"name":{"type":"string","title":"Name"},"env":{"type":"object","title":"Env","properties":{"env1":{"type":"string","title":"Env1"}}},"outputs":{"type":"object","title":"Outputs","properties":{"version":{"type":"string","title":"Version"}}}}}}}}`)
+	writeFile(t, outFile, `jobs:
+  build_base1: &base1
+    env:
+      env1: val1
+  build_base2: &base2
+    outputs:
+      version: v1
+  build2:
+    <<: [*base1, *base2]
+    name: Build Apple App Store clients
+`)
+
+	cmd := exec.Command(jseBin, "-s", schema, outFile)
+	cmd.Dir = ".."
+	cmd.Env = append(os.Environ(), "TERM=xterm-256color")
+	tty, err := pty.StartWithSize(cmd, &pty.Winsize{Rows: 30, Cols: 120})
+	if err != nil {
+		t.Skipf("no pty available: %v", err)
+	}
+	defer tty.Close()
+
+	// drive: jobs → build2's job menu; cursor onto env; expand it; save
+	go func() {
+		time.Sleep(400 * time.Millisecond)
+		tty.Write([]byte("\r")) // enter jobs
+		time.Sleep(300 * time.Millisecond)
+		tty.Write([]byte("\x1b[B\x1b[B\r")) // ↓ ↓ enter: build2
+		time.Sleep(300 * time.Millisecond)
+		tty.Write([]byte("\x1b[B")) // ↓ onto the merged env row (schema slot)
+		time.Sleep(300 * time.Millisecond)
+		tty.Write([]byte("\x1b[B")) // ↓ onto the merged outputs row
+		time.Sleep(300 * time.Millisecond)
+		tty.Write([]byte("\x1b[A")) // ↑ back onto env
+		time.Sleep(300 * time.Millisecond)
+		tty.Write([]byte("E")) // expand env into build2
+		time.Sleep(300 * time.Millisecond)
+		tty.Write([]byte("\x13")) // ctrl+s
+	}()
+
+	buf := make([]byte, 4096)
+	var all bytes.Buffer
+	saved := false
+	deadline := time.Now().Add(20 * time.Second)
+	for time.Now().Before(deadline) {
+		n, err := tty.Read(buf)
+		if n > 0 {
+			all.Write(buf[:n])
+			if strings.Contains(all.String(), "Saved") {
+				saved = true
+				break
+			}
+		}
+		if err != nil {
+			break
+		}
+	}
+	if !saved {
+		t.Fatalf("session never saved; screen:\n%s", all.String())
+	}
+	frame := all.String()
+	for _, want := range []string{
+		"<<: *base1 *base2",                  // title names the merge list
+		"*base1",                             // env badge
+		"*base2",                             // outputs badge
+		"$.jobs.build2 → $.jobs.build_base1", // breadcrumb on the merged key
+		"$.jobs.build2 → $.jobs.build_base2", // ...and on the other anchor
+		"merged key expanded",                // E notice
+	} {
+		if !strings.Contains(frame, want) {
+			t.Fatalf("screen missing %q:\n%s", want, frame)
+		}
+	}
+	tty.Write([]byte("\x03"))
+	if err := cmd.Wait(); err == nil {
+		t.Fatal("expected abort exit 130")
+	}
+
+	content, err := os.ReadFile(outFile)
+	if err != nil {
+		t.Fatalf("output not written:\n%s", all.String())
+	}
+	text := string(content)
+	for _, want := range []string{"<<:", "*base1", "*base2", "&base1", "&base2"} {
+		if !strings.Contains(text, want) {
+			t.Fatalf("saved YAML missing %q:\n%s", want, text)
+		}
+	}
+	var doc struct {
+		Jobs map[string]struct {
+			Env     map[string]string `yaml:"env"`
+			Outputs map[string]string `yaml:"outputs"`
+			Name    string            `yaml:"name"`
+		} `yaml:"jobs"`
+	}
+	if err := yaml.Unmarshal(content, &doc); err != nil {
+		t.Fatalf("saved YAML does not parse: %v\n%s", err, text)
+	}
+	build2, ok := doc.Jobs["build2"]
+	if !ok || build2.Name != "Build Apple App Store clients" {
+		t.Fatalf("build2 wrong after save: %#v\n%s", doc.Jobs, text)
+	}
+	// merges still resolve through the anchors, and the expanded env is an
+	// independent own member of build2
+	if build2.Env["env1"] != "val1" || build2.Outputs["version"] != "v1" {
+		t.Fatalf("merged values lost: %#v\n%s", build2, text)
+	}
+	base1 := doc.Jobs["build_base1"]
+	if base1.Env["env1"] != "val1" {
+		t.Fatalf("anchor value changed by the expand: %#v\n%s", base1, text)
+	}
+	if !strings.Contains(text, "env:") {
+		t.Fatalf("expanded env must be written as build2's own member:\n%s", text)
+	}
+}

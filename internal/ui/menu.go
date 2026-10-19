@@ -40,16 +40,17 @@ var helpEntries = []helpEntry{
 	{"z", "show/hide fields with no value (null/unset)"},
 	{"gg / G", "jump to first / last row (Home/End too)"},
 	{"ctrl+o / ctrl+i (tab)", "back / forward in the navigation history (submenus, jumps; esc pops count too)"},
-	{"ga / gr", "jump to the row's anchor / its other references (esc returns)"},
+	{"ga / gr", "jump to the row's anchor / its other uses — references and << merges (esc returns)"},
 	{"enter / right / l", "edit field · open submenu"},
 	{"tab / shift+tab", "complete next / previous candidate (ctrl+n / ctrl+p)"},
 	{"left / h", "back one level"},
-	{"esc / q", "cancel / back — q is a full alias outside text inputs;"},
+	{"esc / q", "cancel / back — q aliases esc outside inputs; a pending g combo clears first"},
 	{"", "at the root: quit, asking to save when the doc changed"},
 	{"space", "toggle boolean / enum member"},
 	{"d / delete", "delete the selected pair (required keys refused)"},
 	{"a / A", "add a schema-less key before / after the cursor"},
-	{"e", "expand: materialize the referenced value (cursor row or menu) into a copy"},
+	{"e", "edit the row's value in $EDITOR (multiline strings always open here)"},
+	{"E", "expand: materialize the referenced value (cursor row or menu) into a copy"},
 	{"&", "anchor: set/rename the field's YAML anchor (empty removes; unreferenced only)"},
 	{"*", "reference: point the field at an anchor (tab completes; empty removes)"},
 	{"J / K", "move the item under the cursor down / up"},
@@ -62,6 +63,7 @@ var helpEntries = []helpEntry{
 	{"@ / .", "record / play a macro"},
 	{"?", "open/close this help"},
 	{"ctrl+c", "quit without saving (exit 130)"},
+	{"<", "merge keys: merge anchors (space/comma separated; tab completes; empty clears)"},
 }
 
 const overlayHelp = "enter select · esc cancel"
@@ -231,6 +233,7 @@ type listModel struct {
 	edit          *editState
 	add           *addState // key-name input for a schema-less member (a)
 	anc           *anchorState
+	mrg           *mergeState // "<" merge-keys input for the current mapping
 	sel           *selState
 	text          *textState
 	ext           *externalEdit // pending $EDITOR target for a schema-less value
@@ -303,7 +306,10 @@ func newListModel(model *smodel.FormNode, doc *jsondoc.Node, opts Options) *list
 		startup: opts.StartupNotice,
 	}
 	if doc != nil {
-		m.baseline = jsondoc.FromAny(doc.ToAny())
+		// Clone keeps merge-key members structurally (FromAny would flatten
+		// them away) while sharing nothing with the live document, so edits
+		// through alias references keep counting as changes.
+		m.baseline = doc.Clone()
 	}
 	m.setIssues(m.liveIssues(opts.LoadErrors))
 	return m
@@ -333,15 +339,31 @@ func (m *listModel) setIssues(items []issue) {
 }
 
 // refreshIssues re-validates the document after a write so fixed problems
-// leave the list, the counts and the row marks. Gated on a validator being
-// available and problems being known — a clean document is not re-validated
-// on every keypress (save-time validation remains the backstop; without a
-// validator the load-time list stays as loaded).
+// leave the list, the counts and the row marks — and, just as important, new
+// problems appear immediately: a document that loaded clean is re-validated
+// on its first change too (an edit can introduce an unknown key or a value
+// the schema rejects, e.g. by pointing a field at an alias whose content
+// does not fit). Callers invoke it only when the document changed.
+// Without a validator the load-time list stays as loaded.
 func (m *listModel) refreshIssues() {
-	if m.opts.Validate == nil || len(m.issuesNow) == 0 {
+	if m.opts.Validate == nil {
 		return
 	}
+	// The root menu gains or loses its issue status row with the problem
+	// count; keep the cursor on the row it was on while the list shifts.
+	var root *menuState
+	var before []row
+	if len(m.stack) > 0 {
+		root = m.stack[0]
+		before = menuRowsFor(m, root)
+	}
 	m.setIssues(m.liveIssues(m.opts.Validate(m.doc)))
+	if root == nil {
+		return
+	}
+	if after := menuRowsFor(m, root); len(after) != len(before) {
+		remapStateCursor(root, before, after)
+	}
 }
 
 // liveIssues combines validator messages with the editor's unknown-key
@@ -519,11 +541,14 @@ func (m *listModel) dispatchKey(msg tea.KeyMsg) tea.Cmd {
 	}
 	pre := m.doc.Clone()
 	cmd := m.routeKey(msg)
-	if !nodesEqual(pre, m.doc) {
+	edited := !nodesEqual(pre, m.doc)
+	if edited {
 		m.pushUndo(pre)
 	}
 	m.refreshVariantMenu()
-	m.refreshIssues()
+	if edited {
+		m.refreshIssues()
+	}
 	return cmd
 }
 
@@ -553,6 +578,8 @@ func (m *listModel) routeKey(msg tea.KeyMsg) tea.Cmd {
 		return m.keyAdd(msg)
 	case m.anc != nil:
 		return m.keyAnchor(msg)
+	case m.mrg != nil:
+		return m.keyMerge(msg)
 	}
 	return m.keyList(msg)
 }
@@ -641,8 +668,10 @@ func (m *listModel) View() string {
 // ("$.a.b[0]"). Levels that do not extend the path — oneOf pickers and
 // variant editors — add no segment (the title line names them). A menu that
 // drilled into a reference appends the anchor's location
-// ("$.a.steps → $.jobs.build.steps"). Overlong paths keep their tail, which
-// is the informative end.
+// ("$.a.steps → $.jobs.build.steps"). While the cursor rests on a merged
+// key, the arrow names the anchor the key came from instead — moving off a
+// merged key clears the arrow and the path behind it. Overlong paths keep
+// their tail, which is the informative end.
 func (m *listModel) breadcrumb() string {
 	st := m.top()
 	if st == nil {
@@ -652,6 +681,10 @@ func (m *listModel) breadcrumb() string {
 	if _, ref, ok := m.anchorRole(st.path); ok && ref {
 		n, _ := m.doc.Get(st.path)
 		crumb += " → " + jsondoc.PathString(m.anchorHolderPath(n))
+		return clipLeft(crumb, m.width)
+	}
+	if anchor := m.mergeCrumb(); anchor != nil {
+		crumb += " → " + jsondoc.PathString(anchor)
 	}
 	return clipLeft(crumb, m.width)
 }
@@ -674,7 +707,8 @@ func clipLeft(s string, max int) string {
 func (m *listModel) listView() string {
 	var b strings.Builder
 	st := m.top()
-	title := mTitle.Render(displayTitle(st.node))
+	titleText, summary := m.menuTitle(st)
+	title := mTitle.Render(titleText)
 	// The menu of an anchored value names the anchor on the title line:
 	// "steps: &x" for the carrier, "steps: *x" for a reference, both violet.
 	if name, ref, ok := m.anchorRole(st.path); ok {
@@ -684,6 +718,10 @@ func (m *listModel) listView() string {
 			title += ": " + mAnchor.Render("&"+name)
 		}
 	}
+	// a mapping with merge keys names them on the title: "<<: *a *b"
+	if merges := m.mergeNames(st.path); merges != "" {
+		title += " " + mAnchor.Render(merges)
+	}
 	if m.dirty() {
 		title += " " + mDiff.Render("●")
 	}
@@ -692,6 +730,16 @@ func (m *listModel) listView() string {
 	b.WriteString(clipDisplay(mCrumb.Render(clipRunes(m.breadcrumb(), m.width)), m.width-1))
 	b.WriteByte('\n')
 	header := 2
+	// the "<" merge-keys input edits the mapping itself, so it lives in the
+	// header under the title/breadcrumb, not under a row
+	if m.mrg != nil {
+		lines := m.mergeInputLines()
+		for _, line := range strings.Split(lines, "\n") {
+			b.WriteString(clipDisplay(line, m.width-1))
+			b.WriteByte('\n')
+			header++
+		}
+	}
 
 	if m.search.active {
 		inputs := 1
@@ -744,8 +792,14 @@ func (m *listModel) listView() string {
 	if desc != "" {
 		descLines = wrapText(desc, m.width-1)
 	}
+	// a menu whose schema title is missing is labelled with its key; the
+	// structural signature then moves here, above the hint bar
+	var summaryLines []string
+	if summary != "" {
+		summaryLines = wrapText("variant: "+summary, m.width-1)
+	}
 	status := m.statusLines()
-	h := m.height - header - 1 - len(descLines) - len(status)
+	h := m.height - header - 1 - len(descLines) - len(summaryLines) - len(status)
 	if m.notice != "" {
 		h--
 	}
@@ -762,7 +816,7 @@ func (m *listModel) listView() string {
 	// first, so nothing floats in the middle of a short menu. No trailing
 	// newline after the hint bar, or the renderer would treat it as an extra
 	// line and scroll the title out of view.
-	bottom := len(descLines) + len(status)
+	bottom := len(descLines) + len(summaryLines) + len(status)
 	if m.notice != "" {
 		bottom++
 	}
@@ -773,6 +827,10 @@ func (m *listModel) listView() string {
 	}
 	for _, line := range descLines {
 		b.WriteString(clipDisplay(mDesc.Render(line), m.width-1))
+		b.WriteByte('\n')
+	}
+	for _, line := range summaryLines {
+		b.WriteString(clipDisplay(mDim.Render(line), m.width-1))
 		b.WriteByte('\n')
 	}
 	for _, line := range status {
@@ -1020,7 +1078,7 @@ func (m *listModel) anchorInputLines() string {
 		prompt = "  reference: "
 	}
 	lines := []string{mHelp.Render(prompt) + m.anc.ti.View()}
-	if len(m.anc.cands) > 0 {
+	if m.anc.mode == refSet && len(m.anchorFiltered()) > 0 {
 		lines = append(lines, mHelp.Render("  tab: "+m.anchorSugView()))
 	}
 	if m.anc.err != "" {
@@ -1062,10 +1120,30 @@ func cursorPrefix(on bool) string {
 }
 
 // nodesEqual reports deep JSON equality: objects compare by key set (member
-// order ignored), arrays order-sensitively, scalars by exact text.
+// order ignored), arrays order-sensitively, scalars by exact text. Merge
+// specs compare by their referenced anchors' content, so retargeting,
+// reordering or clearing a merge list counts as a change.
 func nodesEqual(a, b *jsondoc.Node) bool {
 	if a == nil || b == nil {
 		return a == nil && b == nil
+	}
+	// Anchor identity is part of the document: expanding a reference (or
+	// renaming/removing an anchor) leaves the content identical but changes
+	// what the YAML file carries, so it must count as an edit — undoable,
+	// marked dirty, and written on save.
+	if a.Anchor != b.Anchor {
+		return false
+	}
+	if a.Merge != nil || b.Merge != nil {
+		if a.Merge == nil || b.Merge == nil || len(a.Merge) != len(b.Merge) {
+			return false
+		}
+		for i := range a.Merge {
+			if !nodesEqual(a.Merge[i], b.Merge[i]) {
+				return false
+			}
+		}
+		return true
 	}
 	if a.Null || b.Null {
 		return a.Null == b.Null
@@ -1292,7 +1370,7 @@ func (m *listModel) rowLine(r row, cursor bool, titleWidth int) string {
 		// document key the schema does not define: edit as raw JSON or delete
 		left = mWarn.Render(r.label)
 		v, _ := m.doc.Get(r.path)
-		right = m.anchorBadge(r.path) + m.rawValueStyle(v).Render(m.rawValueSummary(r.path))
+		right = mergeBadge(r) + m.anchorBadge(r.path) + m.rawValueStyle(v).Render(m.rawValueSummary(r.path))
 	case rowIssues:
 		left = m.issuesSeverity().Render(r.label)
 	default: // rowField / rowDrill
@@ -1301,7 +1379,7 @@ func (m *listModel) rowLine(r row, cursor bool, titleWidth int) string {
 			title += mStar.Render("*")
 		}
 		left = title
-		right = m.anchorBadge(r.path) + m.valueStyle(r.fn, r.path).Render(summary(m, r.fn, r.path))
+		right = mergeBadge(r) + m.anchorBadge(r.path) + m.valueStyle(r.fn, r.path).Render(summary(m, r.fn, r.path))
 	}
 	var content string
 	switch r.kind {
@@ -1461,6 +1539,23 @@ func isPathPrefix(prefix, path []any) bool {
 		}
 	}
 	return true
+}
+
+// jumpToRow rebuilds the navigation stack down to the menu that contains
+// path and puts the cursor on the row itself — a container field is
+// selected, not entered (ga on a merged key points at the field that
+// defines the value).
+func (m *listModel) jumpToRow(path []any) {
+	if len(path) == 0 {
+		m.jumpToPath(path)
+		return
+	}
+	m.revealHiddenEmpty(path)
+	m.stack = rebuildStack(m.model, m.doc, path[:len(path)-1])
+	rows := menuRows(m)
+	m.clampCursor(rows)
+	m.top().cursor = cursorByPath(rows, path)
+	m.top().offset = 0
 }
 
 // jumpToPath rebuilds the navigation stack down to path and puts the cursor on
@@ -1878,4 +1973,56 @@ func pathEq(a, b []any) bool {
 		}
 	}
 	return true
+}
+
+// menuTitle is the title-line label of the current menu and, when the
+// schema node has no title, the structural signature to show in the bottom
+// metadata block instead. A menu without a schema title is labelled with the
+// document key it edits — a map member, an array item, or the oneOf field a
+// variant editor belongs to — rather than with a variant signature.
+func (m *listModel) menuTitle(st *menuState) (title, summary string) {
+	if st == nil {
+		return "", ""
+	}
+	if st.node != nil && st.node.Title != "" {
+		return st.node.Title, ""
+	}
+	// classic variant editors carry the oneOf field in oneOf, dynamic
+	// all-object menus in variantOf: the field's label names the menu
+	field := st.oneOf
+	if field == nil {
+		field = st.variantOf
+	}
+	switch {
+	case field != nil && field.Title != "":
+		title = field.Title
+	case field != nil && field.Key != "":
+		title = field.Key
+	default:
+		title = docKeyAt(st.path)
+	}
+	if title == "" {
+		return displayTitle(st.node), "" // nothing to name it after
+	}
+	return title, VariantSignature(st.node)
+}
+
+// docKeyAt renders the document position of a menu path as a key label: the
+// map/object key, or "key[i]" for an array item ("" for the root).
+func docKeyAt(path []any) string {
+	if len(path) == 0 {
+		return ""
+	}
+	switch seg := path[len(path)-1].(type) {
+	case string:
+		return seg
+	case int:
+		if len(path) >= 2 {
+			if key, ok := path[len(path)-2].(string); ok {
+				return fmt.Sprintf("%s[%d]", key, seg)
+			}
+		}
+		return fmt.Sprintf("[%d]", seg)
+	}
+	return ""
 }

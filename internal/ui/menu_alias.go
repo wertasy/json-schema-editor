@@ -171,50 +171,41 @@ func (m *listModel) countAnchorUses(n *jsondoc.Node) int {
 	return count
 }
 
-// anchorUsePaths lists every path in document order whose node is n
-// (pointer identity): the carrier first, then each reference.
-func (m *listModel) anchorUsePaths(n *jsondoc.Node) [][]any {
-	var paths [][]any
-	var walk func(cur *jsondoc.Node, path []any)
-	walk = func(cur *jsondoc.Node, path []any) {
-		if cur == nil {
-			return
-		}
-		if cur == n { // shared node: its subtree is visited once per reference
-			paths = append(paths, clonePath(path))
-			return
-		}
-		switch {
-		case cur.Object != nil:
-			for _, mem := range *cur.Object {
-				walk(mem.Val, pathFor(path, mem.Key))
-			}
-		case cur.Array != nil:
-			for i, it := range *cur.Array {
-				walk(it, pathIdx(path, i))
-			}
-		}
-	}
-	walk(m.doc, nil)
-	return paths
-}
-
 // anchorJump parks the current position and jumps to target: esc at the
 // landing depth restores the captured stack (ga/gr return semantics). A
 // fresh jump replaces any parked search/issues return, mirroring how those
 // two jumps replace each other.
-func (m *listModel) anchorJump(target []any) {
+func (m *listModel) anchorJump(target []any) { m.anchorJumpTo(target, false) }
+
+// anchorJumpRow is anchorJump landing on the target row itself: a container
+// field is selected in its parent menu instead of being entered.
+func (m *listModel) anchorJumpRow(target []any) { m.anchorJumpTo(target, true) }
+
+func (m *listModel) anchorJumpTo(target []any, asRow bool) {
 	m.navForward() // the jumped-from menu becomes a ctrl+o back step
 	m.jumpOrigin = append([]*menuState(nil), m.stack...)
 	m.search.parked = false // a fresh jump replaces any parked search
 	m.issuesBack = nil      // ... and any parked issue list
-	m.jumpToPath(target)
+	if asRow {
+		m.jumpToRow(target)
+	} else {
+		m.jumpToPath(target)
+	}
 	m.jumpReturn = len(m.stack)
 	m.notice = "esc returns"
 }
 
 // gotoAnchor performs ga: from a reference row, jump to its anchor carrier.
+// A merged key row carries no anchor identity of its own — its provenance
+// anchor is the target, the mapping the breadcrumb names.
 func (m *listModel) gotoAnchor(r row) {
+	if r.merged != "" {
+		// a merged key has no anchor identity of its own: ga lands on the
+		// field that defines the value inside the anchor's mapping (the
+		// breadcrumb target's field), not on that mapping's first row
+		m.anchorJumpRow(clonePath(r.path))
+		return
+	}
 	name, ref, ok := m.anchorRole(r.path)
 	if !ok {
 		m.notice = "not on an anchor or reference"
@@ -228,20 +219,34 @@ func (m *listModel) gotoAnchor(r row) {
 	m.anchorJump(m.anchorHolderPath(n))
 }
 
-// gotoRefs performs gr: jump to the other references of the anchor the row
-// belongs to (the carrier is excluded — ga reaches it). One target jumps
+// gotoRefs performs gr: jump to the other uses of the anchor the row belongs
+// to — direct alias occurrences and mappings whose merge keys pull it in
+// (the carrier is excluded, ga reaches it; so is the menu gr ran from). A
+// merged key row resolves through its provenance anchor. One target jumps
 // directly; several open the picker; none leaves a notice.
 func (m *listModel) gotoRefs(r row) {
-	name, _, ok := m.anchorRole(r.path)
-	if !ok {
-		m.notice = "not on an anchor or reference"
-		return
+	name := r.merged
+	var n *jsondoc.Node
+	if name != "" {
+		n = m.anchorHolder(name)
+		if n == nil {
+			m.notice = "the anchor &" + name + " is no longer in the document"
+			return
+		}
+	} else {
+		var ok bool
+		name, _, ok = m.anchorRole(r.path)
+		if !ok {
+			m.notice = "not on an anchor or reference"
+			return
+		}
+		n, _ = m.doc.Get(r.path)
 	}
-	n, _ := m.doc.Get(r.path)
 	holder := m.anchorHolderPath(n)
+	here := m.top().path
 	var targets [][]any
-	for _, p := range m.anchorUsePaths(n) {
-		if pathEq(p, holder) || pathEq(p, r.path) {
+	for _, p := range m.anchorMergeUsePaths(n) {
+		if pathEq(p, holder) || pathEq(p, r.path) || pathEq(p, here) {
 			continue
 		}
 		targets = append(targets, p)
@@ -280,9 +285,9 @@ func (m *listModel) gAnchorKeys(msg tea.KeyMsg, r row) bool {
 
 // expandAlias materializes the reference at path: the shared node is
 // replaced by an independent copy with the anchor identity dropped, so
-// further edits stay local to this path. The content itself is unchanged —
-// and value-unchanged edits push no undo snapshot, so undoing past it
-// restores the reference together with the earlier edits.
+// further edits stay local to this path. The content is unchanged but the
+// anchor identity is part of the document (nodesEqual compares it), so the
+// expansion is one undoable edit and marks the document dirty.
 func (m *listModel) expandAlias(path []any) {
 	n, ok := m.doc.Get(path)
 	if !ok || n == nil {
@@ -345,7 +350,19 @@ func (m *listModel) openAnchor(r row, mode int) {
 	anc := &anchorState{path: clonePath(r.path), mode: mode, fn: r.fn,
 		ti: ti, sug: -1}
 	if mode == refSet {
+		// Completion offers only anchors the field can legally hold:
+		// the value shape must satisfy the field's schema (kind, JSON type,
+		// enum membership) and the reference must not close a cycle.
 		for _, d := range m.anchorDefs() {
+			if d.node == nil {
+				continue
+			}
+			if !schemaAcceptsValue(r.fn, d.node) {
+				continue
+			}
+			if m.refWouldCycle(r.path, d.node) {
+				continue
+			}
 			anc.cands = append(anc.cands, d.name)
 		}
 	}
@@ -374,29 +391,54 @@ func (m *listModel) keyAnchor(msg tea.KeyMsg) tea.Cmd {
 	return cmd
 }
 
-// cycleAnchorSug moves the completion cursor over the anchor names and
-// fills the input with the selection.
+// anchorFiltered lists the reference candidates matching the input typed so
+// far (case-insensitive prefix), so the hint and the tab cycle follow the
+// user's text instead of always cycling the full anchor list.
+func (m *listModel) anchorFiltered() []string {
+	if m.anc == nil || m.anc.mode != refSet {
+		return nil
+	}
+	prefix := strings.ToLower(strings.TrimSpace(m.anc.ti.Value()))
+	if prefix == "" {
+		return m.anc.cands
+	}
+	var out []string
+	for _, c := range m.anc.cands {
+		if strings.HasPrefix(strings.ToLower(c), prefix) {
+			out = append(out, c)
+		}
+	}
+	return out
+}
+
+// cycleAnchorSug moves the completion cursor over the candidates matching
+// the input and fills the input with the selection.
 func (m *listModel) cycleAnchorSug(delta int) {
 	anc := m.anc
-	if anc.mode != refSet || len(anc.cands) == 0 {
+	if anc.mode != refSet {
+		return
+	}
+	cands := m.anchorFiltered()
+	if len(cands) == 0 {
 		return
 	}
 	anc.sug += delta
 	if anc.sug < 0 {
-		anc.sug = len(anc.cands) - 1
+		anc.sug = len(cands) - 1
 	}
-	if anc.sug >= len(anc.cands) {
+	if anc.sug >= len(cands) {
 		anc.sug = 0
 	}
-	anc.ti.SetValue(anc.cands[anc.sug])
+	anc.ti.SetValue(cands[anc.sug])
 	anc.ti.CursorEnd()
 }
 
-// anchorSugView renders the completion hint: every candidate, the selected
-// one accented.
+// anchorSugView renders the completion hint over the filtered candidates,
+// the selected one accented.
 func (m *listModel) anchorSugView() string {
-	parts := make([]string, len(m.anc.cands))
-	for i, c := range m.anc.cands {
+	cands := m.anchorFiltered()
+	parts := make([]string, len(cands))
+	for i, c := range cands {
 		if i == m.anc.sug {
 			parts[i] = mAccent.Render(c)
 			continue
@@ -432,6 +474,10 @@ func (m *listModel) commitAnchorSet(path []any, name string) {
 		}
 		if uses := m.countAnchorUses(n); uses > 1 {
 			m.anc.err = fmt.Sprintf("&%s is referenced by %d alias(es) — remove them first", n.Anchor, uses-1)
+			return
+		}
+		if m.mergeRefUses(n) > 0 {
+			m.anc.err = fmt.Sprintf("&%s is referenced by a merge key — remove the merge first", n.Anchor)
 			return
 		}
 		old := n.Anchor

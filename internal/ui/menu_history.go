@@ -69,11 +69,11 @@ func (m *listModel) repairStack() {
 }
 
 // typing reports whether a text input has focus (in-place editor, raw
-// textarea, search, add-key input): q/@/. are ordinary characters
-// there and history keys must not fire.
+// textarea, search, add-key input, anchor/merge inputs): q/@/. are ordinary
+// characters there and history keys must not fire.
 func (m *listModel) typing() bool {
 	return m.edit != nil || m.text != nil || m.search.active || m.add != nil ||
-		m.anc != nil
+		m.anc != nil || m.mrg != nil
 }
 
 func (m *listModel) listMode() bool {

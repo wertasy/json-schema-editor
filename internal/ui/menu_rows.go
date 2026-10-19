@@ -63,6 +63,9 @@ const (
 // the array index for item rows and the option index for toggle rows (-1
 // otherwise); variant points at the FormNode of a oneOf variant; label is
 // the fixed text of synthetic rows (and the display text of search hits).
+// merged names the anchor a YAML merge key pulled this row in from; its
+// path then lives inside the anchor's own object, so edits reach the source
+// mapping ("" for the mapping's own keys).
 type row struct {
 	kind    rowKind
 	fn      *smodel.FormNode
@@ -70,6 +73,7 @@ type row struct {
 	idx     int
 	variant *smodel.FormNode
 	label   string
+	merged  string
 }
 
 // menuKindFor returns the menu kind a container node drills into.
@@ -125,20 +129,34 @@ func menuRowsFor(lm *listModel, st *menuState) []row {
 	}
 	switch st.kind {
 	case menuObject:
+		merged := lm.mergedKeys(st)
+		byKey := mergedByKey(merged)
 		if st.node.Kind == smodel.KMap {
 			// string-keyed map (additionalProperties): one row per document
 			// key, values edited against the map's value schema
 			if lm.doc != nil {
 				if cur, ok := lm.doc.Get(st.path); ok && cur != nil && cur.Object != nil {
 					for _, mem := range *cur.Object {
+						if mem.Val != nil && mem.Val.Merge != nil {
+							continue // the merge spec itself: title row owns it
+						}
 						rows = append(rows, mapItemRow(st.node, st.path, mem.Key))
 					}
 				}
+			}
+			for _, mk := range merged {
+				rows = append(rows, mergedRow(st, mk))
 			}
 		} else if st.node.Kind == smodel.KObject {
 			known := map[string]bool{}
 			for _, c := range st.node.Children {
 				known[c.Key] = true
+				// a merged key takes its schema-declared slot, exactly where
+				// its own field row would be
+				if mk, ok := byKey[c.Key]; ok {
+					rows = append(rows, mergedRow(st, mk))
+					continue
+				}
 				rows = append(rows, childRow(st, c))
 			}
 			// document members the schema does not define stay visible
@@ -147,11 +165,21 @@ func menuRowsFor(lm *listModel, st *menuState) []row {
 			if lm.doc != nil {
 				if cur, ok := lm.doc.Get(st.path); ok && cur != nil && cur.Object != nil {
 					for _, mem := range *cur.Object {
+						if mem.Val != nil && mem.Val.Merge != nil {
+							continue
+						}
 						if !known[mem.Key] {
 							rows = append(rows, row{kind: rowUnknown, idx: -1,
 								path: pathFor(st.path, mem.Key), label: mem.Key})
 						}
 					}
+				}
+			}
+			// merged keys the schema leaves undefined have no declared
+			// position: they follow the schema-defined rows in merge order
+			for _, mk := range merged {
+				if !known[mk.key] {
+					rows = append(rows, mergedRow(st, mk))
 				}
 			}
 		} else {
@@ -424,7 +452,7 @@ func objectSummary(fn *smodel.FormNode, n *jsondoc.Node) string {
 	if n.Object == nil {
 		return clipRunes(smodel.EncodeValue(n), 24)
 	}
-	mem := *n.Object
+	mem := n.ResolvedMembers() // merged keys resolve in: effective content
 	if len(mem) == 0 {
 		return "{}"
 	}
@@ -724,40 +752,69 @@ func matchVariantList(vs []*smodel.FormNode, val *jsondoc.Node) []*smodel.FormNo
 	if vs == nil {
 		return nil
 	}
-	if val == nil || val.Null || (val.Object != nil && len(*val.Object) == 0) {
+	if val == nil || val.Null || (val.Object != nil && len(val.ResolvedMembers()) == 0) {
 		return append([]*smodel.FormNode{}, vs...)
 	}
+	// keys defined by only some variants are evidence for those variants;
+	// keys every variant defines (a shared optional name, say) are not.
+	// Rank by that evidence so a merged-in discriminator key identifies its
+	// variant instead of leaving the union menu (and its other variants'
+	// required markers) in place.
+	counts := map[string]int{}
+	for _, v := range vs {
+		for _, c := range v.Children {
+			counts[c.Key]++
+		}
+	}
+	unique := func(key string) bool { return counts[key] < len(vs) }
+	best := -1
 	var out []*smodel.FormNode
 	for _, v := range vs {
-		if variantMatches(v, val) {
+		ok, score := variantMatch(v, val, unique)
+		if !ok {
+			continue
+		}
+		if score > best {
+			best = score
+			out = out[:0]
+		}
+		if score == best {
 			out = append(out, v)
 		}
 	}
 	return out
 }
 
-// variantMatches reports whether val fits one variant: enums by encoded
-// value; objects when the variant requires nothing (any object matches) or
-// at least one key overlaps and every overlapping key's value conforms;
-// nested oneOf groups match when any sub-variant does. Keys the variant
-// does not define are ignored.
+// variantMatches reports whether val fits one variant (see variantMatch).
 func variantMatches(v *smodel.FormNode, val *jsondoc.Node) bool {
+	ok, _ := variantMatch(v, val, nil)
+	return ok
+}
+
+// variantMatch reports whether val fits one variant and how many of its
+// overlapping keys are evidence for it (unique reports keys not defined by
+// every sibling variant). Enums match by encoded value; objects when the
+// variant requires nothing (any object matches) or at least one key overlaps
+// and every overlapping key's value conforms — including keys the mapping
+// inherits through YAML merge keys; nested oneOf groups match when any
+// sub-variant does. Keys the variant does not define are ignored.
+func variantMatch(v *smodel.FormNode, val *jsondoc.Node, unique func(key string) bool) (bool, int) {
 	switch v.Kind {
 	case smodel.KOneOf:
-		return len(matchVariantList(v.Variants, val)) > 0
+		return len(matchVariantList(v.Variants, val)) > 0, 0
 	case smodel.KEnum:
 		enc := smodel.EncodeValue(val)
 		for _, o := range v.Enum {
 			if o.Encoded == enc {
-				return true
+				return true, 0
 			}
 		}
-		return false
+		return false, 0
 	case smodel.KObject, smodel.KMap:
 		// KMap defines no required keys, so any object fits it (the key set
 		// is open); KObject needs a key overlap once it has required keys.
 		if val == nil || val.Object == nil {
-			return false
+			return false, 0
 		}
 		defs := map[string]*smodel.FormNode{}
 		required := false
@@ -768,25 +825,30 @@ func variantMatches(v *smodel.FormNode, val *jsondoc.Node) bool {
 			}
 		}
 		if !required {
-			return true
+			return true, 0
 		}
-		overlap := false
-		for _, m := range *val.Object {
+		// merged keys identify the variant just like own keys do
+		members := val.ResolvedMembers()
+		overlap, evidence := false, 0
+		for _, m := range members {
 			def, ok := defs[m.Key]
 			if !ok {
 				continue
 			}
 			overlap = true
+			if unique != nil && unique(m.Key) {
+				evidence++
+			}
 			if !valueConforms(def, m.Val) {
-				return false
+				return false, 0
 			}
 		}
-		return overlap
+		return overlap, evidence
 	case smodel.KScalar, smodel.KBoolean, smodel.KArray, smodel.KRaw:
 		// leaf variants (e.g. a plain string alternative) match by shape
-		return valueConforms(v, val)
+		return valueConforms(v, val), 0
 	default:
-		return false
+		return false, 0
 	}
 }
 
@@ -829,6 +891,33 @@ func valueConforms(def *smodel.FormNode, v *jsondoc.Node) bool {
 		}
 	default:
 		return true
+	}
+}
+
+// schemaAcceptsValue reports whether v's runtime shape satisfies def's
+// schema: exact for enums, scalars (including the JSON type), booleans and
+// containers; any leaf variant for a oneOf group; everything for raw or
+// schema-less definitions. Completion lists use it to offer only anchors
+// that can legally fill the field.
+func schemaAcceptsValue(def *smodel.FormNode, v *jsondoc.Node) bool {
+	if def == nil {
+		return true
+	}
+	switch def.Kind {
+	case smodel.KOneOf:
+		for _, variant := range def.Variants {
+			if schemaAcceptsValue(variant, v) {
+				return true
+			}
+		}
+		return false
+	case smodel.KRaw:
+		if def.NullOnly {
+			return v != nil && v.Null
+		}
+		return true
+	default:
+		return valueConforms(def, v)
 	}
 }
 
@@ -1085,6 +1174,9 @@ func searchIndex(lm *listModel, st *menuState) []row {
 					vn = &smodel.FormNode{Key: fn.Key, Title: fn.Title, Kind: smodel.KRaw}
 				}
 				for _, mem := range *cur.Object {
+					if mem.Val != nil && mem.Val.Merge != nil {
+						continue // a merge-key spec is not a searchable key
+					}
 					cpath := pathFor(path, mem.Key)
 					out = append(out, row{kind: rowField, fn: vn, path: cpath, idx: -1,
 						label: jsondoc.PathString(cpath) + "  " + summary(lm, vn, cpath)})
@@ -1126,6 +1218,9 @@ func unknownRows(lm *listModel, path []any, known map[string]bool, seen map[stri
 	}
 	var out []row
 	for _, mem := range *cur.Object {
+		if mem.Val != nil && mem.Val.Merge != nil {
+			continue // a merge-key spec is not a searchable key
+		}
 		if known[mem.Key] {
 			continue
 		}
@@ -1155,6 +1250,9 @@ func unknownValueRows(lm *listModel, path []any, v *jsondoc.Node, seen map[strin
 	var out []row
 	if v.Object != nil {
 		for _, mem := range *v.Object {
+			if mem.Val != nil && mem.Val.Merge != nil {
+				continue
+			}
 			p := pathFor(path, mem.Key)
 			if k := jsondoc.PathString(p); !seen[k] {
 				seen[k] = true
@@ -1201,6 +1299,9 @@ func unknownKeyIssues(model *smodel.FormNode, doc *jsondoc.Node) []issue {
 			return
 		}
 		for _, mem := range *val.Object {
+			if mem.Val != nil && mem.Val.Merge != nil {
+				continue // a merge-key spec is YAML machinery, not a key
+			}
 			if len(path) == 0 && mem.Key == "$schema" {
 				continue // the editor's own schema pointer, not a user mistake
 			}

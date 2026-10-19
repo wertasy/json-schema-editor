@@ -37,6 +37,85 @@ type Node struct {
 	// alias references at the later ones. JSON parsers and writers ignore
 	// it (JSON documents never set it).
 	Anchor string
+	// Merge carries a YAML merge-key spec: the anchored mapping nodes this
+	// mapping merges ("<<: *a" / "<<: [*a, *b]"), in sequence order. Only
+	// the value of a "<<" member ever holds it; such a node sets no value
+	// field. JSON round-trips never create it, and every consumer that
+	// flattens values (ToAny, Write, Compact, CloneDetached) resolves the
+	// merged members per YAML precedence: own keys win, earlier anchors win
+	// over later ones.
+	Merge []*Node
+}
+
+// MergeRefs lists the anchored mapping nodes merged by this mapping's "<<"
+// members in document order (a member keyed "<<" whose value carries a
+// Merge spec). nil when the node merges nothing or is not a mapping.
+func (n *Node) MergeRefs() []*Node {
+	if n == nil || n.Object == nil {
+		return nil
+	}
+	var refs []*Node
+	for _, m := range *n.Object {
+		if m.Val != nil && m.Val.Merge != nil {
+			refs = append(refs, m.Val.Merge...)
+		}
+	}
+	return refs
+}
+
+// ResolvedMembers returns the mapping's own members plus the ones its merge
+// keys pull in, with YAML precedence applied (own keys win, earlier anchors
+// win over later ones). The member values are the document's own nodes —
+// for merged keys those live in the anchor's object, so edits through them
+// reach the source mapping.
+func (n *Node) ResolvedMembers() []Member {
+	if n == nil || n.Object == nil {
+		return nil
+	}
+	return resolveMembers(*n.Object)
+}
+
+// resolveMembers flattens one mapping's member list for value-oriented
+// consumers (JSON output, detached copies): own members keep their order,
+// then the merged members follow in "<<: *a *b" order, each key at most
+// once — a key the mapping defines itself, or an earlier anchor already
+// provided, shadows the later ones exactly as YAML merge semantics read the
+// document. The rule applies at every level of the merge chain: a mapping's
+// own keys win over the keys it merges, wherever its "<<" sits in the member
+// list (b2: "<<: *b1" + own name keeps b2's name, matching yaml.v3). A
+// reference already being resolved (a merge cycle) contributes nothing.
+func resolveMembers(members []Member) []Member {
+	out := make([]Member, 0, len(members))
+	seen := map[string]bool{}
+	var add func(members []Member, busy map[*Node]bool)
+	add = func(members []Member, busy map[*Node]bool) {
+		// own members first: explicit keys win over merged ones
+		for _, m := range members {
+			if m.Val != nil && m.Val.Merge != nil {
+				continue
+			}
+			if !seen[m.Key] {
+				seen[m.Key] = true
+				out = append(out, m)
+			}
+		}
+		// then the merge members in order: earlier anchors win over later
+		for _, m := range members {
+			if m.Val == nil || m.Val.Merge == nil {
+				continue
+			}
+			for _, ref := range m.Val.Merge {
+				if ref == nil || ref.Object == nil || busy[ref] {
+					continue
+				}
+				busy[ref] = true
+				add(*ref.Object, busy)
+				delete(busy, ref)
+			}
+		}
+	}
+	add(members, map[*Node]bool{})
+	return out
 }
 
 // Parse reads one JSON document from r, preserving key order and numeric
@@ -142,7 +221,8 @@ func (n *Node) write(w *bufio.Writer, indent int) error {
 	case n == nil:
 		return errors.New("nil node")
 	case n.Object != nil:
-		members := *n.Object
+		// merge members resolve inline: JSON output carries no "<<"
+		members := resolveMembers(*n.Object)
 		if len(members) == 0 {
 			w.WriteString("{}")
 			return nil
@@ -562,21 +642,32 @@ func (n *Node) InsertMember(path []any, key string, idx int, v *Node) {
 
 // ToAny converts the node tree to plain Go values (map[string]any, []any,
 // string, int64/float64, bool, nil) for use by the jsonschema validator.
+// YAML merge keys resolve along the way, so the validator sees the mapping's
+// effective keys just as a YAML reader would.
 func (n *Node) ToAny() any {
+	return n.toAny(map[*Node]bool{})
+}
+
+func (n *Node) toAny(busy map[*Node]bool) any {
 	if n == nil {
 		return nil
 	}
 	switch {
 	case n.Object != nil:
+		if busy[n] {
+			return nil // a merge cycle: contribute nothing
+		}
+		busy[n] = true
+		defer delete(busy, n)
 		m := make(map[string]any, len(*n.Object))
-		for _, mem := range *n.Object {
-			m[mem.Key] = mem.Val.ToAny()
+		for _, mem := range resolveMembers(*n.Object) {
+			m[mem.Key] = mem.Val.toAny(busy)
 		}
 		return m
 	case n.Array != nil:
 		out := make([]any, len(*n.Array))
 		for i, it := range *n.Array {
-			out[i] = it.ToAny()
+			out[i] = it.toAny(busy)
 		}
 		return out
 	case n.Str != nil:
@@ -659,6 +750,13 @@ func (n *Node) clone(memo map[*Node]*Node) *Node {
 	}
 	c := &Node{Anchor: n.Anchor, Null: n.Null}
 	memo[n] = c // registered before the children: recursive sharing survives
+	if n.Merge != nil {
+		refs := make([]*Node, len(n.Merge))
+		for i, ref := range n.Merge {
+			refs[i] = ref.clone(memo)
+		}
+		c.Merge = refs
+	}
 	if n.Object != nil {
 		obj := make([]Member, len(*n.Object))
 		for i, mem := range *n.Object {
@@ -692,15 +790,17 @@ func (n *Node) clone(memo map[*Node]*Node) *Node {
 // becomes its own and the anchor identity is dropped throughout, so writing
 // the copy emits plain content and edits to it never reach the anchored
 // original. This is how an alias occurrence is materialized (expanded).
+// Merge-key members resolve into plain members on the way — a materialized
+// copy carries no references at all.
 func (n *Node) CloneDetached() *Node {
 	if n == nil {
 		return nil
 	}
 	c := &Node{Null: n.Null}
 	if n.Object != nil {
-		obj := make([]Member, len(*n.Object))
-		for i, mem := range *n.Object {
-			obj[i] = Member{Key: mem.Key, Val: mem.Val.CloneDetached()}
+		obj := make([]Member, 0, len(*n.Object))
+		for _, mem := range resolveMembers(*n.Object) {
+			obj = append(obj, Member{Key: mem.Key, Val: mem.Val.CloneDetached()})
 		}
 		c.Object = &obj
 	}
@@ -890,7 +990,8 @@ func writeCompact(b *strings.Builder, n *Node) {
 		b.WriteString("null")
 	case n.Object != nil:
 		b.WriteByte('{')
-		for i, m := range *n.Object {
+		// merges resolve inline: JSON output carries no "<<"
+		for i, m := range resolveMembers(*n.Object) {
 			if i > 0 {
 				b.WriteByte(',')
 			}
