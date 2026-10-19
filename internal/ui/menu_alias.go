@@ -171,6 +171,113 @@ func (m *listModel) countAnchorUses(n *jsondoc.Node) int {
 	return count
 }
 
+// anchorUsePaths lists every path in document order whose node is n
+// (pointer identity): the carrier first, then each reference.
+func (m *listModel) anchorUsePaths(n *jsondoc.Node) [][]any {
+	var paths [][]any
+	var walk func(cur *jsondoc.Node, path []any)
+	walk = func(cur *jsondoc.Node, path []any) {
+		if cur == nil {
+			return
+		}
+		if cur == n { // shared node: its subtree is visited once per reference
+			paths = append(paths, clonePath(path))
+			return
+		}
+		switch {
+		case cur.Object != nil:
+			for _, mem := range *cur.Object {
+				walk(mem.Val, pathFor(path, mem.Key))
+			}
+		case cur.Array != nil:
+			for i, it := range *cur.Array {
+				walk(it, pathIdx(path, i))
+			}
+		}
+	}
+	walk(m.doc, nil)
+	return paths
+}
+
+// anchorJump parks the current position and jumps to target: esc at the
+// landing depth restores the captured stack (ga/gr return semantics). A
+// fresh jump replaces any parked search/issues return, mirroring how those
+// two jumps replace each other.
+func (m *listModel) anchorJump(target []any) {
+	m.navForward() // the jumped-from menu becomes a ctrl+o back step
+	m.jumpOrigin = append([]*menuState(nil), m.stack...)
+	m.search.parked = false // a fresh jump replaces any parked search
+	m.issuesBack = nil      // ... and any parked issue list
+	m.jumpToPath(target)
+	m.jumpReturn = len(m.stack)
+	m.notice = "esc returns"
+}
+
+// gotoAnchor performs ga: from a reference row, jump to its anchor carrier.
+func (m *listModel) gotoAnchor(r row) {
+	name, ref, ok := m.anchorRole(r.path)
+	if !ok {
+		m.notice = "not on an anchor or reference"
+		return
+	}
+	if !ref {
+		m.notice = "already at the anchor &" + name
+		return
+	}
+	n, _ := m.doc.Get(r.path)
+	m.anchorJump(m.anchorHolderPath(n))
+}
+
+// gotoRefs performs gr: jump to the other references of the anchor the row
+// belongs to (the carrier is excluded — ga reaches it). One target jumps
+// directly; several open the picker; none leaves a notice.
+func (m *listModel) gotoRefs(r row) {
+	name, _, ok := m.anchorRole(r.path)
+	if !ok {
+		m.notice = "not on an anchor or reference"
+		return
+	}
+	n, _ := m.doc.Get(r.path)
+	holder := m.anchorHolderPath(n)
+	var targets [][]any
+	for _, p := range m.anchorUsePaths(n) {
+		if pathEq(p, holder) || pathEq(p, r.path) {
+			continue
+		}
+		targets = append(targets, p)
+	}
+	switch {
+	case len(targets) == 0:
+		m.notice = "no other references to &" + name
+	case len(targets) == 1:
+		m.anchorJump(targets[0])
+	default:
+		m.refPick = &refPickState{name: name, paths: targets}
+	}
+}
+
+// gAnchorKeys consumes the armed-g combos ga (jump to the anchor) and gr
+// (jump to its references) in list mode. A lone g parks in the command
+// buffer (jumpKeys arms it; shown bottom-right, no timeout); gAnchorKeys
+// runs first so a complete combo resolves there. Any other key falls
+// through: jumpKeys clears the buffer and the key runs on its own.
+func (m *listModel) gAnchorKeys(msg tea.KeyMsg, r row) bool {
+	if len(m.cmdBuf) == 0 {
+		return false
+	}
+	switch msg.String() {
+	case "a":
+		m.cmdBuf = nil
+		m.gotoAnchor(r)
+		return true
+	case "r":
+		m.cmdBuf = nil
+		m.gotoRefs(r)
+		return true
+	}
+	return false
+}
+
 // expandAlias materializes the reference at path: the shared node is
 // replaced by an independent copy with the anchor identity dropped, so
 // further edits stay local to this path. The content itself is unchanged —

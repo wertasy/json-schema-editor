@@ -9,7 +9,6 @@ import (
 	"fmt"
 	"regexp"
 	"strings"
-	"time"
 
 	"github.com/charmbracelet/bubbles/textinput"
 	tea "github.com/charmbracelet/bubbletea"
@@ -28,6 +27,9 @@ func (m *listModel) keyList(msg tea.KeyMsg) tea.Cmd {
 		return nil
 	}
 	r := rows[st.cursor]
+	if m.gAnchorKeys(msg, r) {
+		return nil
+	}
 	if m.jumpKeys(msg, &st.cursor, len(rows)) {
 		return nil
 	}
@@ -68,6 +70,10 @@ func (m *listModel) keyList(msg tea.KeyMsg) tea.Cmd {
 		return m.back()
 	case "esc":
 		return m.back()
+	case "ctrl+o":
+		m.navGo(true) // back along the navigation trail
+	case "tab", "ctrl+i":
+		m.navGo(false) // forward; bubbletea reports ctrl+i as tab (same byte)
 	case " ":
 		return m.space(r)
 	case "d":
@@ -238,8 +244,17 @@ func (m *listModel) back() tea.Cmd {
 		m.issuesReturnTo()
 		return nil
 	}
+	if m.jumpOrigin != nil && len(m.stack) == m.jumpReturn {
+		leaving := m.navSnapshot()
+		m.stack = m.jumpOrigin
+		m.jumpOrigin, m.jumpReturn = nil, 0
+		m.navBackStep(leaving)
+		return nil
+	}
 	if len(m.stack) > 1 {
+		leaving := m.navSnapshot()
 		m.stack = m.stack[:len(m.stack)-1]
+		m.navBackStep(leaving)
 		return nil
 	}
 	if !m.dirty() {
@@ -262,6 +277,7 @@ func (m *listModel) back() tea.Cmd {
 // matching the current value (the ● row) instead of blindly on the first
 // row; unset values keep the first row.
 func (m *listModel) push(fn *smodel.FormNode, path []any) {
+	m.navForward() // the menu drilled out of becomes a ctrl+o back step
 	st := &menuState{kind: menuKindFor(fn), node: fn, path: path}
 	seedVariantCursor(st, m.doc)
 	m.stack = append(m.stack, st)
@@ -274,6 +290,7 @@ func (m *listModel) push(fn *smodel.FormNode, path []any) {
 // value keeps the pick-a-type-first flow.
 func (m *listModel) pushChildMenu(fn *smodel.FormNode, path []any) {
 	if fn.Kind == smodel.KOneOf && dynamicVariants(fn) != nil {
+		m.navForward() // bypasses push; record the drill like every other
 		m.stack = append(m.stack, m.dynamicMenu(fn, path))
 		return
 	}
@@ -303,24 +320,37 @@ func wrapCursor(cur, delta, n int) int {
 
 // jumpKeys applies the gg/G/Home/End list jumps shared by the menu list and
 // the pure-list overlays (issues, save errors, enum select): G/End go to
-// the last row, gg/Home to the first. A lone g arms the combo for ggTimeout
-// and is otherwise inert; any other key disarms it. handled reports whether
-// the key was consumed.
+// the last row, gg/Home to the first. Multi-key commands follow vi: g parks
+// in the command buffer — shown bottom-right, never cleared by a timer —
+// and the next key either completes the combo or runs on its own after the
+// buffer clears. handled reports whether the key was consumed.
 func (m *listModel) jumpKeys(msg tea.KeyMsg, cursor *int, n int) bool {
-	armed := !m.gArm.IsZero() && time.Since(m.gArm) < ggTimeout
-	m.gArm = time.Time{}
-	switch msg.String() {
-	case "g":
-		if armed {
+	key := msg.String()
+	if len(m.cmdBuf) > 0 { // a g-family combo is pending
+		m.cmdBuf = nil
+		if key == "g" {
+			if m.listMode() { // the menu cursor moved; overlay lists stay put
+				m.navForward()
+			}
 			*cursor = 0
 			return true
 		}
-		m.gArm = time.Now()
+		return false // unrelated key: runs normally once the buffer clears
+	}
+	switch key {
+	case "g":
+		m.cmdBuf = append(m.cmdBuf, key)
 		return true
 	case "G", "end":
+		if m.listMode() {
+			m.navForward()
+		}
 		*cursor = max(n-1, 0)
 		return true
 	case "home":
+		if m.listMode() {
+			m.navForward()
+		}
 		*cursor = 0
 		return true
 	}
@@ -579,6 +609,7 @@ func (m *listModel) insertItemAt(idx int, splice bool) {
 	case smodel.KOneOf:
 		ins(&jsondoc.Node{Null: true})
 		if dynamicVariants(items) != nil {
+			m.navForward() // bypasses push; record the drill like every other
 			m.stack = append(m.stack, m.dynamicMenu(items, ipath))
 			return
 		}
@@ -756,6 +787,7 @@ func (m *listModel) keyAdd(msg tea.KeyMsg) tea.Cmd {
 			case smodel.KOneOf:
 				m.doc.Set(path, &jsondoc.Node{Null: true})
 				if dynamicVariants(items) != nil {
+					m.navForward() // bypasses push; record the drill like every other
 					m.stack = append(m.stack, m.dynamicMenu(items, path))
 					return nil
 				}
@@ -981,6 +1013,7 @@ func (m *listModel) keyErrs(msg tea.KeyMsg) tea.Cmd {
 			path := m.errs.paths[m.errs.cursor]
 			m.errs = nil
 			m.issuesBack = nil // a fresh jump replaces any parked issue list
+			m.navForward()     // the jumped-from menu becomes a ctrl+o back step
 			m.jumpToPath(path)
 		}
 	case "y":
@@ -1015,6 +1048,8 @@ func (m *listModel) keyIssues(msg tea.KeyMsg) tea.Cmd {
 				// closing the list (this park cycle or a later one) returns here
 				m.issuesOrigin = append([]*menuState(nil), m.stack...)
 				m.search.parked = false // a fresh jump replaces any parked search
+				m.jumpOrigin, m.jumpReturn = nil, 0
+				m.navForward() // the jumped-from menu becomes a ctrl+o back step
 				m.jumpToPath(path)
 				// esc at the landing menu returns to the list, same cursor
 				m.issuesBack, m.issuesReturn = parked, len(m.stack)
@@ -1022,6 +1057,27 @@ func (m *listModel) keyIssues(msg tea.KeyMsg) tea.Cmd {
 		}
 	case "esc":
 		m.issues = nil
+	}
+	return nil
+}
+
+// keyRefPick drives the gr picker: enter jumps to the highlighted reference,
+// esc closes without moving.
+func (m *listModel) keyRefPick(msg tea.KeyMsg) tea.Cmd {
+	if m.jumpKeys(msg, &m.refPick.cursor, len(m.refPick.paths)) {
+		return nil
+	}
+	switch msg.String() {
+	case "up", "k", "ctrl+k":
+		m.refPick.cursor = wrapCursor(m.refPick.cursor, -1, len(m.refPick.paths))
+	case "down", "j", "ctrl+j":
+		m.refPick.cursor = wrapCursor(m.refPick.cursor, 1, len(m.refPick.paths))
+	case "enter":
+		path := m.refPick.paths[m.refPick.cursor]
+		m.refPick = nil
+		m.anchorJump(path)
+	case "esc":
+		m.refPick = nil
 	}
 	return nil
 }
@@ -1437,6 +1493,7 @@ func (m *listModel) closeSearch() {
 // against the (possibly edited) document and the results are recomputed with
 // the query as typed. The cursor stays on the hit the jump started from.
 func (m *listModel) searchReturnTo() {
+	leaving := m.navSnapshot()
 	cur := m.search.cursor
 	m.search.parked = false
 	m.search.returnDepth = 0
@@ -1444,6 +1501,7 @@ func (m *listModel) searchReturnTo() {
 		m.stack = origin
 		m.search.origin = nil
 	}
+	m.navBackStep(leaving)
 	m.search.all = searchIndex(m, m.top())
 	m.refilter()
 	if cur > len(m.search.results)-1 {
@@ -1544,6 +1602,8 @@ func (m *listModel) keySearch(msg tea.KeyMsg) tea.Cmd {
 		m.search.active = false // park the overlay: esc at the landing reopens it
 		m.search.parked = true
 		m.issuesBack = nil // a fresh jump replaces any parked issue list
+		m.jumpOrigin, m.jumpReturn = nil, 0
+		m.navForward() // the jumped-from menu becomes a ctrl+o back step
 		// closing the overlay (this park cycle or a later one) returns here
 		m.search.origin = append([]*menuState(nil), m.stack...)
 		m.stack = rebuildStack(m.model, m.doc, res.path)

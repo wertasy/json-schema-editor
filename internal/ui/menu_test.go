@@ -6,6 +6,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	tea "github.com/charmbracelet/bubbletea"
 
@@ -48,6 +49,10 @@ func key(k string) tea.KeyMsg {
 		return tea.KeyMsg{Type: tea.KeyCtrlS}
 	case "ctrl+r":
 		return tea.KeyMsg{Type: tea.KeyCtrlR}
+	case "ctrl+o":
+		return tea.KeyMsg{Type: tea.KeyCtrlO}
+	case "ctrl+i":
+		return tea.KeyMsg{Type: tea.KeyCtrlI} // bubbletea reports it as "tab"
 	case "ctrl+n":
 		return tea.KeyMsg{Type: tea.KeyCtrlN}
 	case "ctrl+p":
@@ -755,6 +760,41 @@ func TestJumpKeys(t *testing.T) {
 	press(m, "g")
 	if m.top().cursor != 0 {
 		t.Fatalf("gg after G: cursor = %d, want 0", m.top().cursor)
+	}
+
+	// vi-style command buffer: a lone g shows bottom-right in the hint bar
+	// and never times out — the second g still completes after a pause far
+	// longer than the retired 750ms arm window
+	lastLine := func(v string) string {
+		ls := strings.Split(v, "\n")
+		return ls[len(ls)-1]
+	}
+	press(m, "G")
+	press(m, "g")
+	if len(m.cmdBuf) != 1 {
+		t.Fatalf("lone g must park in the command buffer, got %v", m.cmdBuf)
+	}
+	if hint := lastLine(m.View()); !strings.HasSuffix(hint, "g") {
+		t.Fatalf("pending command must show bottom-right:\n%q", hint)
+	}
+	time.Sleep(800 * time.Millisecond)
+	press(m, "g")
+	if m.top().cursor != 0 {
+		t.Fatalf("gg after a long pause: cursor = %d, want 0 (buffer must not expire)", m.top().cursor)
+	}
+
+	// recording and a pending command share the right-aligned tail
+	press(m, "g", "@")
+	if hint := lastLine(m.View()); !strings.Contains(hint, "g ● REC 0") {
+		t.Fatalf("pending command and REC must both show bottom-right:\n%q", hint)
+	}
+	press(m, "@") // stop recording
+	if len(m.cmdBuf) != 1 {
+		t.Fatalf("macro control must leave the pending command alone, got %v", m.cmdBuf)
+	}
+	press(m, "g")
+	if m.top().cursor != 0 || len(m.cmdBuf) != 0 {
+		t.Fatalf("ga-pending gg: cursor = %d, buffer = %v", m.top().cursor, m.cmdBuf)
 	}
 
 	// the rows stay addressable after the jumps (no offset drift)

@@ -9,7 +9,6 @@ import (
 	"fmt"
 	"regexp"
 	"strings"
-	"time"
 
 	"github.com/charmbracelet/bubbles/textarea"
 	"github.com/charmbracelet/bubbles/textinput"
@@ -40,6 +39,8 @@ var helpEntries = []helpEntry{
 	{"y / Y", "copy value / \"key\": value (JSON) to the clipboard"},
 	{"z", "show/hide fields with no value (null/unset)"},
 	{"gg / G", "jump to first / last row (Home/End too)"},
+	{"ctrl+o / ctrl+i (tab)", "back / forward in the navigation history (submenus, jumps; esc pops count too)"},
+	{"ga / gr", "jump to the row's anchor / its other references (esc returns)"},
 	{"enter / right / l", "edit field · open submenu"},
 	{"tab / shift+tab", "complete next / previous candidate (ctrl+n / ctrl+p)"},
 	{"left / h", "back one level"},
@@ -68,10 +69,6 @@ const overlayHelp = "enter select · esc cancel"
 // maxMacroKeys caps a single recorded macro; reaching it stops recording and
 // keeps the keys captured so far.
 const maxMacroKeys = 500
-
-// ggTimeout is how long a lone g stays armed waiting for its second press
-// of the gg jump-to-top combo.
-const ggTimeout = 750 * time.Millisecond
 
 var (
 	mTitle  = lipgloss.NewStyle().Bold(true)
@@ -156,6 +153,14 @@ type issuesState struct {
 	cursor int
 }
 
+// refPickState is the gr picker: the references to one anchor, enter jumps
+// to the highlighted one (esc/q closes without moving).
+type refPickState struct {
+	name   string  // anchor name shown in the title
+	paths  [][]any // candidate locations in document order
+	cursor int
+}
+
 // issue is one validation message with its parsed instance location (nil when
 // the message carries none).
 type issue struct {
@@ -237,7 +242,7 @@ type listModel struct {
 	menuCache     map[*smodel.FormNode]*smodel.FormNode
 	notice        string          // transient list-mode message, cleared on the next key
 	startup       string          // session info notices (aliases kept, schema source), dropped on the first key
-	gArm          time.Time       // nonzero while a lone g is waiting for its gg partner
+	cmdBuf        []string        // pending multi-key command (vi-style: shown bottom-right, never cleared by a timer)
 	recording     bool            // macro capture armed
 	recBuf        []tea.KeyMsg    // keys captured so far
 	macro         []tea.KeyMsg    // last completed macro
@@ -251,6 +256,11 @@ type listModel struct {
 	issuesBack    *issuesState    // parked overlay: esc at the jump target returns here
 	issuesReturn  int             // stack depth of the jump target
 	issuesOrigin  []*menuState    // stack captured when the jump parked the list
+	refPick       *refPickState   // open multi-reference picker (gr with 2+ targets)
+	jumpOrigin    []*menuState    // stack captured when ga/gr jumped; nil when inactive
+	jumpReturn    int             // stack depth of the ga/gr landing
+	navBack       []navMark       // navigation trail: locations left behind (ctrl+o)
+	navFwd        []navMark       // forward branch of the trail (ctrl+i)
 }
 
 // newMenuTextarea builds the raw editor sized for the current screen.
@@ -502,7 +512,7 @@ func (m *listModel) Init() tea.Cmd { return nil }
 // list mode and bypass the snapshot wrap — restoring is not an edit.
 func (m *listModel) dispatchKey(msg tea.KeyMsg) tea.Cmd {
 	if m.listMode() && m.applyHistoryKey(msg) {
-		m.gArm = time.Time{} // a history key breaks any armed gg combo
+		m.cmdBuf = nil // a history key breaks any pending g combo
 		m.refreshVariantMenu()
 		m.refreshIssues()
 		return nil
@@ -529,6 +539,8 @@ func (m *listModel) routeKey(msg tea.KeyMsg) tea.Cmd {
 		return m.keyIssues(msg)
 	case m.errs != nil:
 		return m.keyErrs(msg)
+	case m.refPick != nil:
+		return m.keyRefPick(msg)
 	case m.text != nil:
 		return m.keyText(msg)
 	case m.sel != nil:
@@ -613,6 +625,8 @@ func (m *listModel) View() string {
 		return m.issuesView()
 	case m.errs != nil:
 		return m.errsView()
+	case m.refPick != nil:
+		return m.refPickView()
 	case m.text != nil:
 		return m.textView()
 	case m.sel != nil:
@@ -912,14 +926,25 @@ func (m *listModel) focusedDesc(rows []row) string {
 	return ""
 }
 
-// recHint renders a hint row; while a macro capture is running it keeps a
-// right-aligned "● REC n" indicator instead of the hint tail, so arming @
-// stays visible on every surface that renders hints.
+// recHint renders a hint row with a right-aligned tail: the pending
+// multi-key command buffer (vi showcmd style — a lone g waits there with no
+// timeout) and, while a macro capture runs, "● REC n". Both stay visible on
+// every surface that renders hints.
 func (m *listModel) recHint(hints string) string {
-	rec := fmt.Sprintf("● REC %d", len(m.recBuf))
-	w := displayWidth(rec)
 	limit := m.width - 1
-	if !m.recording || m.width < w+8 {
+	var parts []string
+	if len(m.cmdBuf) > 0 {
+		parts = append(parts, mStatus.Render(strings.Join(m.cmdBuf, "")))
+	}
+	if m.recording {
+		parts = append(parts, mErr.Render(fmt.Sprintf("● REC %d", len(m.recBuf))))
+	}
+	if len(parts) == 0 {
+		return mHelp.Render(clipDisplay(hints, limit))
+	}
+	right := strings.Join(parts, " ")
+	w := displayWidth(right)
+	if m.width < w+8 {
 		return mHelp.Render(clipDisplay(hints, limit))
 	}
 	left := clipDisplay(hints, limit-w-1)
@@ -927,7 +952,7 @@ func (m *listModel) recHint(hints string) string {
 	if pad < 1 {
 		pad = 1
 	}
-	return mHelp.Render(left+strings.Repeat(" ", pad)) + mErr.Render(rec)
+	return mHelp.Render(left+strings.Repeat(" ", pad)) + right
 }
 
 // writeCut clips s to the terminal width line by line (multiline row content:
@@ -1500,6 +1525,7 @@ func (m *listModel) openIssues() {
 // keeping the cursor position. The stack goes back to where the list was
 // opened from, so closing it never leaves the user at the jump target.
 func (m *listModel) issuesReturnTo() {
+	leaving := m.navSnapshot()
 	cur := m.issuesBack.cursor
 	items := m.issuesBack.items
 	if m.opts.Validate != nil {
@@ -1511,6 +1537,7 @@ func (m *listModel) issuesReturnTo() {
 		m.stack = origin
 		m.issuesOrigin = nil
 	}
+	m.navBackStep(leaving)
 	if cur > len(items)-1 {
 		cur = len(items) - 1
 	}
@@ -1723,6 +1750,41 @@ func (m *listModel) issuesView() string {
 		b.WriteByte('\n')
 	}
 	b.WriteString(m.recHint("↑/↓ or ctrl+j/k move · enter jump to the field · esc close"))
+	b.WriteByte('\n')
+	return b.String()
+}
+
+// refPickView lists the references to one anchor (gr with several targets);
+// enter jumps to the highlighted one.
+func (m *listModel) refPickView() string {
+	var b strings.Builder
+	b.WriteString(clipDisplay(mTitle.Render(fmt.Sprintf("References to &%s (%d)", m.refPick.name, len(m.refPick.paths))), m.width-1))
+	b.WriteByte('\n')
+	height := m.height - 2
+	if height < 1 {
+		height = 1
+	}
+	if m.refPick.cursor >= len(m.refPick.paths) {
+		m.refPick.cursor = len(m.refPick.paths) - 1
+	}
+	if m.refPick.cursor < 0 {
+		m.refPick.cursor = 0
+	}
+	off := m.refPick.cursor - height + 1
+	if off < 0 {
+		off = 0
+	}
+	for i := off; i < len(m.refPick.paths) && i < off+height; i++ {
+		p := m.refPick.paths[i]
+		label := jsondoc.PathString(p) + "  " + m.rawValueSummary(p)
+		line := "  " + label
+		if i == m.refPick.cursor {
+			line = mSel.Render("> " + label)
+		}
+		b.WriteString(clipDisplay(line, m.width-1))
+		b.WriteByte('\n')
+	}
+	b.WriteString(m.recHint("↑/↓ or ctrl+j/k move · enter jump · esc close"))
 	b.WriteByte('\n')
 	return b.String()
 }

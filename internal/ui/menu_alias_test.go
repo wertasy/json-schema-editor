@@ -370,3 +370,173 @@ func TestAnchorBadgeUsesAnchorColor(t *testing.T) {
 		t.Fatalf("reference badge must render in the anchor color, got %q", badge)
 	}
 }
+
+// aliasJumpModel builds the menu for an anchor/alias document whose schema
+// knows the given keys as objects with one integer field each (the gr picker
+// needs more keys than aliasTestModel's two).
+func aliasJumpModel(t *testing.T, src string, keys ...string) *listModel {
+	t.Helper()
+	doc, _, err := yamldoc.Parse([]byte(src))
+	if err != nil {
+		t.Fatal(err)
+	}
+	obj := func(key string) *smodel.FormNode {
+		return &smodel.FormNode{Key: key, Title: strings.ToUpper(key[:1]) + key[1:],
+			Kind:     smodel.KObject,
+			Children: []*smodel.FormNode{{Key: "p", Title: "P", Kind: smodel.KScalar, JSONType: "integer"}}}
+	}
+	var children []*smodel.FormNode
+	for _, k := range keys {
+		children = append(children, obj(k))
+	}
+	model := &smodel.FormNode{Key: "$", Title: "Aliases", Kind: smodel.KObject, Children: children}
+	m := newListModel(model, doc, Options{})
+	m.Update(tea.WindowSizeMsg{Width: 100, Height: 30})
+	return m
+}
+
+// jumpCursorTo moves the root cursor onto the row for path.
+func jumpCursorTo(t *testing.T, m *listModel, path []any) {
+	t.Helper()
+	rows := menuRows(m)
+	idx := cursorByPath(rows, path)
+	if idx < 0 {
+		t.Fatalf("no row for %v in %+v", path, rows)
+	}
+	for m.top().cursor < idx {
+		press(m, "down")
+		rows = menuRows(m)
+	}
+	if !pathEq(rows[m.top().cursor].path, path) {
+		t.Fatalf("cursor on %v, want %v", rows[m.top().cursor].path, path)
+	}
+}
+
+func TestAnchorJumpGaGr(t *testing.T) {
+	four := "base: &x\n  p: 1\ncopy: *x\nagain: *x\nthird: *x\n"
+	fourKeys := []string{"base", "copy", "again", "third"}
+
+	t.Run("ga jumps to the carrier and esc returns", func(t *testing.T) {
+		m := aliasJumpModel(t, four, fourKeys...)
+		jumpCursorTo(t, m, []any{"copy"})
+		press(m, "g", "a")
+		if len(m.stack) != 2 || !pathEq(m.top().path, []any{"base"}) {
+			t.Fatalf("ga landed on %v (stack %d)", m.top().path, len(m.stack))
+		}
+		if v := m.View(); !contains(v, ": &x") || !contains(v, "esc returns") {
+			t.Fatalf("anchor menu must show `: &x` and the return notice:\n%s", v)
+		}
+		press(m, "esc")
+		if len(m.stack) != 1 || m.jumpOrigin != nil {
+			t.Fatalf("esc must restore the root (stack %d, origin %v)", len(m.stack), m.jumpOrigin != nil)
+		}
+		if v := m.View(); !contains(v, "> Copy") {
+			t.Fatalf("cursor must be back on copy:\n%s", v)
+		}
+	})
+
+	t.Run("ga return works with q too", func(t *testing.T) {
+		m := aliasJumpModel(t, four, fourKeys...)
+		jumpCursorTo(t, m, []any{"copy"})
+		press(m, "g", "a", "q")
+		if len(m.stack) != 1 || !pathEq(menuRows(m)[m.top().cursor].path, []any{"copy"}) {
+			t.Fatalf("q must return to copy (stack %d)", len(m.stack))
+		}
+	})
+
+	t.Run("gr with one other reference jumps directly", func(t *testing.T) {
+		m := aliasJumpModel(t, "base: &x\n  p: 1\ncopy: *x\nagain: *x\n", "base", "copy", "again")
+		jumpCursorTo(t, m, []any{"again"})
+		press(m, "g", "r")
+		if m.refPick != nil {
+			t.Fatal("a single target must jump without the picker")
+		}
+		if len(m.stack) != 2 || !pathEq(m.top().path, []any{"copy"}) {
+			t.Fatalf("gr landed on %v (stack %d)", m.top().path, len(m.stack))
+		}
+	})
+
+	t.Run("gr with several references opens the picker", func(t *testing.T) {
+		m := aliasJumpModel(t, four, fourKeys...)
+		jumpCursorTo(t, m, []any{"copy"})
+		press(m, "g", "r")
+		if m.refPick == nil {
+			t.Fatal("two targets must open the picker")
+		}
+		v := m.View()
+		if !contains(v, "References to &x (2)") || !contains(v, "$.again") || !contains(v, "$.third") {
+			t.Fatalf("picker must list the other references:\n%s", v)
+		}
+		press(m, "down", "enter")
+		if m.refPick != nil || len(m.stack) != 2 || !pathEq(m.top().path, []any{"third"}) {
+			t.Fatalf("enter must jump to third (top %v, stack %d)", m.top().path, len(m.stack))
+		}
+		press(m, "esc")
+		if len(m.stack) != 1 || !pathEq(menuRows(m)[m.top().cursor].path, []any{"copy"}) {
+			t.Fatalf("esc must return to copy (stack %d)", len(m.stack))
+		}
+	})
+
+	t.Run("gr from the carrier lists all references and esc just closes", func(t *testing.T) {
+		m := aliasJumpModel(t, four, fourKeys...)
+		jumpCursorTo(t, m, []any{"base"})
+		press(m, "g", "r")
+		if m.refPick == nil || len(m.refPick.paths) != 3 {
+			t.Fatalf("carrier gr must pick among 3 references, got %+v", m.refPick)
+		}
+		if v := m.View(); !contains(v, "References to &x (3)") || !contains(v, "$.copy") {
+			t.Fatalf("picker must list every reference:\n%s", v)
+		}
+		press(m, "esc")
+		if m.refPick != nil || len(m.stack) != 1 {
+			t.Fatalf("esc must close without moving (stack %d)", len(m.stack))
+		}
+	})
+
+	t.Run("notices", func(t *testing.T) {
+		m := aliasJumpModel(t, four, fourKeys...)
+		jumpCursorTo(t, m, []any{"base"})
+		press(m, "g", "a")
+		if v := m.View(); !contains(v, "already at the anchor &x") {
+			t.Fatalf("ga on the carrier must explain:\n%s", v)
+		}
+		press(m, "enter") // drill into base: the p row carries no anchor
+		press(m, "g", "a")
+		if v := m.View(); !contains(v, "not on an anchor or reference") {
+			t.Fatalf("ga off an anchor must explain:\n%s", v)
+		}
+		press(m, "g", "r")
+		if v := m.View(); !contains(v, "not on an anchor or reference") {
+			t.Fatalf("gr off an anchor must explain:\n%s", v)
+		}
+		press(m, "esc")
+	})
+
+	t.Run("gr with no other references", func(t *testing.T) {
+		m := aliasJumpModel(t, "base: &x\n  p: 1\ncopy: *x\n", "base", "copy")
+		jumpCursorTo(t, m, []any{"copy"})
+		press(m, "g", "r")
+		if m.refPick != nil || len(m.stack) != 1 {
+			t.Fatalf("no other references must stay put (stack %d)", len(m.stack))
+		}
+		if v := m.View(); !contains(v, "no other references to &x") {
+			t.Fatalf("gr must explain:\n%s", v)
+		}
+	})
+
+	t.Run("plain a and r keys are unaffected", func(t *testing.T) {
+		m := aliasJumpModel(t, four, fourKeys...)
+		jumpCursorTo(t, m, []any{"again"})
+		press(m, "enter") // drill into the schema-less again menu
+		press(m, "a")
+		if m.add == nil {
+			t.Fatal("plain a must still open the add-key input")
+		}
+		press(m, "esc", "esc")
+		press(m, "r")
+		if !m.search.active || !m.search.replace {
+			t.Fatal("plain r must still open the replace search")
+		}
+		press(m, "esc")
+	})
+}
