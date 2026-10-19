@@ -1098,20 +1098,22 @@ func (m *listModel) keyEdit(msg tea.KeyMsg) tea.Cmd {
 	case "esc":
 		m.edit = nil
 		return nil
-	case "tab", "shift+tab":
-		// cycle through the suggestions computed for the last typed prefix:
-		// tab moves forward, shift+tab backward (both wrap)
+	case "tab", "ctrl+n", "shift+tab", "ctrl+p":
+		// cycle through the suggestions computed for the last typed prefix.
+		// tab/ctrl+n move forward, shift+tab/ctrl+p backward (both wrap);
+		// ctrl+n/ctrl+p are fallbacks for terminals that do not send ESC[Z.
 		e := m.edit
 		if len(e.sugs) == 0 {
 			return nil
 		}
-		if msg.String() == "shift+tab" {
+		switch msg.String() {
+		case "shift+tab", "ctrl+p":
 			if e.sugIdx < 0 {
 				e.sugIdx = len(e.sugs) - 1
 			} else {
 				e.sugIdx = wrapCursor(e.sugIdx, -1, len(e.sugs))
 			}
-		} else {
+		default:
 			e.sugIdx = wrapCursor(e.sugIdx, 1, len(e.sugs))
 		}
 		e.ti.SetValue(e.sugs[e.sugIdx])

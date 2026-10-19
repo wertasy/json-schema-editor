@@ -41,7 +41,7 @@ var helpEntries = []helpEntry{
 	{"z", "show/hide fields with no value (null/unset)"},
 	{"gg / G", "jump to first / last row (Home/End too)"},
 	{"enter / right / l", "edit field · open submenu"},
-	{"tab / shift+tab", "complete to the next / previous candidate"},
+	{"tab / shift+tab", "complete next / previous candidate (ctrl+n / ctrl+p)"},
 	{"left / h", "back one level"},
 	{"esc / q", "cancel / back — q is a full alias outside text inputs;"},
 	{"", "at the root: quit, asking to save when the doc changed"},

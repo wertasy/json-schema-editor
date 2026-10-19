@@ -48,6 +48,10 @@ func key(k string) tea.KeyMsg {
 		return tea.KeyMsg{Type: tea.KeyCtrlS}
 	case "ctrl+r":
 		return tea.KeyMsg{Type: tea.KeyCtrlR}
+	case "ctrl+n":
+		return tea.KeyMsg{Type: tea.KeyCtrlN}
+	case "ctrl+p":
+		return tea.KeyMsg{Type: tea.KeyCtrlP}
 	case "alt+i":
 		return tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("i"), Alt: true}
 	case "alt+x":

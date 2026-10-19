@@ -261,6 +261,23 @@ func TestCompletionShiftTabReverses(t *testing.T) {
 	if m.edit.sugIdx != 5 || m.edit.ti.Value() != "powershell" {
 		t.Fatalf("shift+tab must wrap to the last candidate: idx=%d value=%q", m.edit.sugIdx, m.edit.ti.Value())
 	}
+
+	// ctrl+p/ctrl+n are fallbacks for terminals without ESC[Z support: they
+	// mirror shift+tab/tab, including starting a fresh reverse cycle at the
+	// last candidate.
+	m.edit.sugIdx = -1
+	press(m, "ctrl+p")
+	if m.edit.sugIdx != 5 || m.edit.ti.Value() != "powershell" {
+		t.Fatalf("fresh ctrl+p: idx=%d value=%q, want the last candidate", m.edit.sugIdx, m.edit.ti.Value())
+	}
+	press(m, "ctrl+p")
+	if m.edit.sugIdx != 4 || m.edit.ti.Value() != "cmd" {
+		t.Fatalf("second ctrl+p: idx=%d value=%q, want cmd", m.edit.sugIdx, m.edit.ti.Value())
+	}
+	press(m, "ctrl+n")
+	if m.edit.sugIdx != 5 || m.edit.ti.Value() != "powershell" {
+		t.Fatalf("ctrl+n: idx=%d value=%q, want powershell", m.edit.sugIdx, m.edit.ti.Value())
+	}
 }
 
 // TestCompletionSkipsMultilineValues: script blocks and other multiline text
