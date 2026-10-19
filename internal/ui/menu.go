@@ -93,7 +93,10 @@ var (
 	mValBool = lipgloss.NewStyle().Foreground(lipgloss.AdaptiveColor{Light: "127", Dark: "212"})
 	mValEnum = lipgloss.NewStyle().Foreground(lipgloss.AdaptiveColor{Light: "166", Dark: "215"})
 	mValObj  = lipgloss.NewStyle().Bold(true)
-	mDiff    = lipgloss.NewStyle().Bold(true).Foreground(lipgloss.AdaptiveColor{Light: "161", Dark: "204"}) // changed values
+	// Schema-default previews: brighter than the hint bar's gray so they read
+	// as values, while staying visually distinct from explicitly set values.
+	mValDefault = lipgloss.NewStyle().Foreground(lipgloss.AdaptiveColor{Light: "251", Dark: "253"})
+	mDiff       = lipgloss.NewStyle().Bold(true).Foreground(lipgloss.AdaptiveColor{Light: "161", Dark: "204"}) // changed values
 )
 
 // editState is an in-place scalar input on one field row.
@@ -1470,12 +1473,12 @@ func (m *listModel) showsSchemaDefault(fn *smodel.FormNode, path []any) bool {
 	return !ok || v == nil || v.Null
 }
 
-// valueStyle picks the value-summary color: schema defaults use the hint
-// bar's gray, unset faint, enums amber, booleans magenta, numbers green,
-// strings cyan, containers bold.
+// valueStyle picks the value-summary color: schema-default previews use a
+// slightly brighter gray than the hint bar, unset faint, enums amber,
+// booleans magenta, numbers green, strings cyan, containers bold.
 func (m *listModel) valueStyle(fn *smodel.FormNode, path []any) lipgloss.Style {
 	if m.showsSchemaDefault(fn, path) {
-		return mHelp
+		return mValDefault
 	}
 	v, ok := m.doc.Get(path)
 	if !ok || v == nil || v.Null {

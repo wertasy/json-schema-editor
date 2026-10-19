@@ -217,10 +217,10 @@ func TestSchemaDescColorDistinctFromHelp(t *testing.T) {
 	}
 }
 
-// TestSchemaDefaultPreviewUsesHelpGray: a default previewed because the key
-// is unset or null uses the hint bar's neutral gray. Explicit values keep
-// their type color even when they happen to equal the schema default.
-func TestSchemaDefaultPreviewUsesHelpGray(t *testing.T) {
+// TestSchemaDefaultPreviewColor: a default previewed because the key is
+// unset or null uses a slightly brighter gray than the hint bar. Explicit
+// values keep their type color even when they equal the schema default.
+func TestSchemaDefaultPreviewColor(t *testing.T) {
 	old := lipgloss.ColorProfile()
 	lipgloss.SetColorProfile(termenv.TrueColor)
 	t.Cleanup(func() { lipgloss.SetColorProfile(old) })
@@ -232,7 +232,10 @@ func TestSchemaDefaultPreviewUsesHelpGray(t *testing.T) {
 	host := childOf(t, server, "host")   // explicitly 0.0.0.0, the default
 	debug := childOf(t, server, "debug") // set true, default false
 	ratio := childOf(t, server, "ratio") // unset, no default
-	help := mHelp.Render("x")
+	def := mValDefault.Render("x")
+	if def == mHelp.Render("x") {
+		t.Fatal("default previews must be brighter than the hint bar gray")
+	}
 
 	m := newListModel(root, testDoc(), Options{})
 	cases := []struct {
@@ -241,7 +244,7 @@ func TestSchemaDefaultPreviewUsesHelpGray(t *testing.T) {
 		path []any
 		want string
 	}{
-		{"unset default preview", mode, []any{"mode"}, help},
+		{"unset default preview", mode, []any{"mode"}, def},
 		{"explicit number default", port, []any{"server", "port"}, mValNum.Render("x")},
 		{"explicit string default", host, []any{"server", "host"}, mValStr.Render("x")},
 		{"non-default bool", debug, []any{"server", "debug"}, mValBool.Render("x")},
@@ -255,8 +258,8 @@ func TestSchemaDefaultPreviewUsesHelpGray(t *testing.T) {
 
 	// Null is not a document value: it still previews the default in gray.
 	mNull := newListModel(root, tobj(tmem("mode", tnull())), Options{})
-	if got := mNull.valueStyle(mode, []any{"mode"}).Render("x"); got != help {
-		t.Errorf("null default preview: SGR = %q, want %q", got, help)
+	if got := mNull.valueStyle(mode, []any{"mode"}).Render("x"); got != def {
+		t.Errorf("null default preview: SGR = %q, want %q", got, def)
 	}
 	// An enum explicitly set to its default keeps the enum color.
 	m2 := newListModel(root, tobj(tmem("mode", tstr("http"))), Options{})
@@ -267,8 +270,8 @@ func TestSchemaDefaultPreviewUsesHelpGray(t *testing.T) {
 	// The rendered rows carry the same styles: only previews are gray.
 	view := m.View()
 	for _, want := range []string{
-		mHelp.Render("http"),     // unset enum default preview
-		mValStr.Render("webapp"), // ordinary value
+		mValDefault.Render("http"), // unset enum default preview
+		mValStr.Render("webapp"),   // ordinary value
 	} {
 		if !strings.Contains(view, want) {
 			t.Errorf("root view missing %q:\n%s", want, view)
