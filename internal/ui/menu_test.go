@@ -106,7 +106,7 @@ func TestMenuRootView(t *testing.T) {
 		"Server", "port=8080 host=0.0.0.0 +1", "—",
 		"Name*", "Server*", // required star shows regardless of a set value
 		"Mounts", "1 item", "Auth", "Save and exit", "Edit raw JSON",
-		"↑/↓ move · enter edit/open · esc back · ctrl+s save · / search · ? help",
+		"↑/↓ move · enter edit/open · esc back · ctrl+s/w save · / search · ? help",
 	} {
 		if !contains(v, want) {
 			t.Errorf("root view missing %q:\n%s", want, v)
@@ -603,6 +603,17 @@ func TestMenuSaveFlow(t *testing.T) {
 	}
 	if cmd != nil {
 		t.Fatal("ctrl+s must not quit; only the Save and exit row ends the session")
+	}
+
+	// w is a plain alias for ctrl+s in list mode
+	var savesW int
+	mw := newListModel(testModel(), testDoc(), countSave(&savesW))
+	_, cmd = mw.Update(key("w"))
+	if savesW != 1 || !mw.saved || mw.withErrors {
+		t.Fatal("w must save when validation passes")
+	}
+	if cmd != nil {
+		t.Fatal("w must stay in the session like ctrl+s")
 	}
 
 	// validation errors block, then dismiss

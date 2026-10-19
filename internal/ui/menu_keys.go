@@ -94,47 +94,55 @@ func (m *listModel) keyList(msg tea.KeyMsg) tea.Cmd {
 		m.openSearch(false)
 	case "r":
 		m.openSearch(true)
-	case "ctrl+s":
+	case "ctrl+s", "w":
 		return m.save()
 	}
 	return nil
 }
 
-// toggleEmptyKeys flips the z filter. The cursor follows its row when that
-// row stays visible; when it was a hidden empty key, the next surviving row
-// (clamped at the end) takes the selection.
+// toggleEmptyKeys flips the z filter for every stacked menu. The filter is
+// global, so parent levels must remap their saved cursor too: hiding rows in
+// a child menu must not make esc return to an unrelated row in the parent.
+// Each cursor follows its row when that row stays visible; when it was a
+// hidden empty key, the next surviving row (clamped at the end) takes the
+// selection.
 func (m *listModel) toggleEmptyKeys() {
-	st := m.top()
-	oldRows := menuRows(m)
-	m.clampCursor(oldRows)
-	var cur row
-	hasCur := st.cursor >= 0 && st.cursor < len(oldRows)
-	if hasCur {
-		cur = oldRows[st.cursor]
+	type level struct {
+		st   *menuState
+		rows []row
+	}
+	levels := make([]level, len(m.stack))
+	for i, st := range m.stack {
+		rows := menuRowsFor(m, st)
+		clampStateCursor(st, rows)
+		levels[i] = level{st: st, rows: rows}
 	}
 	m.hideEmpty = !m.hideEmpty
-	rows := menuRows(m)
-	if hasCur {
-		if i := indexSameRow(rows, cur); i >= 0 {
-			st.cursor = i
-		} else {
-			// The cursor's row vanished: land on the next row that survives
-			// the filter (Save/raw action rows included), not merely the same
-			// numeric position.
-			for j := st.cursor + 1; j < len(oldRows); j++ {
-				if i := indexSameRow(rows, oldRows[j]); i >= 0 {
-					st.cursor = i
-					break
-				}
-			}
-		}
+	for _, lv := range levels {
+		remapStateCursor(lv.st, lv.rows, menuRowsFor(m, lv.st))
 	}
-	m.clampCursor(rows)
 	if m.hideEmpty {
 		m.notice = "empty fields hidden · z shows them"
 	} else {
 		m.notice = "empty fields shown"
 	}
+}
+
+// remapStateCursor moves st.cursor onto the same row after a row-set change.
+// If that row was hidden, the next surviving row in the old order wins.
+func remapStateCursor(st *menuState, before, after []row) {
+	if st == nil {
+		return
+	}
+	if st.cursor >= 0 && st.cursor < len(before) {
+		for i := st.cursor; i < len(before); i++ {
+			if j := indexSameRow(after, before[i]); j >= 0 {
+				st.cursor = j
+				return
+			}
+		}
+	}
+	clampStateCursor(st, after)
 }
 
 // indexSameRow finds the line sameMenuRow identifies, -1 when it is gone.

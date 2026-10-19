@@ -21,7 +21,7 @@ import (
 	"github.com/wertasy/json-schema-editor/internal/smodel"
 )
 
-const menuHelp = "↑/↓ move · enter edit/open · esc back · ctrl+s save · / search · ? help"
+const menuHelp = "↑/↓ move · enter edit/open · esc back · ctrl+s/w save · / search · ? help"
 
 // helpEntry is one row of the "?" key reference. keys is the left column;
 // empty means a continuation line aligned under the descriptions.
@@ -51,7 +51,7 @@ var helpEntries = []helpEntry{
 	{"J / K", "move the item under the cursor down / up"},
 	{"ctrl+t", "switch the variant type of a oneOf value"},
 	{"u / ctrl+r", "undo / redo"},
-	{"ctrl+s", "save (stay in the session)"},
+	{"ctrl+s / w", "save (stay in the session)"},
 	{"/", "search below the current path"},
 	{"r", "search & replace string values"},
 	{"alt+x", "regex toggle (default on): match the query as a regular expression ($1 groups in replace)"},
@@ -1553,8 +1553,11 @@ func (m *listModel) enumMemberOn(r row) bool {
 	return false
 }
 
-func (m *listModel) clampCursor(rows []row) {
-	st := m.top()
+// clampStateCursor keeps st.cursor inside rows.
+func clampStateCursor(st *menuState, rows []row) {
+	if st == nil {
+		return
+	}
 	max := len(rows) - 1
 	if max < 0 {
 		max = 0
@@ -1565,6 +1568,10 @@ func (m *listModel) clampCursor(rows []row) {
 	if st.cursor < 0 {
 		st.cursor = 0
 	}
+}
+
+func (m *listModel) clampCursor(rows []row) {
+	clampStateCursor(m.top(), rows)
 }
 
 // --- overlay views -------------------------------------------------------

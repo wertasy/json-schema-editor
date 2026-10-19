@@ -176,6 +176,32 @@ func TestEmptyFilterKeepsCursorOnVisibleKey(t *testing.T) {
 	}
 }
 
+// TestEmptyFilterRemapsParentCursorAfterChildToggle: z is global, so hiding
+// empty rows from a child menu must also shift the saved cursor of every
+// parent menu. Otherwise esc returns to the numeric position in the unfiltered
+// list, which may be an unrelated row (here: < Save and exit >).
+func TestEmptyFilterRemapsParentCursorAfterChildToggle(t *testing.T) {
+	m, _ := emptyFilterModel(t)
+	itemsAt := rowIndexAtPath(m, "items")
+	m.top().cursor = itemsAt
+	press(m, "enter")
+	if len(m.stack) != 2 {
+		t.Fatalf("stack depth = %d, want the items menu open", len(m.stack))
+	}
+
+	press(m, "z")
+	press(m, "esc")
+	if len(m.stack) != 1 {
+		t.Fatalf("stack depth = %d, want back at the root", len(m.stack))
+	}
+	if got, want := m.top().cursor, rowIndexAtPath(m, "items"); got != want {
+		t.Fatalf("parent cursor = %d, want %d (Items row)", got, want)
+	}
+	if r := rowAtCursor(m); !pathEq(r.path, []any{"items"}) {
+		t.Fatalf("parent cursor landed on %+v, want Items", r)
+	}
+}
+
 func TestEmptyFilterHidesMapMembers(t *testing.T) {
 	m, doc := nullKeyModel(t)
 	doc.Set([]any{"headers", "Host"}, tnull())
