@@ -165,13 +165,13 @@ func TestSummaryRules(t *testing.T) {
 	if got := summary(lm5, mounts, []any{"mounts"}); got != "2 items" {
 		t.Errorf("two items = %q, want 2 items", got)
 	}
-	// long string clipped to 24 runes including ellipsis
+	// long string clipped to 32 runes including ellipsis
 	long := make([]byte, 40)
 	for i := range long {
 		long[i] = 'a'
 	}
 	lm6 := lmAt(tobj(tmem("name", tstr(string(long)))))
-	if got := summary(lm6, name, []any{"name"}); got != string(long[:23])+"…" {
+	if got := summary(lm6, name, []any{"name"}); got != string(long[:31])+"…" {
 		t.Errorf("long string = %q", got)
 	}
 	// string lists preview their members: [N] v0 v1 v2 +rest

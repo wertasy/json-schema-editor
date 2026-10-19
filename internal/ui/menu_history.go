@@ -72,7 +72,8 @@ func (m *listModel) repairStack() {
 // textarea, search, add-key input): q/@/. are ordinary characters
 // there and history keys must not fire.
 func (m *listModel) typing() bool {
-	return m.edit != nil || m.text != nil || m.search.active || m.add != nil
+	return m.edit != nil || m.text != nil || m.search.active || m.add != nil ||
+		m.anc != nil
 }
 
 func (m *listModel) listMode() bool {

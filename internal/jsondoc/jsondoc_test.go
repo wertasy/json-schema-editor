@@ -513,3 +513,83 @@ func TestParseErrors(t *testing.T) {
 		}
 	}
 }
+
+// sharedDoc builds {"base":&x {"p":1},"copy":<same node>}: the shape
+// yamldoc.Parse produces for "base: &x {p: 1}\ncopy: *x".
+func sharedDoc(t *testing.T) *Node {
+	t.Helper()
+	n, err := Parse(strings.NewReader(`{"base":{"p":1}}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	base, _ := n.Get([]any{"base"})
+	base.Anchor = "x"
+	n.Set([]any{"copy"}, base)
+	return n
+}
+
+func TestClonePreservesAliasSharing(t *testing.T) {
+	n := sharedDoc(t)
+	want := n.String()
+	c := n.Clone()
+	if c.String() != want {
+		t.Fatalf("Clone changed content: %s vs %s", c.String(), want)
+	}
+	cb, _ := c.Get([]any{"base"})
+	cc, _ := c.Get([]any{"copy"})
+	if cb != cc {
+		t.Fatal("Clone broke alias sharing")
+	}
+	nb, _ := n.Get([]any{"base"})
+	if cb == nb {
+		t.Fatal("Clone aliases the original")
+	}
+	// Writing through the occurrence updates the anchor and vice versa;
+	// the source tree stays untouched.
+	c.Set([]any{"copy", "p"}, FromAny(2))
+	if got, _ := c.Get([]any{"base", "p"}); got.Num.String() != "2" {
+		t.Fatalf("shared write did not reach the anchor: %s", c.String())
+	}
+	if n.String() != want {
+		t.Fatalf("original mutated: %s", n.String())
+	}
+}
+
+func TestSetWritesThroughAnchoredNode(t *testing.T) {
+	n := sharedDoc(t)
+	base, _ := n.Get([]any{"base"})
+	copyN, _ := n.Get([]any{"copy"})
+	if base != copyN {
+		t.Fatal("fixture is not shared")
+	}
+	n.Set([]any{"copy"}, FromAny("replaced"))
+	if base.Str == nil || *base.Str != "replaced" {
+		t.Fatalf("Set did not write through: %s", base.String())
+	}
+	if base.Anchor != "x" {
+		t.Fatalf("anchor lost: %q", base.Anchor)
+	}
+}
+
+func TestDetachBreaksAliasSharing(t *testing.T) {
+	n := sharedDoc(t)
+	mem, _ := n.Get([]any{"copy"})
+	cp := mem.CloneDetached()
+	if !n.Detach([]any{"copy"}, cp) {
+		t.Fatal("Detach failed")
+	}
+	base, _ := n.Get([]any{"base"})
+	if base == cp {
+		t.Fatal("Detach did not break the reference")
+	}
+	if cp.Anchor != "" {
+		t.Fatalf("CloneDetached kept the anchor %q", cp.Anchor)
+	}
+	n.Set([]any{"base", "p"}, FromAny(9))
+	if got, _ := n.Get([]any{"copy", "p"}); got.Num.String() != "1" {
+		t.Fatalf("detached copy followed the anchor: %s", n.String())
+	}
+	if n.Detach([]any{"missing"}, cp) {
+		t.Fatal("Detach reported success on a missing path")
+	}
+}

@@ -2,8 +2,13 @@
 //
 // YAML comments follow the key or value they belong to: an edited member
 // keeps its comments, a deleted member takes its comments with it, and a
-// newly added member has none. Anchors and aliases are expanded while
-// parsing; the returned Meta reports how many aliases were expanded.
+// newly added member has none. Anchors are kept on the parsed nodes and
+// alias occurrences share the anchored node (no auto-expansion into
+// independent copies): viewing and editing through a reference reaches the
+// anchored original, and Write restores "&anchor" / "*alias" — unless the
+// reference was materialized (its anchor identity dropped), which writes
+// plain content. The returned Meta reports how many alias references the
+// document carries and where the anchors were defined.
 //
 // This package only depends on jsondoc: it knows nothing about the editor,
 // the docfmt interface, or other formats.
@@ -30,8 +35,13 @@ type Meta struct {
 	// ByPath maps a jsondoc path key (see pathKey) to the comments captured
 	// for that member, array item, or the document root.
 	ByPath map[string]commentSet
-	// Aliases counts the YAML aliases expanded while parsing.
+	// Aliases counts the YAML alias references found while parsing.
 	Aliases int
+
+	// built memoizes anchored nodes while parsing: an alias occurrence
+	// returns the memoized jsondoc node instead of building a copy, so
+	// every reference shares one node and edits write the same data.
+	built map[*yaml.Node]*jsondoc.Node
 }
 
 // commentSet holds the comments attached to one key/value pair. Key* belong
@@ -161,8 +171,8 @@ func (m *Meta) ClearSchemaDirective(doc *jsondoc.Node) {
 	}
 }
 
-// Parse reads one YAML document into a jsondoc tree, expanding aliases and
-// capturing comments.
+// Parse reads one YAML document into a jsondoc tree, keeping anchors and
+// alias references (no expansion into copies) and capturing comments.
 func Parse(data []byte) (*jsondoc.Node, *Meta, error) {
 	dec := yaml.NewDecoder(bytes.NewReader(data))
 	var root yaml.Node
@@ -179,7 +189,10 @@ func Parse(data []byte) (*jsondoc.Node, *Meta, error) {
 		return nil, nil, err
 	}
 
-	meta := &Meta{ByPath: map[string]commentSet{}}
+	meta := &Meta{
+		ByPath: map[string]commentSet{},
+		built:  map[*yaml.Node]*jsondoc.Node{},
+	}
 	doc, err := walk(&root, nil, meta)
 	if err != nil {
 		return nil, nil, err
@@ -194,6 +207,14 @@ func walk(n *yaml.Node, path []any, meta *Meta) (*jsondoc.Node, error) {
 		if n.Alias == nil {
 			return &jsondoc.Node{Null: true}, nil
 		}
+		if j, ok := meta.built[n.Alias]; ok {
+			// The alias references the anchored node: share the jsondoc
+			// node, so a view or edit through any reference reaches the
+			// same data (YAML reference semantics, no expansion).
+			return j, nil
+		}
+		// Unreachable for well-formed YAML (an anchor is defined before
+		// its references, and walk registers it first); kept as a guard.
 		return walk(n.Alias, path, meta)
 	case yaml.DocumentNode:
 		if len(n.Content) == 0 {
@@ -220,6 +241,8 @@ func walk(n *yaml.Node, path []any, meta *Meta) (*jsondoc.Node, error) {
 		}
 		return out, nil
 	case yaml.MappingNode:
+		out := &jsondoc.Node{}
+		meta.anchorNode(out, n)
 		members := make([]jsondoc.Member, 0, len(n.Content)/2)
 		for i := 0; i+1 < len(n.Content); i += 2 {
 			k, v := n.Content[i], n.Content[i+1]
@@ -250,8 +273,11 @@ func walk(n *yaml.Node, path []any, meta *Meta) (*jsondoc.Node, error) {
 			}
 			members = append(members, jsondoc.Member{Key: k.Value, Val: val})
 		}
-		return &jsondoc.Node{Object: &members}, nil
+		out.Object = &members
+		return out, nil
 	case yaml.SequenceNode:
+		out := &jsondoc.Node{}
+		meta.anchorNode(out, n)
 		items := make([]*jsondoc.Node, 0, len(n.Content))
 		for i, child := range n.Content {
 			ipath := appendPath(path, i)
@@ -269,11 +295,29 @@ func walk(n *yaml.Node, path []any, meta *Meta) (*jsondoc.Node, error) {
 			}
 			items = append(items, val)
 		}
-		return &jsondoc.Node{Array: &items}, nil
+		out.Array = &items
+		return out, nil
 	case yaml.ScalarNode:
-		return scalarNode(n)
+		out, err := scalarNode(n)
+		if err != nil {
+			return nil, err
+		}
+		meta.anchorNode(out, n)
+		return out, nil
 	}
 	return nil, fmt.Errorf("unsupported YAML node kind %d", n.Kind)
+}
+
+// anchorNode records n's YAML anchor on the freshly built jsondoc node: the
+// name rides the node (Write emits it at the first occurrence and turns the
+// later ones into alias references). Registering the node before its children
+// are walked keeps recursive anchors finite.
+func (m *Meta) anchorNode(j *jsondoc.Node, n *yaml.Node) {
+	if n.Anchor == "" {
+		return
+	}
+	m.built[n] = j
+	j.Anchor = n.Anchor
 }
 
 // jsonNumber matches a literal that is already valid JSON.
@@ -337,9 +381,12 @@ func normalizeNum(tag, raw string) (string, error) {
 }
 
 // Write emits the document as YAML with two-space indentation, restoring the
-// comments recorded in meta. meta may be nil.
+// comments recorded in meta. Anchors are written at the first occurrence of
+// the anchored node and later occurrences become alias references
+// ("*name"); nodes without anchor identity emit plain content. meta may be
+// nil, which also disables anchor/alias handling (plain value export).
 func Write(w io.Writer, doc *jsondoc.Node, meta *Meta) error {
-	root := build(doc, nil, meta)
+	root := build(doc, nil, meta, map[string]bool{})
 	enc := yaml.NewEncoder(w)
 	enc.SetIndent(2)
 	if err := enc.Encode(&yaml.Node{Kind: yaml.DocumentNode, Content: []*yaml.Node{root}}); err != nil {
@@ -351,8 +398,25 @@ func Write(w io.Writer, doc *jsondoc.Node, meta *Meta) error {
 // build converts one jsondoc node to a YAML node. Value-node comments come
 // from the comment set recorded at the node's own path; mapping-key comments
 // are applied by the parent loop (keys have no jsondoc node of their own).
-func build(n *jsondoc.Node, path []any, meta *Meta) *yaml.Node {
+// emitted tracks the anchor names already written: the first occurrence of
+// an anchored node carries the anchor, every later one is a "*name"
+// reference to it (a YAML alias must follow its definition).
+func build(n *jsondoc.Node, path []any, meta *Meta, emitted map[string]bool) *yaml.Node {
 	y := &yaml.Node{}
+	if meta != nil && n != nil && n.Anchor != "" {
+		if !emitted[n.Anchor] {
+			y.Anchor = n.Anchor
+			emitted[n.Anchor] = true
+		} else {
+			// An alias occurrence: the content lives at the anchor's own
+			// location, so only the reference is written here.
+			al := &yaml.Node{Kind: yaml.AliasNode, Value: n.Anchor}
+			if cs, ok := meta.ByPath[pathKey(path)]; ok {
+				al.HeadComment, al.LineComment, al.FootComment = cs.Head, cs.Line, cs.Foot
+			}
+			return al
+		}
+	}
 	if n == nil {
 		y.Kind, y.Tag, y.Value = yaml.ScalarNode, "!!null", "null"
 	} else {
@@ -369,14 +433,14 @@ func build(n *jsondoc.Node, path []any, meta *Meta) *yaml.Node {
 						k.HeadComment, k.LineComment, k.FootComment = cs.KeyHead, cs.KeyLine, cs.KeyFoot
 					}
 				}
-				y.Content = append(y.Content, k, build(m.Val, mpath, meta))
+				y.Content = append(y.Content, k, build(m.Val, mpath, meta, emitted))
 			}
 		case n.Array != nil:
 			y.Kind, y.Tag = yaml.SequenceNode, "!!seq"
 			items := *n.Array
 			y.Content = make([]*yaml.Node, 0, len(items))
 			for i, it := range items {
-				y.Content = append(y.Content, build(it, appendPath(path, i), meta))
+				y.Content = append(y.Content, build(it, appendPath(path, i), meta, emitted))
 			}
 		case n.Str != nil:
 			y.Kind, y.Tag, y.Value = yaml.ScalarNode, "!!str", *n.Str

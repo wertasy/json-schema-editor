@@ -131,6 +131,29 @@ func TestMenuRootView(t *testing.T) {
 	}
 }
 
+// TestMenuStatusAboveHelpBar pins the session status block to the bottom: it
+// renders directly above the hint bar (below the transient notice's slot),
+// not in the header.
+func TestMenuStatusAboveHelpBar(t *testing.T) {
+	m := newListModel(testModel(), testDoc(), Options{Status: "yaml: 1 alias kept\nschema from SchemaStore: GitHub Workflow"})
+	m.Update(tea.WindowSizeMsg{Width: 100, Height: 30})
+	lines := strings.Split(m.View(), "\n")
+	if len(lines) != 30 {
+		t.Fatalf("view has %d lines, want 30 with the status inside the frame:\n%s",
+			len(lines), m.View())
+	}
+	if !contains(lines[len(lines)-3], "alias kept") ||
+		!contains(lines[len(lines)-2], "SchemaStore") {
+		t.Fatalf("status must sit directly above the help bar:\n%s", m.View())
+	}
+	if !contains(lines[len(lines)-1], "? help") {
+		t.Fatalf("the help bar must stay on the last row:\n%s", m.View())
+	}
+	if contains(lines[0], "alias kept") || contains(lines[1], "alias kept") {
+		t.Fatalf("status must not render in the header:\n%s", m.View())
+	}
+}
+
 func TestMenuHelpPinnedToBottom(t *testing.T) {
 	m := newListModel(testModel(), testDoc(), Options{})
 	m.Update(tea.WindowSizeMsg{Width: 100, Height: 30})

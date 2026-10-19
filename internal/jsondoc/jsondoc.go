@@ -30,6 +30,13 @@ type Node struct {
 	Num    *json.Number // preserves the exact numeric literal ("1.0" stays "1.0")
 	Bool   *bool
 	Null   bool
+	// Anchor carries the YAML anchor name when the node was defined with
+	// "&name" ("" for plain JSON data). Alias occurrences of the same YAML
+	// node share one Node pointer, so a write through any reference reaches
+	// all of them; yamldoc emits the anchor at the first occurrence and
+	// alias references at the later ones. JSON parsers and writers ignore
+	// it (JSON documents never set it).
+	Anchor string
 }
 
 // Parse reads one JSON document from r, preserving key order and numeric
@@ -271,7 +278,7 @@ func (n *Node) Set(path []any, v *Node) {
 				*cur = *containerFor(path[i])
 			}
 			if last {
-				setMember(cur, k, v)
+				overwriteMember(cur, k, v)
 				return
 			}
 			child, ok := memberNode(cur, k)
@@ -304,7 +311,7 @@ func (n *Node) Set(path []any, v *Node) {
 				cur = child
 			case k >= 0 && k < len(items):
 				if last {
-					(*cur.Array)[k] = v
+					overwriteItem(cur, k, v)
 					return
 				}
 				child := items[k]
@@ -337,6 +344,76 @@ func setMember(n *Node, key string, v *Node) {
 		}
 	}
 	*n.Object = append(*n.Object, Member{Key: key, Val: v})
+}
+
+// overwriteMember is Set's member write at the last path segment. A current
+// value carrying a YAML anchor is written through in place with its anchor
+// kept: the node may be shared with alias occurrences, and swapping the
+// pointer would silently detach them — every reference sees the write, as
+// the YAML reference semantics demand. Plain nodes keep the historical
+// pointer store.
+func overwriteMember(n *Node, key string, v *Node) {
+	for i := range *n.Object {
+		if (*n.Object)[i].Key == key {
+			if old := (*n.Object)[i].Val; old != nil && old.Anchor != "" {
+				anchor := old.Anchor
+				*old = *v
+				old.Anchor = anchor
+				return
+			}
+			(*n.Object)[i].Val = v
+			return
+		}
+	}
+	*n.Object = append(*n.Object, Member{Key: key, Val: v})
+}
+
+// overwriteItem is Set's array write at the last path segment, with the
+// same anchored write-through as overwriteMember.
+func overwriteItem(n *Node, idx int, v *Node) {
+	if old := (*n.Array)[idx]; old != nil && old.Anchor != "" {
+		anchor := old.Anchor
+		*old = *v
+		old.Anchor = anchor
+		return
+	}
+	(*n.Array)[idx] = v
+}
+
+// Detach replaces the node at path with v even when that node is an anchored
+// (possibly alias-shared) node: materializing an alias into an independent
+// copy must break the reference, unlike Set which writes through to the
+// shared node. It reports whether the path existed.
+func (n *Node) Detach(path []any, v *Node) bool {
+	if len(path) == 0 {
+		*n = *v
+		return true
+	}
+	parent, ok := n.Get(path[:len(path)-1])
+	if !ok {
+		return false
+	}
+	switch k := path[len(path)-1].(type) {
+	case string:
+		if parent.Object == nil {
+			return false
+		}
+		for i := range *parent.Object {
+			if (*parent.Object)[i].Key == k {
+				(*parent.Object)[i].Val = v
+				return true
+			}
+		}
+		return false
+	case int:
+		if parent.Array == nil || k < 0 || k >= len(*parent.Array) {
+			return false
+		}
+		(*parent.Array)[k] = v
+		return true
+	default:
+		panic(fmt.Sprintf("jsondoc: invalid path element %T", k))
+	}
 }
 
 // Remove deletes the node at path, reporting whether it existed.
@@ -460,6 +537,12 @@ func (n *Node) InsertMember(path []any, key string, idx int, v *Node) {
 	}
 	for i := range *obj.Object {
 		if (*obj.Object)[i].Key == key {
+			if old := (*obj.Object)[i].Val; old != nil && old.Anchor != "" {
+				anchor := old.Anchor
+				*old = *v
+				old.Anchor = anchor
+				return
+			}
 			(*obj.Object)[i].Val = v
 			return
 		}
@@ -560,8 +643,56 @@ func FromAny(v any) *Node {
 
 // Clone returns a deep copy of the node tree, preserving member order and
 // exact numeric literals. Snapshots (undo history) must not alias the live
-// document nor reorder it.
+// document nor reorder it. YAML alias sharing is preserved within the copy:
+// an anchored node and its occurrences stay one node, so a restored document
+// keeps its references intact (the anchor name rides along in Node.Anchor).
 func (n *Node) Clone() *Node {
+	return n.clone(map[*Node]*Node{})
+}
+
+func (n *Node) clone(memo map[*Node]*Node) *Node {
+	if n == nil {
+		return nil
+	}
+	if c, ok := memo[n]; ok {
+		return c
+	}
+	c := &Node{Anchor: n.Anchor, Null: n.Null}
+	memo[n] = c // registered before the children: recursive sharing survives
+	if n.Object != nil {
+		obj := make([]Member, len(*n.Object))
+		for i, mem := range *n.Object {
+			obj[i] = Member{Key: mem.Key, Val: mem.Val.clone(memo)}
+		}
+		c.Object = &obj
+	}
+	if n.Array != nil {
+		arr := make([]*Node, len(*n.Array))
+		for i, v := range *n.Array {
+			arr[i] = v.clone(memo)
+		}
+		c.Array = &arr
+	}
+	if n.Str != nil {
+		s := *n.Str
+		c.Str = &s
+	}
+	if n.Num != nil {
+		v := *n.Num
+		c.Num = &v
+	}
+	if n.Bool != nil {
+		b := *n.Bool
+		c.Bool = &b
+	}
+	return c
+}
+
+// CloneDetached returns a deep copy with alias sharing dissolved: every node
+// becomes its own and the anchor identity is dropped throughout, so writing
+// the copy emits plain content and edits to it never reach the anchored
+// original. This is how an alias occurrence is materialized (expanded).
+func (n *Node) CloneDetached() *Node {
 	if n == nil {
 		return nil
 	}
@@ -569,14 +700,14 @@ func (n *Node) Clone() *Node {
 	if n.Object != nil {
 		obj := make([]Member, len(*n.Object))
 		for i, mem := range *n.Object {
-			obj[i] = Member{Key: mem.Key, Val: mem.Val.Clone()}
+			obj[i] = Member{Key: mem.Key, Val: mem.Val.CloneDetached()}
 		}
 		c.Object = &obj
 	}
 	if n.Array != nil {
 		arr := make([]*Node, len(*n.Array))
 		for i, v := range *n.Array {
-			arr[i] = v.Clone()
+			arr[i] = v.CloneDetached()
 		}
 		c.Array = &arr
 	}

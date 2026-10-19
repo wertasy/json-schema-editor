@@ -55,6 +55,7 @@ const (
 	rowVariant                // oneOf variant picker line
 	rowNoItems                // placeholder for empty menus
 	rowUnknown                // document key the schema does not define
+	rowExpand                 // "< Expand >": materialize a YAML alias occurrence
 	rowIssues                 // "<err|warn> N validation errors" status row (root)
 )
 
@@ -107,6 +108,14 @@ func menuRowsFor(lm *listModel, st *menuState) []row {
 		return nil
 	}
 	var rows []row
+	// A YAML alias occurrence drills into the anchored original the
+	// reference points at; < Expand > tops the menu so the reference can be
+	// materialized into an independent copy. Without expanding, the menu
+	// keeps viewing and editing the anchored object.
+	if _, ok := lm.aliasAt(st.path); ok {
+		rows = append(rows, row{kind: rowExpand, path: clonePath(st.path),
+			idx: -1, label: "< Expand >"})
+	}
 	// A menu for an array item (path ends with an index) offers removal.
 	if len(st.path) > 0 && st.kind != menuEnumArray {
 		if _, ok := st.path[len(st.path)-1].(int); ok {
@@ -317,6 +326,7 @@ func itemRow(node *smodel.FormNode, parentPath []any, i int) row {
 
 // summary renders the right-hand value column for fn at path: the current
 // doc value, or the effective default when unset, "—" when neither exists.
+// Reference/anchor identity is shown on the row title (anchorBadge).
 func summary(lm *listModel, fn *smodel.FormNode, path []any) string {
 	v, ok := lm.doc.Get(path)
 	if !ok || v == nil || v.Null {
@@ -463,10 +473,12 @@ func objectSummary(fn *smodel.FormNode, n *jsondoc.Node) string {
 	return s
 }
 
-// valueClip truncates a scalar value for the single-line summary column (24
-// runes, ellipsis included). Line breaks and tab runs fold into single spaces
-// so block values (scripts, embedded documents) never split a row.
-func valueClip(s string) string { return clipRunes(squashSpace(s), 24) }
+// valueClip truncates a scalar value for the single-line summary column (32
+// runes, ellipsis included — long anchor/reference badges share the column,
+// so the value keeps a readable tail). Line breaks and tab runs fold into
+// single spaces so block values (scripts, embedded documents) never split a
+// row.
+func valueClip(s string) string { return clipRunes(squashSpace(s), 32) }
 
 // squashSpace folds every whitespace run into one space; values without
 // line breaks or tabs are returned untouched (their own spacing is kept).

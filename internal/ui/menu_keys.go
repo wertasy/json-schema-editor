@@ -46,6 +46,14 @@ func (m *listModel) keyList(msg tea.KeyMsg) tea.Cmd {
 		m.copyRow(r, true)
 	case "z":
 		m.toggleEmptyKeys()
+	case "e":
+		if path, ok := m.expandTarget(r); ok {
+			m.expandAlias(path)
+		}
+	case "&":
+		m.openAnchor(r, anchorSet)
+	case "*":
+		m.openAnchor(r, refSet)
 	case "enter", "right", "l":
 		if (msg.String() == "right" || msg.String() == "l") && r.kind == rowField && r.fn.Kind == smodel.KEnum {
 			m.cycleEnum(r, 1)
@@ -192,6 +200,8 @@ func (m *listModel) activate(r row) tea.Cmd {
 		m.toggleEnumMember(r)
 	case rowUnknown:
 		return m.activateUnknown(r.path)
+	case rowExpand:
+		m.expandAlias(r.path)
 	case rowIssues:
 		m.openIssues()
 	}

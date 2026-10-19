@@ -90,7 +90,7 @@ func TestParseErrors(t *testing.T) {
 	}
 }
 
-func TestParseAliasExpands(t *testing.T) {
+func TestParseAliasKeepsReference(t *testing.T) {
 	doc, meta, err := Parse([]byte("a: &x {p: 1}\nb: *x\n"))
 	if err != nil {
 		t.Fatal(err)
@@ -101,6 +101,92 @@ func TestParseAliasExpands(t *testing.T) {
 	}
 	if meta.Aliases != 1 {
 		t.Fatalf("aliases = %d, want 1", meta.Aliases)
+	}
+	a, _ := doc.Get([]any{"a"})
+	b, _ := doc.Get([]any{"b"})
+	if a != b {
+		t.Fatal("alias occurrence should share the anchored node")
+	}
+	if a.Anchor != "x" {
+		t.Fatalf("anchor = %q, want x", a.Anchor)
+	}
+	// Editing through the reference writes the anchored original.
+	doc.Set([]any{"b", "p"}, mustJSON(t, `2`))
+	if got, _ := doc.Get([]any{"a", "p"}); got.Num.String() != "2" {
+		t.Fatalf("reference edit did not reach the original: %s", doc.String())
+	}
+}
+
+func TestParseScalarAliasShares(t *testing.T) {
+	doc, meta, err := Parse([]byte("a: &s 42\nb: *s\n"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	a, _ := doc.Get([]any{"a"})
+	b, _ := doc.Get([]any{"b"})
+	if a != b {
+		t.Fatal("scalar alias should share the anchored node")
+	}
+	if meta.Aliases != 1 {
+		t.Fatalf("aliases = %d, want 1", meta.Aliases)
+	}
+	// A write through the reference keeps both views in sync.
+	doc.Set([]any{"b"}, &jsondoc.Node{Str: new("replaced")})
+	if a.Str == nil || *a.Str != "replaced" {
+		t.Fatalf("scalar write-through failed: %s", a.String())
+	}
+}
+
+func TestWriteRestoresAnchorsAndAliases(t *testing.T) {
+	const src = "base: &x\n  p: 1\ncopy: *x\n"
+	doc, meta, err := Parse([]byte(src))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := writeString(t, doc, meta); got != src {
+		t.Fatalf("output:\n%s\nwant:\n%s", got, src)
+	}
+}
+
+func TestWriteDropsAliasAfterExpand(t *testing.T) {
+	doc, meta, err := Parse([]byte("base: &x {p: 1}\ncopy: *x\n"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	mem, _ := doc.Get([]any{"copy"})
+	if !doc.Detach([]any{"copy"}, mem.CloneDetached()) {
+		t.Fatal("detach failed")
+	}
+	const want = "base: &x\n  p: 1\ncopy:\n  p: 1\n"
+	out := writeString(t, doc, meta)
+	if out != want {
+		t.Fatalf("output:\n%s\nwant:\n%s", out, want)
+	}
+	// Re-parsing yields two independent objects.
+	doc2, meta2, err := Parse([]byte(out))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if meta2.Aliases != 0 {
+		t.Fatalf("aliases = %d, want 0 after expand", meta2.Aliases)
+	}
+	a2, ok := doc2.Get([]any{"base"})
+	if !ok || a2.Anchor != "x" {
+		t.Fatalf("base anchor lost: %#v", a2)
+	}
+	b2, _ := doc2.Get([]any{"copy"})
+	if b2 == nil || b2.Anchor != "" {
+		t.Fatalf("expanded copy should be plain data, got %#v", b2)
+	}
+}
+
+func TestWriteNilMetaIgnoresAnchors(t *testing.T) {
+	doc := mustJSON(t, `{"a":{"p":1}}`)
+	if a, _ := doc.Get([]any{"a"}); a != nil {
+		a.Anchor = "x"
+	}
+	if got := writeString(t, doc, nil); got != "a:\n  p: 1\n" {
+		t.Fatalf("nil meta must export plain content, got %q", got)
 	}
 }
 

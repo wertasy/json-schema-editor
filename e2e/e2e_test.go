@@ -1542,3 +1542,222 @@ func TestPtyUndoRedo(t *testing.T) {
 		t.Fatalf("exit after ctrl+c = %v, want 130", waitErr)
 	}
 }
+
+// aliasPtyFiles writes the schema and YAML document shared by the alias
+// tests: copy references base through *x.
+func aliasPtyFiles(t *testing.T) (dir, schema, cfg string) {
+	t.Helper()
+	dir = t.TempDir()
+	schema = filepath.Join(dir, "alias.schema.json")
+	cfg = filepath.Join(dir, "o.yaml")
+	writeFile(t, schema, `{"type":"object","properties":{
+		"base":{"type":"object","title":"Base","properties":{
+			"p":{"type":"integer","title":"P"}}},
+		"copy":{"type":"object","title":"Copy","properties":{
+			"p":{"type":"integer","title":"P"}}}}}`)
+	writeFile(t, cfg, "base: &x\n  p: 1\ncopy: *x\n")
+	return dir, schema, cfg
+}
+
+// TestPtyYAMLAliasEditKeepsReference proves the core alias contract on the
+// real TUI: an aliased object's menu shows the anchored original with
+// < Expand > on top, editing through it writes the original, and the saved
+// file still carries the "*x" reference (no auto-expansion).
+func TestPtyYAMLAliasEditKeepsReference(t *testing.T) {
+	_, schema, cfg := aliasPtyFiles(t)
+
+	cmd := exec.Command(jseBin, "-s", schema, cfg)
+	cmd.Dir = ".."
+	cmd.Env = append(os.Environ(), "TERM=xterm-256color")
+	tty, err := pty.StartWithSize(cmd, &pty.Winsize{Rows: 30, Cols: 120})
+	if err != nil {
+		t.Skipf("no pty available: %v", err)
+	}
+	defer tty.Close()
+
+	go func() {
+		time.Sleep(300 * time.Millisecond)
+		tty.Write([]byte("\x1b[B\r")) // ↓ → Copy, enter → drill into the alias
+		time.Sleep(300 * time.Millisecond)
+		tty.Write([]byte("\x1b[B\r\x7f9\r")) // ↓ past < Expand >, edit P (backspace clears the prefilled 1)
+		time.Sleep(300 * time.Millisecond)
+		tty.Write([]byte("\x13")) // ctrl+s save
+	}()
+
+	buf := make([]byte, 4096)
+	var all bytes.Buffer
+	saved := false
+	deadline := time.Now().Add(15 * time.Second)
+	for time.Now().Before(deadline) {
+		n, err := tty.Read(buf)
+		if n > 0 {
+			all.Write(buf[:n])
+			if strings.Contains(all.String(), "Saved") {
+				saved = true
+				break
+			}
+		}
+		if err != nil {
+			break
+		}
+	}
+	if !saved {
+		t.Fatalf("ctrl+s must save; screen:\n%s", all.String())
+	}
+	screen := all.String()
+	if !strings.Contains(screen, "< Expand >") {
+		t.Errorf("alias menu must offer < Expand > on top; screen:\n%s", screen)
+	}
+	tty.Write([]byte("\x03"))
+	waitErr := cmd.Wait()
+	if ee, ok := waitErr.(*exec.ExitError); !ok || ee.ExitCode() != 130 {
+		t.Fatalf("exit after abort = %v, want 130", waitErr)
+	}
+
+	content, err := os.ReadFile(cfg)
+	if err != nil {
+		t.Fatal(err)
+	}
+	text := string(content)
+	// The yaml-language-server comment heads the file; check the data lines.
+	if !strings.Contains(text, "base: &x") || !strings.Contains(text, "p: 9") {
+		t.Errorf("edit through the alias must write the anchored original:\n%s", text)
+	}
+	if !strings.Contains(text, "copy: *x") {
+		t.Errorf("an unexpanded alias must be written back as a reference:\n%s", text)
+	}
+}
+
+// TestPtyYAMLAliasExpand proves < Expand > materializes the reference: the
+// saved file turns copy into plain content while base keeps its anchor, and
+// the later edit stays local to copy.
+func TestPtyYAMLAliasExpand(t *testing.T) {
+	_, schema, cfg := aliasPtyFiles(t)
+
+	cmd := exec.Command(jseBin, "-s", schema, cfg)
+	cmd.Dir = ".."
+	cmd.Env = append(os.Environ(), "TERM=xterm-256color")
+	tty, err := pty.StartWithSize(cmd, &pty.Winsize{Rows: 30, Cols: 120})
+	if err != nil {
+		t.Skipf("no pty available: %v", err)
+	}
+	defer tty.Close()
+
+	go func() {
+		time.Sleep(300 * time.Millisecond)
+		tty.Write([]byte("\x1b[B\r")) // ↓ → Copy, enter → drill (Expand is row 0)
+		time.Sleep(300 * time.Millisecond)
+		tty.Write([]byte("\r")) // enter on < Expand >
+		time.Sleep(300 * time.Millisecond)
+		tty.Write([]byte("\r\x7f7\r")) // edit P on the now-independent copy
+		time.Sleep(300 * time.Millisecond)
+		tty.Write([]byte("\x13")) // ctrl+s save
+	}()
+
+	buf := make([]byte, 4096)
+	var all bytes.Buffer
+	saved := false
+	deadline := time.Now().Add(15 * time.Second)
+	for time.Now().Before(deadline) {
+		n, err := tty.Read(buf)
+		if n > 0 {
+			all.Write(buf[:n])
+			if strings.Contains(all.String(), "Saved") {
+				saved = true
+				break
+			}
+		}
+		if err != nil {
+			break
+		}
+	}
+	if !saved {
+		t.Fatalf("ctrl+s must save; screen:\n%s", all.String())
+	}
+	tty.Write([]byte("\x03"))
+	waitErr := cmd.Wait()
+	if ee, ok := waitErr.(*exec.ExitError); !ok || ee.ExitCode() != 130 {
+		t.Fatalf("exit after abort = %v, want 130", waitErr)
+	}
+
+	content, err := os.ReadFile(cfg)
+	if err != nil {
+		t.Fatal(err)
+	}
+	text := string(content)
+	if !strings.Contains(text, "base: &x") || !strings.Contains(text, "p: 1") {
+		t.Errorf("the anchor and its content must survive the expand:\n%s", text)
+	}
+	if strings.Contains(text, "*x") {
+		t.Errorf("an expanded alias must be written as plain content:\n%s", text)
+	}
+	var doc map[string]any
+	if err := yaml.Unmarshal(content, &doc); err != nil {
+		t.Fatalf("saved file is not valid YAML: %v\n%s", err, text)
+	}
+	copyObj, _ := doc["copy"].(map[string]any)
+	if copyObj == nil || fmt.Sprint(copyObj["p"]) != "7" {
+		t.Errorf("expanded copy must hold its own edit, got %#v:\n%s", doc["copy"], text)
+	}
+}
+
+// TestPtyYAMLAnchorRename proves the & flow end to end: the anchor input
+// prefills the current name, renaming rewrites every reference (they share
+// the node), and the saved file carries the new name on both sides.
+func TestPtyYAMLAnchorRename(t *testing.T) {
+	_, schema, cfg := aliasPtyFiles(t)
+
+	cmd := exec.Command(jseBin, "-s", schema, cfg)
+	cmd.Dir = ".."
+	cmd.Env = append(os.Environ(), "TERM=xterm-256color")
+	tty, err := pty.StartWithSize(cmd, &pty.Winsize{Rows: 30, Cols: 120})
+	if err != nil {
+		t.Skipf("no pty available: %v", err)
+	}
+	defer tty.Close()
+
+	go func() {
+		time.Sleep(300 * time.Millisecond)
+		tty.Write([]byte("&\x7fy\r")) // & on the base row: rename x → y
+		time.Sleep(300 * time.Millisecond)
+		tty.Write([]byte("\x13")) // ctrl+s save
+	}()
+
+	buf := make([]byte, 4096)
+	var all bytes.Buffer
+	saved := false
+	deadline := time.Now().Add(15 * time.Second)
+	for time.Now().Before(deadline) {
+		n, err := tty.Read(buf)
+		if n > 0 {
+			all.Write(buf[:n])
+			if strings.Contains(all.String(), "Saved") {
+				saved = true
+				break
+			}
+		}
+		if err != nil {
+			break
+		}
+	}
+	if !saved {
+		t.Fatalf("ctrl+s must save; screen:\n%s", all.String())
+	}
+	tty.Write([]byte("\x03"))
+	waitErr := cmd.Wait()
+	if ee, ok := waitErr.(*exec.ExitError); !ok || ee.ExitCode() != 130 {
+		t.Fatalf("exit after abort = %v, want 130", waitErr)
+	}
+
+	content, err := os.ReadFile(cfg)
+	if err != nil {
+		t.Fatal(err)
+	}
+	text := string(content)
+	if !strings.Contains(text, "base: &y") || !strings.Contains(text, "copy: *y") {
+		t.Errorf("rename must rewrite the anchor and its references:\n%s", text)
+	}
+	if strings.Contains(text, "*x") || strings.Contains(text, "&x") {
+		t.Errorf("the old anchor name must be gone:\n%s", text)
+	}
+}

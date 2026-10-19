@@ -78,7 +78,7 @@ func TestYAMLFormatNotices(t *testing.T) {
 		t.Fatal(err)
 	}
 	notes := s.Notices()
-	if len(notes) != 1 || notes[0] != "yaml: 1 alias expanded" {
+	if len(notes) != 1 || notes[0] != "yaml: 1 alias kept: edits write through to the anchored object (< Expand > detaches a copy)" {
 		t.Fatalf("notices = %#v", notes)
 	}
 	plain, err := (yamlFormat{}).Load([]byte("a: 1\n"))

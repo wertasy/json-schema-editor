@@ -48,6 +48,9 @@ var helpEntries = []helpEntry{
 	{"space", "toggle boolean / enum member"},
 	{"d / delete", "delete the selected pair (required keys refused)"},
 	{"a / A", "add a schema-less key before / after the cursor"},
+	{"e", "expand: materialize the referenced value (cursor row or menu) into a copy"},
+	{"&", "anchor: set/rename the field's YAML anchor (empty removes; unreferenced only)"},
+	{"*", "reference: point the field at an anchor (tab completes; empty removes)"},
 	{"J / K", "move the item under the cursor down / up"},
 	{"ctrl+t", "switch the variant type of a oneOf value"},
 	{"u / ctrl+r", "undo / redo"},
@@ -86,7 +89,11 @@ var (
 	mDim  = lipgloss.NewStyle().Faint(true)
 
 	// panel chrome and value colors (adaptive: legible on light and dark)
-	mAccent  = lipgloss.NewStyle().Foreground(lipgloss.AdaptiveColor{Light: "27", Dark: "39"})
+	mAccent = lipgloss.NewStyle().Foreground(lipgloss.AdaptiveColor{Light: "27", Dark: "39"})
+	// mAnchor colors YAML anchor names (&name): a violet apart from the
+	// accent blue references (*name) use, so definitions and references
+	// read differently at a glance.
+	mAnchor  = lipgloss.NewStyle().Foreground(lipgloss.AdaptiveColor{Light: "126", Dark: "177"})
 	mSel     = lipgloss.NewStyle().Bold(true).Background(lipgloss.AdaptiveColor{Light: "250", Dark: "236"})
 	mValStr  = lipgloss.NewStyle().Foreground(lipgloss.AdaptiveColor{Light: "28", Dark: "114"})
 	mValNum  = lipgloss.NewStyle().Foreground(lipgloss.AdaptiveColor{Light: "25", Dark: "51"})
@@ -218,6 +225,7 @@ type listModel struct {
 	exiting       bool // the session ended cleanly (root quit or Save and exit)
 	edit          *editState
 	add           *addState // key-name input for a schema-less member (a)
+	anc           *anchorState
 	sel           *selState
 	text          *textState
 	ext           *externalEdit // pending $EDITOR target for a schema-less value
@@ -529,6 +537,8 @@ func (m *listModel) routeKey(msg tea.KeyMsg) tea.Cmd {
 		return m.keyEdit(msg)
 	case m.add != nil:
 		return m.keyAdd(msg)
+	case m.anc != nil:
+		return m.keyAnchor(msg)
 	}
 	return m.keyList(msg)
 }
@@ -575,6 +585,8 @@ func (m *listModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.edit.ti, cmd = m.edit.ti.Update(msg)
 	case m.add != nil:
 		m.add.ti, cmd = m.add.ti.Update(msg)
+	case m.anc != nil:
+		m.anc.ti, cmd = m.anc.ti.Update(msg)
 	case m.text != nil:
 		m.text.ta, cmd = m.text.ta.Update(msg)
 	case m.search.active:
@@ -610,14 +622,21 @@ func (m *listModel) View() string {
 
 // breadcrumb renders the navigation context as a document path
 // ("$.a.b[0]"). Levels that do not extend the path — oneOf pickers and
-// variant editors — add no segment (the title line names them). Overlong
-// paths keep their tail, which is the informative end.
+// variant editors — add no segment (the title line names them). A menu that
+// drilled into a reference appends the anchor's location
+// ("$.a.steps → $.jobs.build.steps"). Overlong paths keep their tail, which
+// is the informative end.
 func (m *listModel) breadcrumb() string {
 	st := m.top()
 	if st == nil {
 		return "$"
 	}
-	return clipLeft(jsondoc.PathString(st.path), m.width)
+	crumb := jsondoc.PathString(st.path)
+	if _, ref, ok := m.anchorRole(st.path); ok && ref {
+		n, _ := m.doc.Get(st.path)
+		crumb += " → " + jsondoc.PathString(m.anchorHolderPath(n))
+	}
+	return clipLeft(crumb, m.width)
 }
 
 // clipLeft keeps the tail of s within max runes, marking the cut with "…".
@@ -639,6 +658,15 @@ func (m *listModel) listView() string {
 	var b strings.Builder
 	st := m.top()
 	title := mTitle.Render(displayTitle(st.node))
+	// The menu of an anchored value names the anchor on the title line:
+	// "steps: &x" for the carrier, "steps: *x" for a reference, both violet.
+	if name, ref, ok := m.anchorRole(st.path); ok {
+		if ref {
+			title += ": " + mAnchor.Render("*"+name)
+		} else {
+			title += ": " + mAnchor.Render("&"+name)
+		}
+	}
 	if m.dirty() {
 		title += " " + mDiff.Render("●")
 	}
@@ -647,17 +675,13 @@ func (m *listModel) listView() string {
 	b.WriteString(clipDisplay(mCrumb.Render(clipRunes(m.breadcrumb(), m.width)), m.width-1))
 	b.WriteByte('\n')
 	header := 2
-	if len(m.stack) == 1 && m.opts.Status != "" {
-		b.WriteString(clipDisplay(mStatus.Render(clipRunes(m.opts.Status, m.width)), m.width-1))
-		b.WriteByte('\n')
-		header++
-	}
 
 	if m.search.active {
 		inputs := 1
 		if m.search.replace {
 			inputs++
 		}
+		status := m.statusLines()
 		b.WriteString(clipDisplay(mHelp.Render("search: ")+m.search.ti.View(), m.width-1))
 		b.WriteByte('\n')
 		if m.search.replace {
@@ -666,13 +690,13 @@ func (m *listModel) listView() string {
 		}
 		// Results fill the space between the inputs and the footer; a short
 		// list is padded so the footer stays on the terminal's last line.
-		h := m.height - header - inputs - 1
+		h := m.height - header - inputs - len(status) - 1
 		if h < 1 {
 			h = 1
 		}
 		m.writeSearchRows(&b, h)
 		lines := strings.Count(b.String(), "\n")
-		for lines < m.height-1 {
+		for lines < m.height-1-len(status) {
 			b.WriteByte('\n')
 			lines++
 		}
@@ -688,6 +712,10 @@ func (m *listModel) listView() string {
 		if m.search.regex {
 			modeTxt = "regex"
 		}
+		for _, line := range status {
+			b.WriteString(clipDisplay(line, m.width-1))
+			b.WriteByte('\n')
+		}
 		b.WriteString(clipDisplay(mHelp.Render("↑/↓ ctrl+j/k · enter jump/replace · tab replace · alt+i "+caseTxt+" · alt+x "+modeTxt), m.width-1))
 		return b.String()
 	}
@@ -699,7 +727,8 @@ func (m *listModel) listView() string {
 	if desc != "" {
 		descLines = wrapText(desc, m.width-1)
 	}
-	h := m.height - header - 1 - len(descLines)
+	status := m.statusLines()
+	h := m.height - header - 1 - len(descLines) - len(status)
 	if m.notice != "" {
 		h--
 	}
@@ -711,12 +740,12 @@ func (m *listModel) listView() string {
 		b.WriteString(clipDisplay("  "+mDim.Render("[empty hidden]"), m.width-1))
 		b.WriteByte('\n')
 	}
-	// Pin the bottom block (row description + transient notice) directly
-	// above the hint bar: fill the gap below the rows first, so notices do not
-	// float in the middle of a short menu. No trailing newline after the hint
-	// bar, or the renderer would treat it as an extra line and scroll the
-	// title out of view.
-	bottom := len(descLines)
+	// Pin the bottom block (row description, session status, transient
+	// notice) directly above the hint bar: fill the gap below the rows
+	// first, so nothing floats in the middle of a short menu. No trailing
+	// newline after the hint bar, or the renderer would treat it as an extra
+	// line and scroll the title out of view.
+	bottom := len(descLines) + len(status)
 	if m.notice != "" {
 		bottom++
 	}
@@ -729,12 +758,34 @@ func (m *listModel) listView() string {
 		b.WriteString(clipDisplay(mDesc.Render(line), m.width-1))
 		b.WriteByte('\n')
 	}
+	for _, line := range status {
+		b.WriteString(clipDisplay(line, m.width-1))
+		b.WriteByte('\n')
+	}
 	if m.notice != "" {
 		b.WriteString(clipDisplay(mErr.Render(clipRunes(m.notice, m.width)), m.width-1))
 		b.WriteByte('\n')
 	}
 	b.WriteString(m.helpLine())
 	return b.String()
+}
+
+// statusLines renders the session status notices (schema source, offline
+// fallback, compile failure, alias count): the root screen shows them as the
+// block directly above the bottom hint bar. Lines wrap to the terminal width
+// (plain text first, styled after — wrapText counts display cells, not ANSI
+// bytes) so the renderer's cell accounting stays intact.
+func (m *listModel) statusLines() []string {
+	if len(m.stack) != 1 || m.opts.Status == "" {
+		return nil
+	}
+	var out []string
+	for _, line := range strings.Split(m.opts.Status, "\n") {
+		for _, w := range wrapText(line, m.width-1) {
+			out = append(out, mStatus.Render(w))
+		}
+	}
+	return out
 }
 
 // wrapText wraps s to max display cells per line, preserving explicit
@@ -896,6 +947,10 @@ func (m *listModel) writeRows(b *strings.Builder, rows []row, height int) {
 	titleWidth := m.menuTitleColWidth(rows)
 	for i := st.offset; i < len(rows) && i < st.offset+height; i++ {
 		m.writeCut(b, m.rowLine(rows[i], i == st.cursor, titleWidth))
+		// the & / * name input sits on the line under the cursor
+		if m.anc != nil && i == st.cursor {
+			m.writeCut(b, m.anchorInputLines(titleWidth))
+		}
 	}
 	// in-place input for a brand-new array item renders on its own row when
 	// that row is already in the document (a/A splice the placeholder in);
@@ -911,6 +966,23 @@ func (m *listModel) writeRows(b *strings.Builder, rows []row, height int) {
 			m.writeCut(b, mErr.Render("  "+m.add.err))
 		}
 	}
+}
+
+// anchorInputLines renders the & / * name input under the cursor row: the
+// labeled input, the completion hint (reference mode), and any error.
+func (m *listModel) anchorInputLines(titleWidth int) string {
+	label := "Anchor"
+	if m.anc.mode == refSet {
+		label = "Reference"
+	}
+	lines := []string{cursorPrefix(true) + m.titleCol(label, titleWidth) + m.anc.ti.View()}
+	if len(m.anc.cands) > 0 {
+		lines = append(lines, mHelp.Render("  tab: "+m.anchorSugView()))
+	}
+	if m.anc.err != "" {
+		lines = append(lines, mErr.Render("  "+m.anc.err))
+	}
+	return strings.Join(lines, "\n")
 }
 
 // writeSearchRows renders the visible slice of search results.
@@ -1168,7 +1240,7 @@ func (m *listModel) rowLine(r row, cursor bool, titleWidth int) string {
 			box, boxStyle = "[x]", mAccent
 		}
 		left = boxStyle.Render(box) + " " + r.fn.Items.Enum[r.idx].Display
-	case rowAdd, rowSave, rowRaw, rowRemove:
+	case rowAdd, rowSave, rowRaw, rowRemove, rowExpand:
 		left = mAccent.Render(r.label)
 	case rowNoItems:
 		left = mDim.Render(r.label)
@@ -1176,7 +1248,7 @@ func (m *listModel) rowLine(r row, cursor bool, titleWidth int) string {
 		// document key the schema does not define: edit as raw JSON or delete
 		left = mWarn.Render(r.label)
 		v, _ := m.doc.Get(r.path)
-		right = m.rawValueStyle(v).Render(m.rawValueSummary(r.path))
+		right = m.anchorBadge(r.path) + m.rawValueStyle(v).Render(m.rawValueSummary(r.path))
 	case rowIssues:
 		left = m.issuesSeverity().Render(r.label)
 	default: // rowField / rowDrill
@@ -1185,7 +1257,7 @@ func (m *listModel) rowLine(r row, cursor bool, titleWidth int) string {
 			title += mStar.Render("*")
 		}
 		left = title
-		right = m.valueStyle(r.fn, r.path).Render(summary(m, r.fn, r.path))
+		right = m.anchorBadge(r.path) + m.valueStyle(r.fn, r.path).Render(summary(m, r.fn, r.path))
 	}
 	var content string
 	switch r.kind {
@@ -1222,7 +1294,8 @@ func (m *listModel) rowLine(r row, cursor bool, titleWidth int) string {
 }
 
 // rawValueSummary renders a document value with no schema behind it (unknown
-// keys): scalars as text, containers compactly.
+// keys): scalars as text, containers compactly. Reference/anchor identity is
+// shown on the row title (anchorBadge).
 func (m *listModel) rawValueSummary(path []any) string {
 	v, ok := m.doc.Get(path)
 	if !ok || v == nil {

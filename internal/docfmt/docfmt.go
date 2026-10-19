@@ -43,8 +43,8 @@ type Format interface {
 type Session interface {
 	Doc() *jsondoc.Node
 	Write(w io.Writer) error
-	// Notices returns session status lines (for example YAML aliases
-	// expanded on load); nil when there is nothing to report.
+	// Notices returns session status lines (for example YAML alias
+	// references kept on load); nil when there is nothing to report.
 	Notices() []string
 	// SchemaLocation returns the schema location recorded in the file's own
 	// convention: the top-level "$schema" member, or the YAML
@@ -266,5 +266,5 @@ func (s yamlSession) Notices() []string {
 	if s.meta.Aliases > 1 {
 		noun = "aliases"
 	}
-	return []string{fmt.Sprintf("yaml: %d %s expanded", s.meta.Aliases, noun)}
+	return []string{fmt.Sprintf("yaml: %d %s kept: edits write through to the anchored object (< Expand > detaches a copy)", s.meta.Aliases, noun)}
 }
