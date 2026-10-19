@@ -1459,18 +1459,15 @@ func (m *listModel) fieldRequired(r row) bool {
 	return required
 }
 
-// showsSchemaDefault reports whether the value displayed for path is the
-// schema default: either the document has no value there (summary previews
-// fn.Default) or its value equals the default.
+// showsSchemaDefault reports whether the row previews fn.Default because the
+// document has no value at path (missing or explicit null). An explicit value
+// that happens to equal the default is user data, so it keeps its type color.
 func (m *listModel) showsSchemaDefault(fn *smodel.FormNode, path []any) bool {
 	if fn == nil || fn.Default == nil || fn.Default.Null {
 		return false
 	}
 	v, ok := m.doc.Get(path)
-	if !ok || v == nil || v.Null {
-		return true
-	}
-	return nodesEqual(v, fn.Default)
+	return !ok || v == nil || v.Null
 }
 
 // valueStyle picks the value-summary color: schema defaults use the hint

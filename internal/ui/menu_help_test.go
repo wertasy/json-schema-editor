@@ -217,10 +217,10 @@ func TestSchemaDescColorDistinctFromHelp(t *testing.T) {
 	}
 }
 
-// TestSchemaDefaultValueUsesHelpGray: a value that is the schema default —
-// previewed because the key is unset, or set explicitly to the same value —
-// uses the hint bar's neutral gray instead of its type color.
-func TestSchemaDefaultValueUsesHelpGray(t *testing.T) {
+// TestSchemaDefaultPreviewUsesHelpGray: a default previewed because the key
+// is unset or null uses the hint bar's neutral gray. Explicit values keep
+// their type color even when they happen to equal the schema default.
+func TestSchemaDefaultPreviewUsesHelpGray(t *testing.T) {
 	old := lipgloss.ColorProfile()
 	lipgloss.SetColorProfile(termenv.TrueColor)
 	t.Cleanup(func() { lipgloss.SetColorProfile(old) })
@@ -228,7 +228,8 @@ func TestSchemaDefaultValueUsesHelpGray(t *testing.T) {
 	root := testModel()
 	server := childOf(t, root, "server")
 	mode := childOf(t, root, "mode")     // unset, default "http"
-	port := childOf(t, server, "port")   // set below to its 8080 default
+	port := childOf(t, server, "port")   // explicitly 8080, the default
+	host := childOf(t, server, "host")   // explicitly 0.0.0.0, the default
 	debug := childOf(t, server, "debug") // set true, default false
 	ratio := childOf(t, server, "ratio") // unset, no default
 	help := mHelp.Render("x")
@@ -241,7 +242,8 @@ func TestSchemaDefaultValueUsesHelpGray(t *testing.T) {
 		want string
 	}{
 		{"unset default preview", mode, []any{"mode"}, help},
-		{"explicit default", port, []any{"server", "port"}, help},
+		{"explicit number default", port, []any{"server", "port"}, mValNum.Render("x")},
+		{"explicit string default", host, []any{"server", "host"}, mValStr.Render("x")},
 		{"non-default bool", debug, []any{"server", "debug"}, mValBool.Render("x")},
 		{"unset without default", ratio, []any{"server", "ratio"}, mDim.Render("x")},
 	}
@@ -251,19 +253,18 @@ func TestSchemaDefaultValueUsesHelpGray(t *testing.T) {
 		}
 	}
 
-	// An enum set explicitly to its default is gray too; another member keeps
-	// the enum color.
-	m2 := newListModel(root, tobj(tmem("mode", tstr("http"))), Options{})
-	if got := m2.valueStyle(mode, []any{"mode"}).Render("x"); got != help {
-		t.Errorf("explicit enum default: SGR = %q, want %q", got, help)
+	// Null is not a document value: it still previews the default in gray.
+	mNull := newListModel(root, tobj(tmem("mode", tnull())), Options{})
+	if got := mNull.valueStyle(mode, []any{"mode"}).Render("x"); got != help {
+		t.Errorf("null default preview: SGR = %q, want %q", got, help)
 	}
-	m3 := newListModel(root, tobj(tmem("mode", tstr("grpc"))), Options{})
-	if got := m3.valueStyle(mode, []any{"mode"}).Render("x"); got != mValEnum.Render("x") {
-		t.Errorf("non-default enum: SGR = %q, want %q", got, mValEnum.Render("x"))
+	// An enum explicitly set to its default keeps the enum color.
+	m2 := newListModel(root, tobj(tmem("mode", tstr("http"))), Options{})
+	if got := m2.valueStyle(mode, []any{"mode"}).Render("x"); got != mValEnum.Render("x") {
+		t.Errorf("explicit enum default: SGR = %q, want %q", got, mValEnum.Render("x"))
 	}
 
-	// The rendered rows carry the same styles: unset/explicit defaults gray,
-	// non-default values and the no-default dash keep their own colors.
+	// The rendered rows carry the same styles: only previews are gray.
 	view := m.View()
 	for _, want := range []string{
 		mHelp.Render("http"),     // unset enum default preview
@@ -276,10 +277,10 @@ func TestSchemaDefaultValueUsesHelpGray(t *testing.T) {
 	sub := lmAt(testDoc(), &menuState{kind: menuObject, node: server, path: []any{"server"}})
 	subView := sub.View()
 	for _, want := range []string{
-		mHelp.Render("8080"),    // explicit number default
-		mHelp.Render("0.0.0.0"), // explicit string default
-		mValBool.Render("[y]"),  // true, default is false
-		mDim.Render("—"),        // unset, no default
+		mValNum.Render("8080"),    // explicit number default
+		mValStr.Render("0.0.0.0"), // explicit string default
+		mValBool.Render("[y]"),    // true, default is false
+		mDim.Render("—"),          // unset, no default
 	} {
 		if !strings.Contains(subView, want) {
 			t.Errorf("server view missing %q:\n%s", want, subView)
