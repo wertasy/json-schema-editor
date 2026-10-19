@@ -334,7 +334,7 @@ func TestAnchorInputUnderCursor(t *testing.T) {
 	inputIdx, copyIdx := -1, -1
 	for i, l := range lines {
 		switch {
-		case strings.Contains(l, "Reference"):
+		case strings.Contains(l, "reference:"):
 			inputIdx = i
 		case strings.Contains(l, "Copy"):
 			copyIdx = i

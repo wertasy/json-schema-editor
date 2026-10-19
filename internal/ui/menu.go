@@ -949,7 +949,7 @@ func (m *listModel) writeRows(b *strings.Builder, rows []row, height int) {
 		m.writeCut(b, m.rowLine(rows[i], i == st.cursor, titleWidth))
 		// the & / * name input sits on the line under the cursor
 		if m.anc != nil && i == st.cursor {
-			m.writeCut(b, m.anchorInputLines(titleWidth))
+			m.writeCut(b, m.anchorInputLines())
 		}
 	}
 	// in-place input for a brand-new array item renders on its own row when
@@ -969,13 +969,16 @@ func (m *listModel) writeRows(b *strings.Builder, rows []row, height int) {
 }
 
 // anchorInputLines renders the & / * name input under the cursor row: the
-// labeled input, the completion hint (reference mode), and any error.
-func (m *listModel) anchorInputLines(titleWidth int) string {
-	label := "Anchor"
+// prompt, the completion hint (reference mode), and any error. The prompt
+// reads like the other prompts (lowercase, help-bar gray), indented two
+// cells where the cursor arrow would sit, so its text lines up with the row
+// titles.
+func (m *listModel) anchorInputLines() string {
+	prompt := "  anchor: " // two cells: the cursor arrow's former width
 	if m.anc.mode == refSet {
-		label = "Reference"
+		prompt = "  reference: "
 	}
-	lines := []string{cursorPrefix(true) + m.titleCol(label, titleWidth) + m.anc.ti.View()}
+	lines := []string{mHelp.Render(prompt) + m.anc.ti.View()}
 	if len(m.anc.cands) > 0 {
 		lines = append(lines, mHelp.Render("  tab: "+m.anchorSugView()))
 	}
