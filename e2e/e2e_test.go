@@ -774,20 +774,20 @@ func TestPtyExternalRawYAMLEditor(t *testing.T) {
 	}
 }
 
-// TestPtyExternalUnknownKeyEditor: enter on a schema-less key opens $EDITOR
-// on a temp file holding only that value; the rewritten JSON is applied as
-// one edit and persists on save.
+// TestPtyExternalUnknownKeyEditor: schema-less scalars edit in place (typed
+// inline, no editor), while a schema-less object opens $EDITOR on a temp file
+// holding only that value; both changes persist on save.
 func TestPtyExternalUnknownKeyEditor(t *testing.T) {
 	dir := t.TempDir()
 	schema := filepath.Join(dir, "mini.schema.json")
 	cfg := filepath.Join(dir, "o.json")
 	editor := filepath.Join(dir, "editor.sh")
 	writeFile(t, schema, `{"type":"object","properties":{"name":{"type":"string","title":"Name"}}}`)
-	writeFile(t, cfg, `{"name":"z","extra":"old"}`)
+	writeFile(t, cfg, `{"name":"z","inline":"old","extra":{"old":1}}`)
 	writeFile(t, editor, "#!/bin/sh\n"+
 		`grep -q '"old"' "$1" || exit 3`+"\n"+
 		`grep -q '"name"' "$1" && exit 4`+"\n"+
-		`echo '"from-editor"' > "$1"`+"\n")
+		`echo '{"from":"editor"}' > "$1"`+"\n")
 	if err := os.Chmod(editor, 0o755); err != nil {
 		t.Fatal(err)
 	}
@@ -844,14 +844,25 @@ func TestPtyExternalUnknownKeyEditor(t *testing.T) {
 		}
 	}
 
-	_, off := waitFrame("root menu", 0, "extra", "(not in schema)")
+	_, off := waitFrame("root menu", 0, "inline", "extra", "(not in schema)")
 	tty.Write([]byte("j")) // issues row → Name
 	_, off = waitFrame("cursor on Name", off, "> Name")
 	tty.Write([]byte("j")) // Name → $schema
 	_, off = waitFrame("cursor on $schema", off, "> $schema")
-	tty.Write([]byte("j")) // $schema → extra
-	_, off = waitFrame("cursor on unknown key", off, "> extra")
-	tty.Write([]byte("\r")) // launch $EDITOR on the value
+	tty.Write([]byte("j")) // $schema → inline
+	_, off = waitFrame("cursor on scalar unknown key", off, "> inline")
+	tty.Write([]byte("\r")) // open the in-place scalar editor
+	_, off = waitFrame("inline scalar editor", off, "> inline", "old")
+	tty.Write([]byte("\x15")) // clear the in-place scalar input
+	for _, ch := range []string{"n", "e", "w"} {
+		tty.Write([]byte(ch)) // type the new scalar value in place
+		_, off = waitFrame("typed inline character "+ch, off, "> inline", ch)
+	}
+	tty.Write([]byte("\r")) // apply the scalar edit
+	_, off = waitFrame("scalar edited in place", off, "inline", "new")
+	tty.Write([]byte("j")) // inline → extra
+	_, off = waitFrame("cursor on object unknown key", off, "> extra")
+	tty.Write([]byte("\r")) // launch $EDITOR on the object value
 	_, off = waitFrame("value edited", off, "Value edited")
 	tty.Write([]byte("\x13")) // ctrl+s save
 	_, _ = waitFrame("saved", off, "Saved")
@@ -862,8 +873,9 @@ func TestPtyExternalUnknownKeyEditor(t *testing.T) {
 		t.Fatalf("exit after ctrl+c = %v, want 130", waitErr)
 	}
 	got := readJSON(t, cfg).(map[string]any)
-	if got["extra"] != "from-editor" || got["name"] != "z" {
-		t.Fatalf("saved doc = %#v, want extra from-editor and name z", got)
+	extra, ok := got["extra"].(map[string]any)
+	if !ok || extra["from"] != "editor" || got["inline"] != "new" || got["name"] != "z" {
+		t.Fatalf("saved doc = %#v, want extra {from: editor}, inline new and name z", got)
 	}
 }
 

@@ -98,13 +98,14 @@ func TestUnknownKeyRows(t *testing.T) {
 		t.Fatalf("unknown row should be marked:\n%s", v)
 	}
 
-	// enter launches $EDITOR on the value; a JSON edit updates the key
+	// enter edits a scalar unknown key in place, using its JSON type
 	m.top().cursor = idx
 	press(m, "enter")
-	if m.text != nil || m.ext == nil {
-		t.Fatalf("unknown key should open the external editor, text=%v ext=%v", m.text != nil, m.ext != nil)
+	if m.edit == nil || m.text != nil || m.ext != nil {
+		t.Fatalf("string unknown key should edit in place, edit=%v text=%v ext=%v",
+			m.edit != nil, m.text != nil, m.ext != nil)
 	}
-	finishExternalValue(t, m, `"y"`)
+	press(m, "ctrl+u", "y", "enter")
 	if s := strAt(t, doc, "extra_key"); s != "y" {
 		t.Fatalf("extra_key = %q, want y", s)
 	}
@@ -317,9 +318,10 @@ func TestUnknownRowsAlwaysCarryWarningMark(t *testing.T) {
 
 	unknownLine := func() string {
 		t.Helper()
-		for _, r := range menuRows(m) {
+		rows := menuRows(m)
+		for _, r := range rows {
 			if r.kind == rowUnknown {
-				return m.rowLine(r, false)
+				return m.rowLine(r, false, m.menuTitleColWidth(rows))
 			}
 		}
 		t.Fatal("unknown row missing")

@@ -130,7 +130,8 @@ type selState struct {
 
 // textState is the built-in raw textarea overlay for schema-defined fields
 // that cannot be form-edited; its syntax follows Options.Raw (JSON or YAML).
-// Values under schema-less keys use the external editor instead.
+// Schema-less scalar values edit in place; unset and container values use
+// the external editor instead.
 type textState struct {
 	path []any
 	fn   *smodel.FormNode // schema field edited as raw text
@@ -800,7 +801,7 @@ func (m *listModel) helpView() string {
 	b.WriteString("\n\n")
 	for _, e := range helpEntries {
 		var line string
-		if m.width-1 < titleColWidth+12 {
+		if m.width-1 < helpColWidth+12 {
 			// Narrow terminal: do not waste most of the row on padding.
 			line = e.keys
 			if line != "" {
@@ -808,7 +809,7 @@ func (m *listModel) helpView() string {
 			}
 			line += e.desc
 		} else {
-			line = m.titleCol(e.keys) + e.desc
+			line = m.helpCol(e.keys) + e.desc
 		}
 		b.WriteString(clipDisplay(mHelp.Render(line), m.width-1))
 		b.WriteByte('\n')
@@ -889,19 +890,20 @@ func (m *listModel) writeRows(b *strings.Builder, rows []row, height int) {
 	if st.offset < 0 {
 		st.offset = 0
 	}
+	titleWidth := m.menuTitleColWidth(rows)
 	for i := st.offset; i < len(rows) && i < st.offset+height; i++ {
-		m.writeCut(b, m.rowLine(rows[i], i == st.cursor))
+		m.writeCut(b, m.rowLine(rows[i], i == st.cursor, titleWidth))
 	}
 	// in-place input for a brand-new array item renders on its own row when
 	// that row is already in the document (a/A splice the placeholder in);
 	// the append-only < Add item > flow has no row yet, so it gets a line
 	// labeled with the element index it will take
 	if m.edit != nil && m.edit.isNew && !hasInlineEditRow(m, rows) {
-		m.writeCut(b, m.editLines(m.titleCol(m.newItemTitle())))
+		m.writeCut(b, m.editLines(m.titleCol(m.newItemTitle(), titleWidth)))
 	}
 	// key-name input for a schema-less member (a)
 	if m.add != nil {
-		m.writeCut(b, cursorPrefix(true)+m.titleCol("New key")+m.add.ti.View())
+		m.writeCut(b, cursorPrefix(true)+m.titleCol("New key", titleWidth)+m.add.ti.View())
 		if m.add.err != "" {
 			m.writeCut(b, mErr.Render("  "+m.add.err))
 		}
@@ -1013,16 +1015,62 @@ func (m *listModel) dirty() bool {
 	return !nodesEqual(m.doc, m.baseline)
 }
 
-// titleColWidth is the menu and keyboard-help left column width.
-const titleColWidth = 24
+const (
+	// helpColWidth is the keyboard-help overlay's fixed description column.
+	helpColWidth = 24
+	// The menu's title column adapts to the widest key, within these bounds.
+	titleColMin = 16
+	titleColMax = 42
+)
 
-// titleCol pads the left column to titleColWidth cells.
-func (m *listModel) titleCol(left string) string {
-	if w := displayWidth(left); w >= titleColWidth {
+// helpCol pads the ? overlay's key column to helpColWidth cells.
+func (m *listModel) helpCol(left string) string {
+	if w := displayWidth(left); w >= helpColWidth {
 		return left + " "
 	} else {
-		return left + strings.Repeat(" ", titleColWidth-w)
+		return left + strings.Repeat(" ", helpColWidth-w)
 	}
+}
+
+// menuTitleColWidth returns the adaptive title column width for a menu: the
+// widest left cell among rows with a value column, clamped to
+// [titleColMin, titleColMax]. Status/toggle/action rows do not participate.
+func (m *listModel) menuTitleColWidth(rows []row) int {
+	width := titleColMin
+	for _, r := range rows {
+		n := -1
+		switch r.kind {
+		case rowField, rowDrill:
+			if r.fn == nil {
+				continue
+			}
+			n = displayWidth(m.rowTitleText(r))
+			if m.fieldRequired(r) {
+				n++ // required marker
+			}
+		case rowUnknown:
+			n = displayWidth(r.label)
+		case rowVariant:
+			n = displayWidth("○ ") + displayWidth(r.variant.Title)
+		}
+		if n > width {
+			width = n
+		}
+	}
+	if width > titleColMax {
+		width = titleColMax
+	}
+	return width
+}
+
+// titleCol pads the left column to width cells and appends the separator
+// before the value. Titles wider than width are shown in full (no ellipsis);
+// their value starts further right, which is accepted for very long keys.
+func (m *listModel) titleCol(left string, width int) string {
+	if w := displayWidth(left); w < width {
+		return left + strings.Repeat(" ", width-w+1)
+	}
+	return left + " "
 }
 
 // inlineEditRow reports whether the active in-place editor renders on r: the
@@ -1033,6 +1081,9 @@ func (m *listModel) titleCol(left string) string {
 func (m *listModel) inlineEditRow(r row) bool {
 	if m.edit == nil || !pathEq(r.path, m.edit.path) {
 		return false
+	}
+	if r.kind == rowUnknown {
+		return true // schema-less scalar edited against its value type
 	}
 	if r.kind == rowField && r.fn == m.edit.fn {
 		return true
@@ -1067,17 +1118,25 @@ func (m *listModel) newItemTitle() string {
 	return fmt.Sprintf("%s[%d]", key, docArrayLen(m.doc, st.path))
 }
 
-func (m *listModel) rowLine(r row, cursor bool) string {
+// rowTitleText is the left-column label of a field or drill row: the document
+// key for map rows, otherwise the schema title.
+func (m *listModel) rowTitleText(r row) string {
+	if r.label != "" {
+		return r.label
+	}
+	if r.fn != nil {
+		return r.fn.Title
+	}
+	return ""
+}
+
+func (m *listModel) rowLine(r row, cursor bool, titleWidth int) string {
 	// in-place input replaces the edited row: the field's own row, or the
 	// oneOf field row when a leaf variant is being edited (the picker pops
 	// back to the parent menu for leaf variants). A spliced (a/A) new item
 	// has its placeholder row already in the document and edits there too.
 	if m.inlineEditRow(r) {
-		title := r.label
-		if title == "" {
-			title = r.fn.Title
-		}
-		return m.editLines(m.titleCol(title))
+		return m.editLines(m.titleCol(m.rowTitleText(r), titleWidth))
 	}
 	var left, right string
 	switch r.kind {
@@ -1118,19 +1177,22 @@ func (m *listModel) rowLine(r row, cursor bool) string {
 	case rowIssues:
 		left = m.issuesSeverity().Render(r.label)
 	default: // rowField / rowDrill
-		title := r.fn.Title
-		if r.label != "" {
-			// map rows (KMap): the label is the document key, the value
-			// node is shared across rows and carries no per-key title
-			title = r.label
-		}
+		title := m.rowTitleText(r)
 		if m.fieldRequired(r) {
 			title += mStar.Render("*")
 		}
 		left = title
 		right = m.valueStyle(r.fn, r.path).Render(summary(m, r.fn, r.path))
 	}
-	content := m.titleCol(left) + right
+	var content string
+	switch r.kind {
+	case rowField, rowDrill, rowUnknown, rowVariant:
+		content = m.titleCol(left, titleWidth) + right
+	default:
+		// Status, toggle and action rows have no value column: keep their
+		// label whole instead of padding it to the title column.
+		content = left + right
+	}
 	line := cursorPrefix(cursor) + content
 	if r.kind == rowUnknown {
 		line += " " + mDim.Render("(not in schema)")
@@ -1397,9 +1459,27 @@ func (m *listModel) fieldRequired(r row) bool {
 	return required
 }
 
-// valueStyle picks the value-summary color: unset faint, enums amber,
-// booleans magenta, numbers green, strings cyan, containers bold.
+// showsSchemaDefault reports whether the value displayed for path is the
+// schema default: either the document has no value there (summary previews
+// fn.Default) or its value equals the default.
+func (m *listModel) showsSchemaDefault(fn *smodel.FormNode, path []any) bool {
+	if fn == nil || fn.Default == nil || fn.Default.Null {
+		return false
+	}
+	v, ok := m.doc.Get(path)
+	if !ok || v == nil || v.Null {
+		return true
+	}
+	return nodesEqual(v, fn.Default)
+}
+
+// valueStyle picks the value-summary color: schema defaults use the hint
+// bar's gray, unset faint, enums amber, booleans magenta, numbers green,
+// strings cyan, containers bold.
 func (m *listModel) valueStyle(fn *smodel.FormNode, path []any) lipgloss.Style {
+	if m.showsSchemaDefault(fn, path) {
+		return mHelp
+	}
 	v, ok := m.doc.Get(path)
 	if !ok || v == nil || v.Null {
 		return mDim // "—" or the default preview

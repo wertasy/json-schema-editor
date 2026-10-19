@@ -1,11 +1,12 @@
 package ui
 
-// External raw editing: the root raw row, values under schema-less keys and
-// newly added schema-less members suspend the TUI and run $EDITOR (falling
-// back to $VISUAL, then vi). The temp file holds the whole document for the
-// root row, or just one value otherwise; its syntax follows Options.Raw
-// (JSON or YAML). A successful exit parses and applies the text as one undo
-// step; invalid syntax keeps the old document and surfaces a notice.
+// External raw editing: the root raw row, container values under schema-less
+// keys and newly added schema-less members suspend the TUI and run $EDITOR
+// (falling back to $VISUAL, then vi). The temp file holds the whole document
+// for the root row, or just one value otherwise; its syntax follows
+// Options.Raw (JSON or YAML). A successful exit parses and applies the text
+// as one undo step; invalid syntax keeps the old document and surfaces a
+// notice. Schema-less scalar values edit in place instead.
 
 import (
 	"bytes"

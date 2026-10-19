@@ -132,8 +132,9 @@ func menuRowsFor(lm *listModel, st *menuState) []row {
 				known[c.Key] = true
 				rows = append(rows, childRow(st, c))
 			}
-			// document members the schema does not define stay visible (raw
-			// JSON editable) so they can be repaired or removed
+			// document members the schema does not define stay visible
+			// (scalars edit in place, containers raw) so they can be
+			// repaired or removed
 			if lm.doc != nil {
 				if cur, ok := lm.doc.Get(st.path); ok && cur != nil && cur.Object != nil {
 					for _, mem := range *cur.Object {

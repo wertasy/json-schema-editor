@@ -10,6 +10,8 @@ import (
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
 	"github.com/muesli/termenv"
+
+	"github.com/wertasy/json-schema-editor/internal/smodel"
 )
 
 func TestHelpOverlay(t *testing.T) {
@@ -126,14 +128,14 @@ func TestHelpOverlayKeyColumn(t *testing.T) {
 	if !strings.Contains(line[:at], "up / down / j / k") {
 		t.Fatalf("key column lost its key:\n%s", line)
 	}
-	if got := displayWidth(line[:at]); got != titleColWidth {
-		t.Fatalf("description starts at %d cells, want %d:\n%s", got, titleColWidth, line)
+	if got := displayWidth(line[:at]); got != helpColWidth {
+		t.Fatalf("description starts at %d cells, want %d:\n%s", got, helpColWidth, line)
 	}
 
 	cont := find("at the root: quit")
 	at = strings.Index(cont, "at the root: quit")
-	if got := displayWidth(cont[:at]); got != titleColWidth {
-		t.Fatalf("continuation starts at %d cells, want %d:\n%s", got, titleColWidth, cont)
+	if got := displayWidth(cont[:at]); got != helpColWidth {
+		t.Fatalf("continuation starts at %d cells, want %d:\n%s", got, helpColWidth, cont)
 	}
 
 	// Narrow terminals collapse the padding instead of clipping the text away.
@@ -212,5 +214,75 @@ func TestSchemaDescColorDistinctFromHelp(t *testing.T) {
 	}
 	if want := sgr(mDesc.Render("x")); sgr(descLine) != want {
 		t.Fatalf("description SGR = %q, want the mDesc color %q", sgr(descLine), want)
+	}
+}
+
+// TestSchemaDefaultValueUsesHelpGray: a value that is the schema default —
+// previewed because the key is unset, or set explicitly to the same value —
+// uses the hint bar's neutral gray instead of its type color.
+func TestSchemaDefaultValueUsesHelpGray(t *testing.T) {
+	old := lipgloss.ColorProfile()
+	lipgloss.SetColorProfile(termenv.TrueColor)
+	t.Cleanup(func() { lipgloss.SetColorProfile(old) })
+
+	root := testModel()
+	server := childOf(t, root, "server")
+	mode := childOf(t, root, "mode")     // unset, default "http"
+	port := childOf(t, server, "port")   // set below to its 8080 default
+	debug := childOf(t, server, "debug") // set true, default false
+	ratio := childOf(t, server, "ratio") // unset, no default
+	help := mHelp.Render("x")
+
+	m := newListModel(root, testDoc(), Options{})
+	cases := []struct {
+		name string
+		fn   *smodel.FormNode
+		path []any
+		want string
+	}{
+		{"unset default preview", mode, []any{"mode"}, help},
+		{"explicit default", port, []any{"server", "port"}, help},
+		{"non-default bool", debug, []any{"server", "debug"}, mValBool.Render("x")},
+		{"unset without default", ratio, []any{"server", "ratio"}, mDim.Render("x")},
+	}
+	for _, c := range cases {
+		if got := m.valueStyle(c.fn, c.path).Render("x"); got != c.want {
+			t.Errorf("%s: SGR = %q, want %q", c.name, got, c.want)
+		}
+	}
+
+	// An enum set explicitly to its default is gray too; another member keeps
+	// the enum color.
+	m2 := newListModel(root, tobj(tmem("mode", tstr("http"))), Options{})
+	if got := m2.valueStyle(mode, []any{"mode"}).Render("x"); got != help {
+		t.Errorf("explicit enum default: SGR = %q, want %q", got, help)
+	}
+	m3 := newListModel(root, tobj(tmem("mode", tstr("grpc"))), Options{})
+	if got := m3.valueStyle(mode, []any{"mode"}).Render("x"); got != mValEnum.Render("x") {
+		t.Errorf("non-default enum: SGR = %q, want %q", got, mValEnum.Render("x"))
+	}
+
+	// The rendered rows carry the same styles: unset/explicit defaults gray,
+	// non-default values and the no-default dash keep their own colors.
+	view := m.View()
+	for _, want := range []string{
+		mHelp.Render("http"),     // unset enum default preview
+		mValStr.Render("webapp"), // ordinary value
+	} {
+		if !strings.Contains(view, want) {
+			t.Errorf("root view missing %q:\n%s", want, view)
+		}
+	}
+	sub := lmAt(testDoc(), &menuState{kind: menuObject, node: server, path: []any{"server"}})
+	subView := sub.View()
+	for _, want := range []string{
+		mHelp.Render("8080"),    // explicit number default
+		mHelp.Render("0.0.0.0"), // explicit string default
+		mValBool.Render("[y]"),  // true, default is false
+		mDim.Render("—"),        // unset, no default
+	} {
+		if !strings.Contains(subView, want) {
+			t.Errorf("server view missing %q:\n%s", want, subView)
+		}
 	}
 }

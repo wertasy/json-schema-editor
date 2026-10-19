@@ -389,7 +389,7 @@ func TestMenuCtrlC(t *testing.T) {
 
 func TestUnknownKeyExternalEdit(t *testing.T) {
 	doc := testDoc()
-	doc.Set([]any{"extra"}, tstr("old"))
+	doc.Set([]any{"extra"}, tobj(tmem("old", tstr("value"))))
 	m := newListModel(testModel(), doc, Options{})
 	m.Update(tea.WindowSizeMsg{Width: 100, Height: 30})
 	open := func() {
@@ -404,7 +404,7 @@ func TestUnknownKeyExternalEdit(t *testing.T) {
 			t.Fatal("unknown key must not open the in-app raw editor")
 		}
 		if m.ext == nil {
-			t.Fatal("unknown key must launch the external editor")
+			t.Fatal("unknown object value must launch the external editor")
 		}
 	}
 	// The temp file is prefilled with the current value as JSON.
@@ -413,14 +413,18 @@ func TestUnknownKeyExternalEdit(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if got := strings.TrimSpace(string(data)); got != `"old"` {
-		t.Fatalf("editor prefill = %q, want %q", got, `"old"`)
+	pre, err := jsondoc.Parse(strings.NewReader(string(data)))
+	if err != nil {
+		t.Fatalf("editor prefill is not valid JSON: %v\n%s", err, data)
+	}
+	if old, ok := pre.Get([]any{"old"}); !ok || old.Str == nil || *old.Str != "value" {
+		t.Fatalf("editor prefill = %q, want the current object", data)
 	}
 
 	// Invalid JSON leaves the value untouched and closes the editor.
 	finishExternalValue(t, m, "{oops")
-	if s := strAt(t, doc, "extra"); s != "old" {
-		t.Fatalf("extra = %q after invalid JSON, want old", s)
+	if _, ok := doc.Get([]any{"extra", "old"}); !ok {
+		t.Fatal("invalid JSON must leave the object value untouched")
 	}
 	if !strings.Contains(m.notice, "invalid JSON") {
 		t.Fatalf("notice = %q, want an invalid-JSON error", m.notice)
@@ -428,13 +432,13 @@ func TestUnknownKeyExternalEdit(t *testing.T) {
 
 	// Valid JSON replaces the value as one undo step.
 	open()
-	finishExternalValue(t, m, `"new"`)
-	if s := strAt(t, doc, "extra"); s != "new" {
-		t.Fatalf("extra = %q, want new", s)
+	finishExternalValue(t, m, `{"new":"value"}`)
+	if s := strAt(t, doc, "extra", "new"); s != "value" {
+		t.Fatalf("extra.new = %q, want value", s)
 	}
 	press(m, "u")
-	if s := strAt(t, doc, "extra"); s != "old" {
-		t.Fatalf("undo restored %q, want old", s)
+	if old, ok := doc.Get([]any{"extra", "old"}); !ok || old.Str == nil || *old.Str != "value" {
+		t.Fatal("undo must restore the original object")
 	}
 
 	// An empty file removes the key.
@@ -442,6 +446,99 @@ func TestUnknownKeyExternalEdit(t *testing.T) {
 	finishExternalValue(t, m, "  ")
 	if _, ok := doc.Get([]any{"extra"}); ok {
 		t.Fatal("empty external value should remove the key")
+	}
+}
+
+// TestUnknownKeyScalarInlineEdit: schema-less scalars edit in place by their
+// own JSON type; missing values and containers still use $EDITOR.
+func TestUnknownKeyScalarInlineEdit(t *testing.T) {
+	doc := testDoc()
+	doc.Set([]any{"text"}, tstr("old"))
+	doc.Set([]any{"count"}, tnum("42"))
+	doc.Set([]any{"flag"}, tbool(true))
+	doc.Set([]any{"nothing"}, &jsondoc.Node{Null: true})
+	doc.Set([]any{"objval"}, tobj(tmem("a", tnum("1"))))
+	doc.Set([]any{"arrval"}, tarr(tnum("1")))
+	m := newListModel(testModel(), doc, Options{})
+	m.Update(tea.WindowSizeMsg{Width: 100, Height: 30})
+	selectRow := func(label string) {
+		t.Helper()
+		for i, r := range menuRows(m) {
+			if r.kind == rowUnknown && r.label == label {
+				m.top().cursor = i
+				return
+			}
+		}
+		t.Fatalf("unknown row %q not found:\n%s", label, m.View())
+	}
+
+	// string → text input prefilled with the current value
+	selectRow("text")
+	press(m, "enter")
+	if m.edit == nil || m.ext != nil || m.text != nil {
+		t.Fatalf("string value must edit in place, edit=%v ext=%v text=%v",
+			m.edit != nil, m.ext != nil, m.text != nil)
+	}
+	if m.edit.fn.JSONType != "string" || m.edit.ti.Value() != "old" {
+		t.Fatalf("string editor = type %q value %q, want string/old",
+			m.edit.fn.JSONType, m.edit.ti.Value())
+	}
+	press(m, "ctrl+u", "n", "e", "w", "enter")
+	if s := strAt(t, doc, "text"); s != "new" {
+		t.Fatalf("text = %q, want new", s)
+	}
+
+	// number → numeric input; invalid text is rejected without writing
+	selectRow("count")
+	press(m, "enter")
+	if m.edit == nil || m.edit.fn.JSONType != "number" || m.edit.ti.Value() != "42" {
+		t.Fatalf("number editor = %+v, want type number value 42", m.edit)
+	}
+	press(m, "ctrl+u", "n", "o", "p", "enter")
+	if m.edit == nil || m.edit.err != "must be a number" {
+		t.Fatalf("invalid number must stay in the editor, edit=%+v", m.edit)
+	}
+	press(m, "ctrl+u", "4", "3", "enter")
+	if got := numAt(t, doc, "count"); got != "43" {
+		t.Fatalf("count = %q, want 43", got)
+	}
+
+	// boolean → enter and space toggle it
+	selectRow("flag")
+	press(m, "enter")
+	if m.edit != nil || m.ext != nil {
+		t.Fatalf("boolean value must toggle, edit=%v ext=%v", m.edit != nil, m.ext != nil)
+	}
+	if n, _ := doc.Get([]any{"flag"}); n == nil || n.Bool == nil || *n.Bool {
+		t.Fatalf("enter must toggle true to false, got %+v", n)
+	}
+	press(m, "space")
+	if n, _ := doc.Get([]any{"flag"}); n == nil || n.Bool == nil || !*n.Bool {
+		t.Fatalf("space must toggle false to true, got %+v", n)
+	}
+
+	// null, object and array values keep the external editor
+	for _, tc := range []struct{ label, value string }{
+		{"nothing", "null"},
+		{"objval", `{"a":2}`},
+		{"arrval", "[2]"},
+	} {
+		selectRow(tc.label)
+		press(m, "enter")
+		if m.ext == nil || m.edit != nil || m.text != nil {
+			t.Fatalf("%s value must use the external editor, edit=%v ext=%v text=%v",
+				tc.label, m.edit != nil, m.ext != nil, m.text != nil)
+		}
+		finishExternalValue(t, m, tc.value)
+	}
+	if n, _ := doc.Get([]any{"nothing"}); n == nil || !n.Null {
+		t.Fatalf("nothing = %+v, want null", n)
+	}
+	if n, _ := doc.Get([]any{"objval", "a"}); n == nil || n.Num == nil || n.Num.String() != "2" {
+		t.Fatalf("objval.a = %+v, want 2", n)
+	}
+	if n, _ := doc.Get([]any{"arrval", 0}); n == nil || n.Num == nil || n.Num.String() != "2" {
+		t.Fatalf("arrval[0] = %+v, want 2", n)
 	}
 }
 

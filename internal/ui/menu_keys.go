@@ -183,7 +183,7 @@ func (m *listModel) activate(r row) tea.Cmd {
 	case rowToggle:
 		m.toggleEnumMember(r)
 	case rowUnknown:
-		return m.editValueExternal(r.path, -1) // no schema: $EDITOR on the raw value
+		return m.activateUnknown(r.path)
 	case rowIssues:
 		m.openIssues()
 	}
@@ -198,6 +198,8 @@ func (m *listModel) space(r row) tea.Cmd {
 		m.toggleBool(r.fn, r.path)
 	case r.kind == rowVariant && r.variant.Kind == smodel.KBoolean:
 		m.toggleBool(r.variant, r.path)
+	case r.kind == rowUnknown && m.unknownBool(r.path):
+		m.toggleUnknownBool(r.path)
 	default:
 		return m.activate(r)
 	}
@@ -370,6 +372,48 @@ func (m *listModel) playMacro() tea.Cmd {
 }
 
 // --- field editing -------------------------------------------------------
+
+// activateUnknown edits the value of a schema-less key: scalars edit in
+// place using the value's own JSON type (string/number input, boolean
+// toggle), while a missing/null value or a container stays in the external
+// editor where the raw JSON/YAML can be authored.
+func (m *listModel) activateUnknown(path []any) tea.Cmd {
+	cur, ok := m.doc.Get(path)
+	if !ok || cur == nil || cur.Null || cur.Object != nil || cur.Array != nil {
+		return m.editValueExternal(path, -1)
+	}
+	switch {
+	case cur.Bool != nil:
+		m.toggleUnknownBool(path)
+	case cur.Num != nil:
+		m.openUnknownScalar(path, "number")
+	case cur.Str != nil:
+		m.openUnknownScalar(path, "string")
+	default:
+		return m.editValueExternal(path, -1)
+	}
+	return nil
+}
+
+// openUnknownScalar opens the in-place input for a schema-less scalar. The
+// synthetic form node borrows the key for value completion and carries only
+// the current JSON type, so validation matches the value being edited
+// (number vs. string) rather than an inferred schema.
+func (m *listModel) openUnknownScalar(path []any, jsonType string) {
+	key, _ := path[len(path)-1].(string)
+	m.openField(&smodel.FormNode{Key: key, Title: key, Kind: smodel.KScalar,
+		JSONType: jsonType}, path, false)
+}
+
+func (m *listModel) toggleUnknownBool(path []any) {
+	m.toggleBool(&smodel.FormNode{Kind: smodel.KBoolean}, path)
+}
+
+// unknownBool reports whether the schema-less value at path is a boolean.
+func (m *listModel) unknownBool(path []any) bool {
+	v, ok := m.doc.Get(path)
+	return ok && v != nil && v.Bool != nil
+}
 
 // openField starts the appropriate editor for a field row (isNew marks the
 // append-a-new-array-item flow where cancelling writes nothing).
