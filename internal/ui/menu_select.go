@@ -80,6 +80,42 @@ func (m *listModel) visualSync(st *menuState, rows []row) {
 	st.sel = sel
 }
 
+// visualJump lands a list jump (gg/G/Home/End, N gg) while visual select
+// (v) is on and extends the marked range over the keys passed on the way:
+// anchor..old cursor and old..new cursor share an endpoint, so their union
+// is the bounding range — the anchor flips to the far end and nothing
+// jumped over is dropped (gg after G keeps the whole span marked). The
+// cursor comes to rest on a key row, never an action row (G otherwise
+// stops on trailing rows like < Save and exit >, gg on a leading
+// status/< Expand >/< Add item > row). Menus without selectable rows keep
+// the cursor. from is the cursor position before the jump.
+func (m *listModel) visualJump(st *menuState, rows []row, from int) {
+	if st.cursor >= 0 && st.cursor < len(rows) && !selectableRow(rows[st.cursor]) {
+		dest := -1
+		for i := st.cursor - 1; i >= 0 && dest < 0; i-- {
+			if selectableRow(rows[i]) {
+				dest = i
+			}
+		}
+		for i := st.cursor + 1; i < len(rows) && dest < 0; i++ {
+			if selectableRow(rows[i]) {
+				dest = i
+			}
+		}
+		if dest >= 0 {
+			st.cursor = dest
+		}
+	}
+	lo := min(min(st.vanchor, from), st.cursor)
+	hi := max(max(st.vanchor, from), st.cursor)
+	if st.cursor == lo {
+		st.vanchor = hi
+	} else {
+		st.vanchor = lo
+	}
+	m.visualSync(st, rows)
+}
+
 // rowSelected reports whether the row is in the current menu's selection.
 func (m *listModel) rowSelected(r row) bool {
 	st := m.top()

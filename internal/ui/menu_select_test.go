@@ -195,7 +195,7 @@ func TestVisualSelectMarksPassedRows(t *testing.T) {
 	// in visual select the cursor row takes the mark colors too: the > is
 	// bright red and the key is bold bright red
 	press(m, "j")
-	if v := m.View(); !contains(v, "Visual select: j/k or arrows mark rows · y copy · d delete · v/esc stop") {
+	if v := m.View(); !contains(v, "Visual select: j/k, gg/G or arrows mark rows · y copy · d delete · v/esc stop") {
 		t.Fatalf("help bar must show the visual select hint:\n%s", v)
 	}
 	line := lineOf(t, m, "Mode")
@@ -292,6 +292,65 @@ func TestVisualSelectMarksPassedRows(t *testing.T) {
 	press(m, "esc")
 	if m.top().visual {
 		t.Fatal("returning from a drill must end visual select")
+	}
+}
+
+func TestVisualJumpKeysMarkRange(t *testing.T) {
+	m := newListModel(testModel(), testDoc(), Options{})
+	m.Update(tea.WindowSizeMsg{Width: 100, Height: 30})
+	// rows: Name(0) Mode(1) Server(2) Logging(3) Mounts(4) Auth(5) Save(6) Raw(7)
+
+	// visual on at Mode, one j to Server, then G: the cursor must rest on
+	// the last key row (Auth), not on < Save and exit >/< Edit raw JSON >,
+	// with every key between the anchor and the cursor marked
+	press(m, "down", "v", "j", "G")
+	if r := rowAtCursor(m); r.fn == nil || r.fn.Key != "auth" {
+		t.Fatalf("G in visual select landed on %+v, want Auth", r)
+	}
+	if got := len(m.top().sel); got != 5 {
+		t.Fatalf("selection = %d rows, want 5 (Mode..Auth)", got)
+	}
+	for _, key := range []string{"mode", "server", "logging", "mounts", "auth"} {
+		if _, ok := m.top().sel[selKey([]any{key})]; !ok {
+			t.Fatalf("%s must be selected after G", key)
+		}
+	}
+
+	// gg back to the first key: the jump extends over everything passed —
+	// the whole span from Name to Auth stays marked
+	press(m, "g", "g")
+	if r := rowAtCursor(m); r.fn == nil || r.fn.Key != "name" {
+		t.Fatalf("gg in visual select landed on %+v, want Name", r)
+	}
+	if got := len(m.top().sel); got != 6 {
+		t.Fatalf("selection = %d rows, want 6 (Name..Auth)", got)
+	}
+
+	// G again keeps the full span marked
+	press(m, "G")
+	if got := len(m.top().sel); got != 6 {
+		t.Fatalf("selection = %d rows, want 6 after G", got)
+	}
+
+	// Home and End behave like gg and G during visual select
+	press(m, "home")
+	if r := rowAtCursor(m); r.fn == nil || r.fn.Key != "name" {
+		t.Fatalf("Home in visual select landed on %+v, want Name", r)
+	}
+	press(m, "end")
+	if r := rowAtCursor(m); r.fn == nil || r.fn.Key != "auth" {
+		t.Fatalf("End in visual select landed on %+v, want Auth", r)
+	}
+
+	// without visual select G keeps landing on the last row (action row);
+	// it neither marks nor clears anything
+	press(m, "v")
+	press(m, "G")
+	if r := rowAtCursor(m); r.label != "< Edit raw JSON >" {
+		t.Fatalf("plain G landed on %+v, want < Edit raw JSON >", r)
+	}
+	if got := len(m.top().sel); got != 6 {
+		t.Fatalf("plain jump changed the selection: %d rows", got)
 	}
 }
 

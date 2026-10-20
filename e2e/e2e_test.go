@@ -670,7 +670,7 @@ func TestPtyExternalRawEditor(t *testing.T) {
 	tty.Write([]byte("G\r")) // jump to the last row: <Edit raw JSON>
 	_, off = waitFrame("editor applied", off, "Raw JSON edited")
 	tty.Write([]byte("\x13")) // ctrl+s save
-	_, _ = waitFrame("saved", off, "Saved")
+	_, _ = waitFrame("saved", off, "Write to ")
 	tty.Write([]byte("\x03"))
 
 	waitErr := cmd.Wait()
@@ -756,7 +756,7 @@ func TestPtyExternalRawYAMLEditor(t *testing.T) {
 	tty.Write([]byte("G\r")) // jump to the last row: <Edit raw YAML>
 	_, off = waitFrame("YAML editor applied", off, "Raw YAML edited")
 	tty.Write([]byte("\x13")) // ctrl+s save
-	_, _ = waitFrame("saved", off, "Saved")
+	_, _ = waitFrame("saved", off, "Write to ")
 	tty.Write([]byte("\x03"))
 
 	waitErr := cmd.Wait()
@@ -865,7 +865,7 @@ func TestPtyExternalUnknownKeyEditor(t *testing.T) {
 	tty.Write([]byte("\r")) // launch $EDITOR on the object value
 	_, off = waitFrame("value edited", off, "Value edited")
 	tty.Write([]byte("\x13")) // ctrl+s save
-	_, _ = waitFrame("saved", off, "Saved")
+	_, _ = waitFrame("saved", off, "Write to ")
 	tty.Write([]byte("\x03"))
 
 	waitErr := cmd.Wait()
@@ -1038,7 +1038,7 @@ func TestPtySave(t *testing.T) {
 		n, err := tty.Read(buf)
 		if n > 0 {
 			all.Write(buf[:n])
-			if strings.Contains(all.String(), "Saved") {
+			if strings.Contains(all.String(), "Write to ") {
 				saved = true
 				break
 			}
@@ -1104,7 +1104,7 @@ func TestPtyMenuFlow(t *testing.T) {
 		n, err := tty.Read(buf)
 		if n > 0 {
 			all.Write(buf[:n])
-			if strings.Contains(all.String(), "Saved") {
+			if strings.Contains(all.String(), "Write to ") {
 				saved = true
 				break
 			}
@@ -1214,7 +1214,7 @@ func TestPtyMoveItem(t *testing.T) {
 		}
 	}
 	tty.Write([]byte("\x13")) // ctrl+s save
-	_, _ = waitFrame("saved notice", off, "Saved")
+	_, _ = waitFrame("saved notice", off, "Write to ")
 	tty.Write([]byte("\x03")) // ctrl+c abort
 
 	waitErr := cmd.Wait()
@@ -1417,7 +1417,7 @@ func TestPtySearchReplace(t *testing.T) {
 	tty.Write([]byte("\x12")) // ctrl+r: replace all in scope
 	_, off = waitFrame("replace-all notice", off, "replaced 2 occurrence")
 	tty.Write([]byte("\x13")) // ctrl+s: persist
-	_, _ = waitFrame("saved", off, "Saved")
+	_, _ = waitFrame("saved", off, "Write to ")
 	content, err := os.ReadFile(cfg)
 	if err != nil {
 		t.Fatal(err)
@@ -1516,7 +1516,7 @@ func TestPtyUndoRedo(t *testing.T) {
 	tty.Write([]byte("u")) // undo
 	_, off = waitFrame("undone notice", off, "undone")
 	tty.Write([]byte("\x13")) // ctrl+s: persist the reverted doc
-	_, off = waitFrame("save after undo", off, "Saved")
+	_, off = waitFrame("save after undo", off, "Write to ")
 	content, err := os.ReadFile(cfg)
 	if err != nil {
 		t.Fatal(err)
@@ -1528,7 +1528,7 @@ func TestPtyUndoRedo(t *testing.T) {
 	tty.Write([]byte("\x12")) // ctrl+r: redo
 	_, off = waitFrame("redone notice", off, "redone", "demo-x")
 	tty.Write([]byte("\x13")) // ctrl+s: persist the re-applied doc
-	_, off = waitFrame("save after redo", off, "Saved")
+	_, off = waitFrame("save after redo", off, "Write to ")
 	content, err = os.ReadFile(cfg)
 	if err != nil {
 		t.Fatal(err)
@@ -1592,7 +1592,7 @@ func TestPtyYAMLAliasEditKeepsReference(t *testing.T) {
 		n, err := tty.Read(buf)
 		if n > 0 {
 			all.Write(buf[:n])
-			if strings.Contains(all.String(), "Saved") {
+			if strings.Contains(all.String(), "Write to ") {
 				saved = true
 				break
 			}
@@ -1662,7 +1662,7 @@ func TestPtyYAMLAliasExpand(t *testing.T) {
 		n, err := tty.Read(buf)
 		if n > 0 {
 			all.Write(buf[:n])
-			if strings.Contains(all.String(), "Saved") {
+			if strings.Contains(all.String(), "Write to ") {
 				saved = true
 				break
 			}
@@ -1731,7 +1731,7 @@ func TestPtyYAMLAnchorRename(t *testing.T) {
 		n, err := tty.Read(buf)
 		if n > 0 {
 			all.Write(buf[:n])
-			if strings.Contains(all.String(), "Saved") {
+			if strings.Contains(all.String(), "Write to ") {
 				saved = true
 				break
 			}
@@ -1817,7 +1817,7 @@ func TestPtyMergeKeys(t *testing.T) {
 		n, err := tty.Read(buf)
 		if n > 0 {
 			all.Write(buf[:n])
-			if strings.Contains(all.String(), "Saved") {
+			if strings.Contains(all.String(), "Write to ") {
 				saved = true
 				break
 			}

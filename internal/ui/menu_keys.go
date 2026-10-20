@@ -36,7 +36,11 @@ func (m *listModel) keyList(msg tea.KeyMsg) tea.Cmd {
 	if m.gAnchorKeys(msg, r) {
 		return nil
 	}
+	cur := st.cursor
 	if m.jumpKeys(msg, &st.cursor, len(rows)) {
+		if st.visual && st.cursor != cur {
+			m.visualJump(st, rows, cur) // jumps extend the range, landing on a key
+		}
 		return nil
 	}
 	switch msg.String() {
@@ -55,11 +59,19 @@ func (m *listModel) keyList(msg tea.KeyMsg) tea.Cmd {
 	case "P":
 		m.pasteClipboard(r, true) // the map/array under the cursor
 	case "y":
-		m.copyRowOrSelection(r) // marked pairs, else the cursor row's pair
+		if st.kind == menuItems {
+			m.copyRow(r, false) // array pages: y copies the item's value like Y
+		} else {
+			m.copyRowOrSelection(r) // marked pairs, else the cursor row's pair
+		}
 	case "Y":
 		m.copyRow(r, false) // the value itself
 	case "x":
-		m.cutRowOrSelection(r, true) // marked pairs / cursor row: copy + delete
+		if st.kind == menuItems {
+			m.cutRowOrSelection(r, false) // array pages: x cuts the item like X
+		} else {
+			m.cutRowOrSelection(r, true) // marked pairs / cursor row: copy + delete
+		}
 	case "X":
 		m.cutRowOrSelection(r, false)
 	case "m":
@@ -69,7 +81,7 @@ func (m *listModel) keyList(msg tea.KeyMsg) tea.Cmd {
 		if st.visual {
 			st.vanchor = st.cursor // the range grows and shrinks from here
 			m.visualSync(st, rows)
-			m.notice = "visual select on — j/k marks rows, v stops"
+			m.notice = "visual select on — j/k/gg/G mark rows, v stops"
 		} else {
 			m.notice = "visual select off"
 		}
@@ -153,6 +165,8 @@ func (m *listModel) keyList(msg tea.KeyMsg) tea.Cmd {
 		m.openSearch(true)
 	case "ctrl+s", "w":
 		return m.save()
+	case "W":
+		m.openWriteTo() // write a copy to another path
 	}
 	return nil
 }
@@ -1116,9 +1130,61 @@ func (m *listModel) save() tea.Cmd { return m.persist(false) }
 // session.
 func (m *listModel) saveAndExit() tea.Cmd { return m.persist(true) }
 
+// openWriteTo arms the w/W input: a path field prefilled with the session
+// file's own path, rendered as a row at the end of the menu. Enter writes
+// to the entered path (an unedited path saves the session file); esc
+// discards.
+func (m *listModel) openWriteTo() {
+	ti := textinput.New()
+	ti.Prompt = ""
+	ti.CharLimit = 0
+	ti.SetValue(m.opts.Path)
+	ti.CursorEnd()
+	ti.Focus()
+	m.write = &writeState{ti: ti}
+}
+
+// keyWrite drives the w/W write-to-path input: the row is prefilled with the
+// session file's path — enter on the unedited path saves the session file
+// (baseline and markers refresh, notice "Saved"); editing the path to
+// something else writes a copy through opts.WriteTo instead (notice "Wrote
+// to …"), leaving the session's own save state untouched. Both go through
+// the ctrl+s validation gate (the errors overlay's --force writes to the
+// same path). esc discards.
+func (m *listModel) keyWrite(msg tea.KeyMsg) tea.Cmd {
+	switch msg.String() {
+	case "enter":
+		path := strings.TrimSpace(m.write.ti.Value())
+		if path == "" {
+			m.write.err = "path required"
+			return nil
+		}
+		m.write = nil
+		if path == m.opts.Path { // unedited: a plain save of the session file
+			return m.validateAndWrite(false, "")
+		}
+		return m.validateAndWrite(false, path)
+	case "esc":
+		m.write = nil
+		return nil
+	}
+	m.write.err = ""
+	var cmd tea.Cmd
+	m.write.ti, cmd = m.write.ti.Update(msg)
+	return cmd
+}
+
 // persist validates first; validation errors open the overlay (with the
 // --force y/n path remembering whether the session should end afterwards).
 func (m *listModel) persist(exit bool) tea.Cmd {
+	return m.validateAndWrite(exit, "")
+}
+
+// validateAndWrite validates the document like ctrl+s and then writes it to
+// target: "" is the session's own file (opts.Save), any other path goes
+// through opts.WriteTo (menu W). Validation errors open the overlay;
+// forcing writes to the same target.
+func (m *listModel) validateAndWrite(exit bool, target string) tea.Cmd {
 	if m.opts.Validate != nil {
 		if errs := m.opts.Validate(m.doc); len(errs) > 0 {
 			const maxShown = 15
@@ -1136,32 +1202,51 @@ func (m *listModel) persist(exit bool) tea.Cmd {
 				}
 				paths = append(paths, p)
 			}
-			m.errs = &errsState{lines: shown, paths: paths, exit: exit}
+			m.errs = &errsState{lines: shown, paths: paths, exit: exit, target: target}
 			return nil
 		}
 	}
-	return m.write(exit, false)
+	return m.writeTo(exit, false, target)
 }
 
-// write persists through opts.Save. A failed write surfaces as a notice and
-// the session continues; a successful one refreshes the change-mark baseline.
-func (m *listModel) write(exit, forced bool) tea.Cmd {
-	if m.opts.Save == nil {
-		m.notice = "save failed: no save target"
+// writeTo persists through opts.Save (target "") or opts.WriteTo (a W path).
+// A failed write surfaces as a notice and the session continues; a
+// successful session-file write refreshes the change-mark baseline. Writing
+// a copy (W) leaves the baseline and the session's saved flag alone — the
+// original file's unsaved-changes state is unaffected.
+func (m *listModel) writeTo(exit, forced bool, target string) tea.Cmd {
+	if target == "" {
+		if m.opts.Save == nil {
+			m.notice = "save failed: no save target"
+			return nil
+		}
+		if err := m.opts.Save(m.doc); err != nil {
+			m.notice = "save failed: " + err.Error()
+			return nil
+		}
+		m.saved = true
+		m.withErrors = forced
+		m.baseline = m.doc.Clone() // markers clear once saved; merges stay structural
+		if exit {
+			m.exiting = true
+			return tea.Quit
+		}
+		if m.opts.Path != "" {
+			m.notice = "Write to " + m.opts.Path
+			return nil
+		}
+		m.notice = "Saved"
 		return nil
 	}
-	if err := m.opts.Save(m.doc); err != nil {
-		m.notice = "save failed: " + err.Error()
+	if m.opts.WriteTo == nil {
+		m.notice = "write failed: no write-to target"
 		return nil
 	}
-	m.saved = true
-	m.withErrors = forced
-	m.baseline = m.doc.Clone() // markers clear once saved; merges stay structural
-	if exit {
-		m.exiting = true
-		return tea.Quit
+	if err := m.opts.WriteTo(target, m.doc); err != nil {
+		m.notice = "write failed: " + err.Error()
+		return nil
 	}
-	m.notice = "Saved"
+	m.notice = "Wrote to " + target
 	return nil
 }
 
@@ -1214,9 +1299,9 @@ func (m *listModel) keyErrs(msg tea.KeyMsg) tea.Cmd {
 		}
 	case "y":
 		if m.opts.Force {
-			exit := m.errs.exit
+			exit, target := m.errs.exit, m.errs.target
 			m.errs = nil
-			return m.write(exit, true)
+			return m.writeTo(exit, true, target)
 		}
 	case "n", "esc":
 		m.errs = nil

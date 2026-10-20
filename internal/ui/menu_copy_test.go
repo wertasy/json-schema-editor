@@ -86,13 +86,12 @@ func TestCopyArrayElementAndNull(t *testing.T) {
 
 	press(m, "enter") // items menu: Add(0), item0(1)
 	press(m, "down")
-	press(m, "y") // array elements have no object key
-	before := len(rec.texts)
-	if before != 0 || m.notice != "y copies object keys only" {
-		t.Fatalf("array element y: copied=%v notice=%q", rec.texts, m.notice)
+	press(m, "y") // array pages: y copies the item's value like Y
+	if len(rec.texts) != 1 || rec.texts[0] != `{"x":"v"}` {
+		t.Fatalf("array element y = %q", rec.texts)
 	}
 	press(m, "Y")
-	if len(rec.texts) != 1 || rec.texts[0] != `{"x":"v"}` {
+	if len(rec.texts) != 2 || rec.texts[1] != `{"x":"v"}` {
 		t.Fatalf("array element Y = %q", rec.texts)
 	}
 
@@ -247,18 +246,56 @@ func TestCutRow(t *testing.T) {
 		t.Fatal("X must remove the cut key")
 	}
 
-	// x refuses on array elements and keeps the item
+	// x cuts the array item like X: the item's value, then the entry
 	press(m, "u")
 	press(m, "g", "g")
 	press(m, "down", "down", "down", "down", "enter") // mounts items menu
 	press(m, "down")
 	before := len(rec.texts)
 	press(m, "x")
-	if len(rec.texts) != before || m.notice != "x cuts object keys only" {
-		t.Fatalf("array element x: copied=%v notice=%q", rec.texts[before:], m.notice)
+	if len(rec.texts) != before+1 || rec.texts[before] != `{"src":"/data","dst":"/mnt"}` {
+		t.Fatalf("array element x: copied=%v", rec.texts[before:])
 	}
-	if _, ok := doc.Get([]any{"mounts", 0}); !ok {
-		t.Fatal("refused x must keep the array item")
+	if m.notice != "Cut value" {
+		t.Fatalf("notice = %q", m.notice)
+	}
+	if _, ok := doc.Get([]any{"mounts", 0}); ok {
+		t.Fatal("array element x must remove the item")
+	}
+}
+
+// On an array page y≡Y and x≡X: every form operates on the item's value
+// (array items have no object key), and x also deletes the entry.
+func TestArrayPageLowercaseMatchesUppercase(t *testing.T) {
+	mk := func() (*listModel, *jsondoc.Node, *clipboardRecorder) {
+		rec := &clipboardRecorder{}
+		doc := twoMountDoc(t)
+		m := newListModel(testModel(), doc, Options{Copy: rec.write})
+		m.Update(tea.WindowSizeMsg{Width: 100, Height: 30})
+		press(m, "down", "down", "down", "down", "enter") // mounts items menu
+		press(m, "down")                                  // cursor on item0
+		return m, doc, rec
+	}
+
+	my, _, ry := mk()
+	press(my, "y")
+	press(my, "Y")
+	if len(ry.texts) != 2 || ry.texts[0] != ry.texts[1] {
+		t.Fatalf("y/Y copied %q, want identical values", ry.texts)
+	}
+
+	mx, dx, rx := mk()
+	press(mx, "x")
+	mX, dX, rX := mk()
+	press(mX, "X")
+	if len(rx.texts) != 1 || len(rX.texts) != 1 || rx.texts[0] != rX.texts[0] {
+		t.Fatalf("x/X copied %q vs %q", rx.texts, rX.texts)
+	}
+	if !nodesEqual(dx, dX) {
+		t.Fatal("x and X must leave identical documents")
+	}
+	if got := docArrayLen(dx, []any{"mounts"}); got != 1 {
+		t.Fatalf("mounts length after x = %d, want 1", got)
 	}
 }
 

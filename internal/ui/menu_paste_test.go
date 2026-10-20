@@ -226,16 +226,43 @@ func TestPasteIntoUnsetDrillRow(t *testing.T) {
 }
 
 func TestPasteMismatchNotices(t *testing.T) {
-	// key-value pairs pasted onto an array target are refused
-	rec := &pasteRecorder{text: `"a":1`}
+	// a complete mapping lands in an items page as ONE object item
+	rec := &pasteRecorder{text: `{"src":"/c","dst":"/d"}`}
 	m := newPasteModel(t, testModel(), twoMountDoc(t), rec)
 	press(m, "down", "down", "down", "down", "enter") // mounts items menu
-	press(m, "p")
-	if m.notice != "clipboard holds key-value pairs, the target is an array" {
+	press(m, "down")                                  // cursor on item0
+	press(m, "p")                                     // below the cursor item
+	if m.notice != "pasted 1 items into $.mounts" {
 		t.Fatalf("notice = %q", m.notice)
 	}
-	if got := docArrayLen(m.doc, []any{"mounts"}); got != 2 {
-		t.Fatalf("mounts length = %d, want 2", got)
+	if got := docArrayLen(m.doc, []any{"mounts"}); got != 3 {
+		t.Fatalf("mounts length = %d, want 3", got)
+	}
+	if got := mountSrc(t, m.doc, 1); got != "/c" {
+		t.Fatalf("mounts[1].src = %q, want /c (below the cursor item)", got)
+	}
+	n, ok := m.doc.Get([]any{"mounts", 1, "dst"})
+	if !ok || n.Str == nil || *n.Str != "/d" {
+		t.Fatalf("mounts[1].dst missing: %v", n)
+	}
+	if got := mountSrc(t, m.doc, 2); got != "/b" {
+		t.Fatalf("mounts[2].src = %q, want /b", got)
+	}
+
+	// P above the cursor item
+	rec = &pasteRecorder{text: `{"src":"/c","dst":"/d"}`}
+	m = newPasteModel(t, testModel(), twoMountDoc(t), rec)
+	press(m, "down", "down", "down", "down", "enter")
+	press(m, "down")
+	press(m, "P")
+	if m.notice != "pasted 1 items into $.mounts" {
+		t.Fatalf("P notice = %q", m.notice)
+	}
+	if got := mountSrc(t, m.doc, 0); got != "/c" {
+		t.Fatalf("mounts[0].src = %q, want /c (above the cursor item)", got)
+	}
+	if got := mountSrc(t, m.doc, 1); got != "/a" {
+		t.Fatalf("mounts[1].src = %q, want /a", got)
 	}
 
 	// array items pasted onto a mapping target are refused
@@ -244,6 +271,19 @@ func TestPasteMismatchNotices(t *testing.T) {
 	press(m, "p")
 	if m.notice != "clipboard holds array items, the target is a mapping" {
 		t.Fatalf("notice = %q", m.notice)
+	}
+	if !nodesEqual(testDoc(), m.doc) {
+		t.Fatal("refused paste must not touch the document")
+	}
+
+	// enum arrays keep refusing key-value pairs: their elements are enum
+	// scalars, not containers
+	rec = &pasteRecorder{text: `{"a":1}`}
+	m = newPasteModel(t, testModel(), testDoc(), rec)
+	press(m, "down", "down", "down", "enter", "enter") // Logging → Levels toggles
+	press(m, "p")
+	if m.notice != "clipboard holds key-value pairs, the target is an array" {
+		t.Fatalf("enum array notice = %q", m.notice)
 	}
 	if !nodesEqual(testDoc(), m.doc) {
 		t.Fatal("refused paste must not touch the document")
@@ -297,7 +337,33 @@ func TestPasteUppercaseP(t *testing.T) {
 	if m.notice != "pasted 2 keys into $" {
 		t.Fatalf("notice = %q, want %q", m.notice, "pasted 2 keys into $")
 	}
-	wantKeys(t, objKeys(t, m.doc), "name x y server mounts")
+	// P inserts above the cursor member (Name)
+	wantKeys(t, objKeys(t, m.doc), "x y name server mounts")
+}
+
+// A complete mapping pastes positionally in an object page too: p lands
+// below the cursor member, P above it — P is the only way to insert in
+// front of the cursor.
+func TestPasteCompleteMappingAroundCursor(t *testing.T) {
+	model := &smodel.FormNode{Key: "$", Title: "$", Kind: smodel.KObject}
+
+	rec := &pasteRecorder{text: `{"x":9,}`}
+	m := newPasteModel(t, model, tobj(tmem("a", tnum("1")), tmem("b", tnum("2")), tmem("c", tnum("3"))), rec)
+	press(m, "down", "down") // cursor on b (row 0 is the issues status row)
+	press(m, "p")
+	if m.notice != "pasted 1 keys into $" {
+		t.Fatalf("p notice = %q", m.notice)
+	}
+	wantKeys(t, objKeys(t, m.doc), "a b x c")
+
+	rec = &pasteRecorder{text: `{"x":9,}`}
+	m = newPasteModel(t, model, tobj(tmem("a", tnum("1")), tmem("b", tnum("2")), tmem("c", tnum("3"))), rec)
+	press(m, "down", "down") // cursor on b
+	press(m, "P")
+	if m.notice != "pasted 1 keys into $" {
+		t.Fatalf("P notice = %q", m.notice)
+	}
+	wantKeys(t, objKeys(t, m.doc), "a x b c")
 }
 
 func TestPasteDuplicateKeyInClipboard(t *testing.T) {
@@ -413,6 +479,138 @@ func TestPasteYAMLDetachesAnchors(t *testing.T) {
 	}
 	if x.Anchor != "" || y.Anchor != "" {
 		t.Fatalf("pasted anchors must dissolve, got %q/%q", x.Anchor, y.Anchor)
+	}
+}
+
+func TestPasteArrayPBelowPAbove(t *testing.T) {
+	// p inserts below the cursor item, P above it — bare items or a
+	// complete array alike
+	mk := func(text string) *listModel {
+		m := newPasteModel(t, testModel(), twoMountDoc(t), &pasteRecorder{text: text})
+		press(m, "down", "down", "down", "down", "enter") // mounts items menu
+		press(m, "down", "down")                          // cursor on the second item (idx 1)
+		return m
+	}
+
+	// p: bare items land right below the cursor item
+	m := mk(`8, 9`)
+	press(m, "p")
+	if m.notice != "pasted 2 items into $.mounts" {
+		t.Fatalf("p notice = %q", m.notice)
+	}
+	if got := docArrayLen(m.doc, []any{"mounts"}); got != 4 {
+		t.Fatalf("mounts length = %d, want 4", got)
+	}
+	if got := mountSrc(t, m.doc, 1); got != "/b" {
+		t.Fatalf("mounts[1].src = %q, want /b", got)
+	}
+	if got := numAt(t, m.doc, "mounts", 2); got != "8" {
+		t.Fatalf("mounts[2] = %s, want 8 (below the cursor item)", got)
+	}
+	if got := numAt(t, m.doc, "mounts", 3); got != "9" {
+		t.Fatalf("mounts[3] = %s, want 9", got)
+	}
+
+	// P: the same shape lands right above the cursor item
+	m = mk(`8, 9`)
+	press(m, "P")
+	if m.notice != "pasted 2 items into $.mounts" {
+		t.Fatalf("P notice = %q", m.notice)
+	}
+	if got := numAt(t, m.doc, "mounts", 1); got != "8" {
+		t.Fatalf("mounts[1] = %s, want 8 (above the cursor item)", got)
+	}
+	if got := numAt(t, m.doc, "mounts", 2); got != "9" {
+		t.Fatalf("mounts[2] = %s, want 9", got)
+	}
+	if got := mountSrc(t, m.doc, 3); got != "/b" {
+		t.Fatalf("mounts[3].src = %q, want /b", got)
+	}
+
+	// P: a complete array with a trailing comma splices above the cursor
+	m = mk(`[6,7,]`)
+	press(m, "P")
+	if m.notice != "pasted 2 items into $.mounts" {
+		t.Fatalf("P array notice = %q", m.notice)
+	}
+	if got := numAt(t, m.doc, "mounts", 1); got != "6" {
+		t.Fatalf("mounts[1] = %s, want 6", got)
+	}
+	if got := numAt(t, m.doc, "mounts", 2); got != "7" {
+		t.Fatalf("mounts[2] = %s, want 7", got)
+	}
+	if got := mountSrc(t, m.doc, 3); got != "/b" {
+		t.Fatalf("mounts[3].src = %q, want /b", got)
+	}
+
+	// p: a complete array with a trailing comma splices below the cursor
+	m = mk(`[6,7,]`)
+	press(m, "p")
+	if m.notice != "pasted 2 items into $.mounts" {
+		t.Fatalf("p array notice = %q", m.notice)
+	}
+	if got := mountSrc(t, m.doc, 1); got != "/b" {
+		t.Fatalf("mounts[1].src = %q, want /b", got)
+	}
+	if got := numAt(t, m.doc, "mounts", 2); got != "6" {
+		t.Fatalf("mounts[2] = %s, want 6 (below the cursor item)", got)
+	}
+
+	// a cursor on < Add item > is the list end: p and P both append
+	m = mk(`8,`)
+	press(m, "up", "up") // < Add item >
+	press(m, "P")
+	if m.notice != "pasted 1 items into $.mounts" {
+		t.Fatalf("P append notice = %q", m.notice)
+	}
+	if got := numAt(t, m.doc, "mounts", 2); got != "8" {
+		t.Fatalf("mounts[2] = %s, want 8 (appended)", got)
+	}
+}
+
+func TestPasteTrailingCommaInCompleteObject(t *testing.T) {
+	rec := &pasteRecorder{text: `{"a":1,"b":"2",}`}
+	m := newPasteModel(t, testModel(), testDoc(), rec)
+	press(m, "p")
+	if m.notice != "pasted 2 keys into $" {
+		t.Fatalf("notice = %q, want %q", m.notice, "pasted 2 keys into $")
+	}
+	wantKeys(t, objKeys(t, m.doc), "name a b server mounts")
+	if got := numAt(t, m.doc, "a"); got != "1" {
+		t.Fatalf("a = %s, want 1", got)
+	}
+	if got := strAt(t, m.doc, "b"); got != "2" {
+		t.Fatalf("b = %q, want 2", got)
+	}
+}
+
+func TestPasteTrailingCommaInCompleteArrayAppends(t *testing.T) {
+	rec := &pasteRecorder{text: `[4,5,]`}
+	m := newPasteModel(t, testModel(), twoMountDoc(t), rec)
+	press(m, "down", "down", "down", "down", "enter") // mounts items menu
+	press(m, "p")                                     // cursor on < Add item >: append
+	if m.notice != "pasted 2 items into $.mounts" {
+		t.Fatalf("notice = %q", m.notice)
+	}
+	if got := docArrayLen(m.doc, []any{"mounts"}); got != 4 {
+		t.Fatalf("mounts length = %d, want 4", got)
+	}
+	if got := numAt(t, m.doc, "mounts", 2); got != "4" {
+		t.Fatalf("mounts[2] = %s, want 4", got)
+	}
+}
+
+func TestPasteTrailingCommaStillRejectsGarbage(t *testing.T) {
+	for _, text := range []string{`{"a":1,,}`, `[1,2,,]`, `{1:2,}`} {
+		rec := &pasteRecorder{text: text}
+		m := newPasteModel(t, testModel(), testDoc(), rec)
+		press(m, "p")
+		if m.notice != "clipboard is not JSON keys or items" {
+			t.Fatalf("clipboard %q: notice = %q", text, m.notice)
+		}
+		if !nodesEqual(testDoc(), m.doc) {
+			t.Fatalf("clipboard %q: failed paste must not touch the document", text)
+		}
 	}
 }
 

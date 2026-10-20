@@ -317,6 +317,8 @@ func run() int {
 		Raw:           raw,
 		Validate:      check,
 		Save:          func(*jsondoc.Node) error { return atomicWrite(config, sess.Write) },
+		Path:          config,
+		WriteTo:       func(path string, _ *jsondoc.Node) error { return atomicWrite(path, sess.Write) },
 		Status:        strings.Join(status, "\n"),
 		StartupNotice: strings.Join(startup, "\n"),
 		LoadErrors:    loadErrors,

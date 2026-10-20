@@ -26,8 +26,11 @@ type pasteMember struct {
 // as object members or array items, pick the target container and merge the
 // content in. underCursor selects the target: P pastes into the map/array
 // the cursor row points at (falling back to the current menu's container),
-// p always uses the container the current menu displays. All failure paths
-// only set m.notice and leave the document untouched.
+// p always uses the container the current menu displays. Positionally,
+// pasted keys/items land below (p) / above (P) the cursor row, whatever the
+// clipboard shape — bare lists, a complete [..] array, or a complete {..}
+// mapping (that one becomes a single item on an array page). All failure
+// paths only set m.notice and leave the document untouched.
 func (m *listModel) pasteClipboard(r row, underCursor bool) {
 	if m.doc == nil {
 		m.notice = "no document to paste into"
@@ -90,7 +93,22 @@ func (m *listModel) pasteClipboard(r row, underCursor bool) {
 		return
 	}
 	if members != nil && isArray {
-		m.notice = "clipboard holds key-value pairs, the target is an array"
+		// a complete mapping lands in an items page as ONE object item
+		// (p below / P above the cursor item); enum arrays keep the
+		// refusal — their elements are enum scalars, not containers
+		st := m.top()
+		if st == nil || st.kind != menuItems {
+			m.notice = "clipboard holds key-value pairs, the target is an array"
+			return
+		}
+		pre := m.doc.Clone()
+		m.pasteIntoArray(path, []*jsondoc.Node{membersAsItem(members)},
+			m.pasteInsertIndex(r, path, true, underCursor))
+		if nodesEqual(pre, m.doc) {
+			m.notice = "paste made no changes"
+			return
+		}
+		m.notice = fmt.Sprintf("pasted 1 items into %s", jsondoc.PathString(path))
 		return
 	}
 	if items != nil && !isArray {
@@ -99,7 +117,7 @@ func (m *listModel) pasteClipboard(r row, underCursor bool) {
 	}
 	pre := m.doc.Clone()
 	if members != nil {
-		m.pasteIntoObject(path, members, m.pasteInsertIndex(r, path, false))
+		m.pasteIntoObject(path, members, m.pasteInsertIndex(r, path, false, underCursor))
 		if nodesEqual(pre, m.doc) {
 			m.notice = "paste made no changes"
 			return
@@ -107,7 +125,7 @@ func (m *listModel) pasteClipboard(r row, underCursor bool) {
 		m.notice = fmt.Sprintf("pasted %d keys into %s", len(members), jsondoc.PathString(path))
 		return
 	}
-	m.pasteIntoArray(path, items, m.pasteInsertIndex(r, path, true))
+	m.pasteIntoArray(path, items, m.pasteInsertIndex(r, path, true, underCursor))
 	if nodesEqual(pre, m.doc) {
 		m.notice = "paste made no changes"
 		return
@@ -135,6 +153,13 @@ func parsePaste(text string, yamlMode bool) (members []pasteMember, items []*jso
 	if strings.HasPrefix(s, "{") || strings.HasPrefix(s, "[") {
 		n, err := jsondoc.Parse(strings.NewReader(s))
 		if err != nil {
+			// one trailing comma before the closing bracket is tolerated:
+			// {"a":1,} and [1,2,] parse as the containers they close
+			if t, ok := stripTrailingComma(s); ok {
+				if n2, err2 := jsondoc.Parse(strings.NewReader(t)); err2 == nil {
+					return classifyParsed(n2)
+				}
+			}
 			if yamlMode {
 				return classifyPasteYAML(s)
 			}
@@ -162,6 +187,19 @@ func parsePaste(text string, yamlMode bool) (members []pasteMember, items []*jso
 		return classifyPasteYAML(s)
 	}
 	return nil, nil, nil, errPasteBad
+}
+
+// stripTrailingComma drops one comma sitting right before the closing
+// bracket (`{"a":1,}` → `{"a":1}`, `[1,2,]` → `[1,2]`); ok reports whether
+// the text changed.
+func stripTrailingComma(s string) (string, bool) {
+	if strings.HasSuffix(s, ",}") {
+		return s[:len(s)-2] + "}", true
+	}
+	if strings.HasSuffix(s, ",]") {
+		return s[:len(s)-2] + "]", true
+	}
+	return s, false
 }
 
 // classifyParsed splits a fully parsed document into members or items; a
@@ -318,10 +356,10 @@ func pasteEmptyNode(n *jsondoc.Node) bool {
 }
 
 // pasteInsertIndex is where the contiguous block of pasted content starts:
-// after the cursor's member/item when the cursor is on one inside the target
-// container, otherwise append (end of the container). Reuses
-// memberInsertIndex (menu_keys.go) for the page-object case.
-func (m *listModel) pasteInsertIndex(r row, path []any, array bool) int {
+// member pages put it below (p) / above (P) the cursor member, array pages
+// below (p) / above (P) the cursor item; a cursor not on a member/item row
+// appends. Reuses memberInsertIndex (menu_keys.go) for the page-object case.
+func (m *listModel) pasteInsertIndex(r row, path []any, array, underCursor bool) int {
 	st := m.top()
 	if st == nil || !pathEq(st.path, path) {
 		// pasting into a container under the cursor: no interior cursor
@@ -336,11 +374,17 @@ func (m *listModel) pasteInsertIndex(r row, path []any, array bool) int {
 	}
 	if array {
 		if (r.kind == rowField || r.kind == rowDrill) && r.idx >= 0 {
-			return r.idx + 1
+			if underCursor { // P: above the cursor item
+				return r.idx
+			}
+			return r.idx + 1 // p: below it
 		}
 		return docArrayLen(m.doc, path)
 	}
-	return m.memberInsertIndex(r, true)
+	if underCursor { // P: above the cursor member
+		return m.memberInsertIndex(r, false)
+	}
+	return m.memberInsertIndex(r, true) // p: below it
 }
 
 // pasteIntoObject merges the members: keys already in the target keep their
@@ -367,6 +411,16 @@ func (m *listModel) pasteIntoArray(path []any, items []*jsondoc.Node, idx int) {
 		m.doc.Insert(path, idx, it.CloneDetached())
 		idx++
 	}
+}
+
+// membersAsItem wraps pasted members into one detached object node, so a
+// complete mapping can land in an array as a single item.
+func membersAsItem(members []pasteMember) *jsondoc.Node {
+	mem := make([]jsondoc.Member, 0, len(members))
+	for _, m := range members {
+		mem = append(mem, jsondoc.Member{Key: m.key, Val: m.val.CloneDetached()})
+	}
+	return &jsondoc.Node{Object: &mem}
 }
 
 func pasteHasKey(members []jsondoc.Member, key string) bool {

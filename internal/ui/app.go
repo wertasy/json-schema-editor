@@ -44,6 +44,13 @@ type Options struct {
 	// through it (TUI ctrl+s, the Save-and-exit row, the accessible save);
 	// nil makes saving impossible.
 	Save func(*jsondoc.Node) error
+	// Path is the file the session edits; menu W prefills its write-to
+	// input with it.
+	Path string
+	// WriteTo writes the document to an arbitrary path (menu W). The
+	// session's own save target and its change markers are unaffected. nil
+	// makes write-to impossible.
+	WriteTo func(path string, doc *jsondoc.Node) error
 	// Copy writes text to the system clipboard (menu y/Y). nil uses the
 	// platform helper (wl-copy, xclip/xsel, pbcopy, or clip.exe).
 	Copy func(string) error

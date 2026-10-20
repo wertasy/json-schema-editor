@@ -36,14 +36,14 @@ type helpEntry struct {
 var helpEntries = []helpEntry{
 	{"up / down / j / k", "move (wraps at both ends; ctrl+j/k in search and issues)"},
 	{"n / N / ctrl+j / ctrl+k", "next / previous key with a non-null value"},
-	{"y / Y", "copy the \"key\": value pair / the value (JSON or YAML per document)"},
-	{"x / X", "cut the \"key\": value pair / the value — y/Y plus delete, batch on marked rows"},
+	{"y / Y", "copy the \"key\": value pair / the value (JSON or YAML per document); array pages: both copy the item's value"},
+	{"x / X", "cut the \"key\": value pair / the value — y/Y plus delete, batch on marked rows; array pages: both cut the item"},
 	{"m", "mark key-value rows: y copies, d deletes the marked ones (m toggles)"},
-	{"v", "visual select: j/k (or arrows) mark rows between start and cursor; v/esc stops"},
+	{"v", "visual select: j/k (or arrows) and gg/G mark rows between start and cursor; v/esc stops"},
 	{"f / F", "quick move: type a character to jump to the next/previous key starting with it"},
-	{"p / P", "smart paste clipboard JSON (YAML docs: YAML too) — p: this menu, P: the row (a single value replaces its value)"},
+	{"p / P", "smart paste clipboard JSON (YAML docs: YAML too) — p: this menu, P: the row's own container (a single value replaces its value); keys/items land below (p) / above (P) the cursor row"},
 	{"z", "show/hide fields with no value (null/unset)"},
-	{"[N] gg / G", "jump to first / last row; N gg in array menus: item N (Home/End too)"},
+	{"[N] gg / G", "jump to first / last row; N gg in array menus: item N (Home/End too); visual select: lands on the first/last key, marking the range"},
 	{"ctrl+o / ctrl+i (tab)", "back / forward in the navigation history (submenus, jumps; esc pops count too)"},
 	{"ga / gr", "jump to the row's anchor / its other uses — references and << merges (esc returns)"},
 	{"enter / right / l", "edit field · open submenu"},
@@ -61,7 +61,8 @@ var helpEntries = []helpEntry{
 	{"J / K", "move the item under the cursor down / up"},
 	{"ctrl+t", "switch the variant type of a oneOf value"},
 	{"u / ctrl+r", "undo / redo"},
-	{"ctrl+s / w", "save (stay in the session)"},
+	{"ctrl+s / w", "save (the bottom bar shows the write target)"},
+	{"W", "write a copy to another path: the menu grows a \"Write to\" row prefilled with this file's path — edit and enter (esc cancels)"},
 	{"/", "search below the current path"},
 	{"r", "search & replace string values"},
 	{"alt+x", "regex toggle (default on): match the query as a regular expression ($1 groups in replace)"},
@@ -139,6 +140,13 @@ type addState struct {
 	err  string
 }
 
+// writeState is the write-to-path input for W: prefilled with the session
+// file's own path, rendered as a row at the end of the menu.
+type writeState struct {
+	ti  textinput.Model
+	err string
+}
+
 // selState is the full-screen enum option picker.
 type selState struct {
 	fn     *smodel.FormNode
@@ -196,7 +204,8 @@ type errsState struct {
 	lines  []string
 	paths  [][]any
 	cursor int
-	exit   bool // end the session after the --force save (vs plain ctrl+s)
+	exit   bool   // end the session after the --force save (vs plain ctrl+s)
+	target string // write-to path for a W save ("" = the session's own file)
 }
 
 // confirmState is a y/n question overlay. onNo is optional: without it n is
@@ -242,8 +251,9 @@ type listModel struct {
 	aborted       bool
 	exiting       bool // the session ended cleanly (root quit or Save and exit)
 	edit          *editState
-	add           *addState  // key-name input for a schema-less member (a)
-	find          *findState // f/F quick move: waiting for the character
+	add           *addState   // key-name input for a schema-less member (a)
+	write         *writeState // write-to-path input (W)
+	find          *findState  // f/F quick move: waiting for the character
 	anc           *anchorState
 	mrg           *mergeState // "<" merge-keys input for the current mapping
 	sel           *selState
@@ -588,6 +598,8 @@ func (m *listModel) routeKey(msg tea.KeyMsg) tea.Cmd {
 		return m.keyEdit(msg)
 	case m.add != nil:
 		return m.keyAdd(msg)
+	case m.write != nil:
+		return m.keyWrite(msg)
 	case m.anc != nil:
 		return m.keyAnchor(msg)
 	case m.mrg != nil:
@@ -639,6 +651,8 @@ func (m *listModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.edit.ti, cmd = m.edit.ti.Update(msg)
 	case m.add != nil:
 		m.add.ti, cmd = m.add.ti.Update(msg)
+	case m.write != nil:
+		m.write.ti, cmd = m.write.ti.Update(msg)
 	case m.anc != nil:
 		m.anc.ti, cmd = m.anc.ti.Update(msg)
 	case m.text != nil:
@@ -955,7 +969,7 @@ func (m *listModel) helpLine() string {
 	}
 	if st := m.top(); st != nil {
 		if st.visual {
-			return m.recHint("Visual select: j/k or arrows mark rows · y copy · d delete · v/esc stop")
+			return m.recHint("Visual select: j/k, gg/G or arrows mark rows · y copy · d delete · v/esc stop")
 		}
 		if n := len(st.sel); n > 0 {
 			rows := "rows"
@@ -1095,6 +1109,13 @@ func (m *listModel) writeRows(b *strings.Builder, rows []row, height int) {
 		m.writeCut(b, cursorPrefix(true)+m.titleCol("New key", titleWidth)+m.add.ti.View())
 		if m.add.err != "" {
 			m.writeCut(b, mErr.Render("  "+m.add.err))
+		}
+	}
+	// write-to-path input for W (prefilled with the session file's path)
+	if m.write != nil {
+		m.writeCut(b, cursorPrefix(true)+m.titleCol("Write to", titleWidth)+m.write.ti.View())
+		if m.write.err != "" {
+			m.writeCut(b, mErr.Render("  "+m.write.err))
 		}
 	}
 }

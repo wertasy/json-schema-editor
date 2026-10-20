@@ -73,7 +73,7 @@ func (m *listModel) repairStack() {
 // characters there and history keys must not fire.
 func (m *listModel) typing() bool {
 	return m.edit != nil || m.text != nil || m.search.active || m.add != nil ||
-		m.anc != nil || m.mrg != nil
+		m.write != nil || m.anc != nil || m.mrg != nil
 }
 
 func (m *listModel) listMode() bool {
