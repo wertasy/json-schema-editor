@@ -210,3 +210,127 @@ func TestCopyYAMLFormatFollowsDocument(t *testing.T) {
 		t.Fatalf("container y = %q", got)
 	}
 }
+
+func TestCutRow(t *testing.T) {
+	rec := &clipboardRecorder{}
+	doc := testDoc()
+	m := newListModel(testModel(), doc, Options{Copy: rec.write})
+	m.Update(tea.WindowSizeMsg{Width: 100, Height: 30})
+
+	// x: copy the JSON pair, then remove the key — one undo step
+	press(m, "x")
+	if len(rec.texts) != 1 || rec.texts[0] != `"name": "webapp"` {
+		t.Fatalf("x copied %q, want the JSON pair", rec.texts)
+	}
+	if m.notice != "Cut key-value pair" {
+		t.Fatalf("notice = %q", m.notice)
+	}
+	if _, ok := doc.Get([]any{"name"}); ok {
+		t.Fatal("x must remove the cut key")
+	}
+	press(m, "u")
+	if s := strAt(t, doc, "name"); s != "webapp" {
+		t.Fatalf("one undo must restore the cut pair, name = %q", s)
+	}
+
+	// X on a container: copy the value, remove the key
+	press(m, "down", "down") // Server
+	press(m, "X")
+	want := `{"port":8080,"host":"0.0.0.0","debug":true}`
+	if got := rec.texts[1]; got != want {
+		t.Fatalf("X copied %q, want %q", got, want)
+	}
+	if m.notice != "Cut value" {
+		t.Fatalf("notice = %q", m.notice)
+	}
+	if _, ok := doc.Get([]any{"server"}); ok {
+		t.Fatal("X must remove the cut key")
+	}
+
+	// x refuses on array elements and keeps the item
+	press(m, "u")
+	press(m, "g", "g")
+	press(m, "down", "down", "down", "down", "enter") // mounts items menu
+	press(m, "down")
+	before := len(rec.texts)
+	press(m, "x")
+	if len(rec.texts) != before || m.notice != "x cuts object keys only" {
+		t.Fatalf("array element x: copied=%v notice=%q", rec.texts[before:], m.notice)
+	}
+	if _, ok := doc.Get([]any{"mounts", 0}); !ok {
+		t.Fatal("refused x must keep the array item")
+	}
+}
+
+func TestCutSelection(t *testing.T) {
+	rec := &clipboardRecorder{}
+	doc := testDoc()
+	m := newListModel(testModel(), doc, Options{Copy: rec.write})
+	m.Update(tea.WindowSizeMsg{Width: 100, Height: 30})
+
+	// batch x: one object with the marked pairs, then all marked keys gone
+	press(m, "m", "down", "down", "m") // Name + Server
+	press(m, "x")
+	want := `{"name":"webapp","server":{"port":8080,"host":"0.0.0.0","debug":true}}`
+	if len(rec.texts) != 1 || rec.texts[0] != want {
+		t.Fatalf("batch x copied %q, want %q", rec.texts, want)
+	}
+	if m.notice != "Cut 2 key-value pairs" {
+		t.Fatalf("notice = %q", m.notice)
+	}
+	if _, ok := doc.Get([]any{"name"}); ok {
+		t.Fatal("batch x must remove the marked name key")
+	}
+	if _, ok := doc.Get([]any{"server"}); ok {
+		t.Fatal("batch x must remove the marked server key")
+	}
+	press(m, "u")
+	if _, ok := doc.Get([]any{"server"}); !ok {
+		t.Fatal("one undo must restore the batch")
+	}
+
+	// batch X: the values joined by newlines
+	press(m, "m")      // Server (cursor)
+	press(m, "g", "g") // Name
+	press(m, "m")
+	press(m, "X")
+	want = "webapp\n" + `{"port":8080,"host":"0.0.0.0","debug":true}`
+	if got := rec.texts[1]; got != want {
+		t.Fatalf("batch X copied %q, want %q", got, want)
+	}
+	if m.notice != "Cut 2 values" {
+		t.Fatalf("notice = %q", m.notice)
+	}
+	press(m, "u")
+
+	// a required merged row refuses the delete side: the row stays and the
+	// refusal notice stands — the cut degraded to a plain copy
+	m2 := requiredMergeModel(t)
+	rec2 := &clipboardRecorder{}
+	m2.opts.Copy = rec2.write
+	press(m2, "down", "enter") // child menu, merged name (required)
+	press(m2, "x")
+	if len(rec2.texts) != 1 || rec2.texts[0] != `"name": "from-base"` {
+		t.Fatalf("refused cut clipboard = %q", rec2.texts)
+	}
+	if _, ok := m2.doc.Get([]any{"base", "name"}); !ok {
+		t.Fatal("refused cut must keep the required merged key")
+	}
+	if !contains(m2.View(), "Name is required") {
+		t.Fatalf("required refusal missing:\n%s", m2.View())
+	}
+}
+
+func TestCutClipboardErrorKeepsRow(t *testing.T) {
+	rec := &clipboardRecorder{err: errors.New("no clipboard tool")}
+	doc := testDoc()
+	m := newListModel(testModel(), doc, Options{Copy: rec.write})
+	m.Update(tea.WindowSizeMsg{Width: 100, Height: 30})
+	press(m, "x")
+	if !strings.Contains(m.notice, "cut failed: no clipboard tool") {
+		t.Fatalf("notice = %q", m.notice)
+	}
+	if s := strAt(t, doc, "name"); s != "webapp" {
+		t.Fatalf("failed cut must keep the row, name = %q", s)
+	}
+}

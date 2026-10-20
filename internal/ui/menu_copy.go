@@ -23,31 +23,10 @@ import (
 // Value rows whose key is absent from the document have nothing to copy;
 // explicit JSON null is a value and copies as "null" / "key: null".
 func (m *listModel) copyRow(r row, pair bool) {
-	switch r.kind {
-	case rowField, rowDrill, rowUnknown:
-	default:
-		m.notice = "nothing to copy"
+	text, ok, refusal := m.rowCopyText(r, pair, "y copies object keys only")
+	if !ok {
+		m.notice = refusal
 		return
-	}
-	if m.doc == nil {
-		m.notice = "no value to copy"
-		return
-	}
-	v, ok := m.doc.Get(r.path)
-	if !ok || v == nil {
-		m.notice = "no value to copy"
-		return
-	}
-	var text string
-	if pair {
-		key, ok := copyRowKey(r.path)
-		if !ok {
-			m.notice = "y copies object keys only"
-			return
-		}
-		text = m.copyPairText(key, v)
-	} else {
-		text = m.copyValueText(v)
 	}
 	write := m.opts.Copy
 	if write == nil {
@@ -64,15 +43,38 @@ func (m *listModel) copyRow(r row, pair bool) {
 	}
 }
 
-// copyRowOrSelection is the y handler: with marked rows it copies every
-// selected key-value pair as one object in the document syntax (display
-// order, rows without a document value skipped) and clears the selection;
-// without, it copies the cursor row's pair.
-func (m *listModel) copyRowOrSelection(r row) {
+// rowCopyText builds the y/X clipboard text for the row: the pair (y/x) or
+// the value (Y/X). ok=false carries the refusal notice; keyRefusal is the
+// message for rows without an object key (worded per shortcut).
+func (m *listModel) rowCopyText(r row, pair bool, keyRefusal string) (string, bool, string) {
+	switch r.kind {
+	case rowField, rowDrill, rowUnknown:
+	default:
+		return "", false, "nothing to copy"
+	}
+	if m.doc == nil {
+		return "", false, "no value to copy"
+	}
+	v, ok := m.doc.Get(r.path)
+	if !ok || v == nil {
+		return "", false, "no value to copy"
+	}
+	if pair {
+		key, ok := copyRowKey(r.path)
+		if !ok {
+			return "", false, keyRefusal
+		}
+		return m.copyPairText(key, v), true, ""
+	}
+	return m.copyValueText(v), true, ""
+}
+
+// selectionMembers collects the marked rows' key-value pairs in display
+// order; rows without a document value are skipped.
+func (m *listModel) selectionMembers() []jsondoc.Member {
 	st := m.top()
-	if st == nil || len(st.sel) == 0 {
-		m.copyRow(r, true)
-		return
+	if st == nil {
+		return nil
 	}
 	var members []jsondoc.Member
 	for _, sel := range menuRows(m) {
@@ -87,6 +89,20 @@ func (m *listModel) copyRowOrSelection(r row) {
 			members = append(members, jsondoc.Member{Key: key, Val: v})
 		}
 	}
+	return members
+}
+
+// copyRowOrSelection is the y handler: with marked rows it copies every
+// selected key-value pair as one object in the document syntax (display
+// order, rows without a document value skipped) and clears the selection;
+// without, it copies the cursor row's pair.
+func (m *listModel) copyRowOrSelection(r row) {
+	st := m.top()
+	if st == nil || len(st.sel) == 0 {
+		m.copyRow(r, true)
+		return
+	}
+	members := m.selectionMembers()
 	if len(members) == 0 {
 		m.notice = "no value to copy"
 		return
@@ -102,6 +118,65 @@ func (m *listModel) copyRowOrSelection(r row) {
 	}
 	m.notice = fmt.Sprintf("Copied %d key-value pairs", len(members))
 	st.sel = nil
+}
+
+// cutRowOrSelection is the x/X handler: copy like y/Y, then delete — the
+// marked rows in batch (x: one object/mapping, X: the values joined by
+// newlines), otherwise the cursor row. The clipboard write happens before
+// the delete, so a failed write leaves the document untouched; delete-side
+// refusals (required merged keys) keep the row and their notice stands.
+func (m *listModel) cutRowOrSelection(r row, pair bool) {
+	st := m.top()
+	var text string
+	var count int
+	batch := st != nil && len(st.sel) > 0
+	if batch {
+		if pair {
+			members := m.selectionMembers()
+			if len(members) == 0 {
+				m.notice = "no value to copy"
+				return
+			}
+			text = m.copyValueText(&jsondoc.Node{Object: &members})
+			count = len(members)
+		} else {
+			var values []string
+			for _, mem := range m.selectionMembers() {
+				values = append(values, m.copyValueText(mem.Val))
+				count++
+			}
+			text = strings.Join(values, "\n")
+		}
+	} else {
+		t, ok, refusal := m.rowCopyText(r, pair, "x cuts object keys only")
+		if !ok {
+			m.notice = refusal
+			return
+		}
+		text = t
+		count = 1
+	}
+	write := m.opts.Copy
+	if write == nil {
+		write = clipboard.WriteAll
+	}
+	if err := write(text); err != nil {
+		m.notice = "cut failed: " + err.Error()
+		return
+	}
+	m.deleteRow(r) // clears the selection; refusals surface their notice
+	if m.notice == "" {
+		switch {
+		case !batch && pair:
+			m.notice = "Cut key-value pair"
+		case !batch:
+			m.notice = "Cut value"
+		case pair:
+			m.notice = fmt.Sprintf("Cut %d key-value pairs", count)
+		default:
+			m.notice = fmt.Sprintf("Cut %d values", count)
+		}
+	}
 }
 
 // copyValueText is the Y text: strings copy verbatim (what the row shows),

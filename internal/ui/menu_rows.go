@@ -38,10 +38,10 @@ type menuState struct {
 	path           []any
 	cursor, offset int
 	variantOf      *smodel.FormNode
-	oneOf          *smodel.FormNode  // classic variant editor: ctrl+t type switch
-	sel            map[string]bool   // rows marked with m for batch y / d
-	visual         bool              // v visual select: movement marks rows
-	vanchor        int               // row where visual select started
+	oneOf          *smodel.FormNode // classic variant editor: ctrl+t type switch
+	sel            map[string]bool  // rows marked with m for batch y / d
+	visual         bool             // v visual select: movement marks rows
+	vanchor        int              // row where visual select started
 }
 
 // rowKind classifies one rendered line inside a menu.

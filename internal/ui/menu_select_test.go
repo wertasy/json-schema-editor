@@ -101,9 +101,9 @@ func TestMultiSelectCopyAndDeleteJSON(t *testing.T) {
 	}
 
 	// batch d removes both keys in one undo step
-	press(m, "m")       // mark Server (cursor)
-	press(m, "g", "g")  // top row: Name
-	press(m, "m")       // mark Name
+	press(m, "m")      // mark Server (cursor)
+	press(m, "g", "g") // top row: Name
+	press(m, "m")      // mark Name
 	press(m, "d")
 	if _, ok := doc.Get([]any{"name"}); ok {
 		t.Fatal("batch d must remove the marked name pair")

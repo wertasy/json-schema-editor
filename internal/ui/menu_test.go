@@ -1028,8 +1028,8 @@ func TestMenuNextPrevNonNull(t *testing.T) {
 	im := newListModel(itemsRoot, tobj(tmem("items", tarr(tnull(),
 		tobj(tmem("x", tstr("v"))), tobj(tmem("x", tstr("w")))))), Options{})
 	im.Update(tea.WindowSizeMsg{Width: 100, Height: 30})
-	press(im, "enter")       // items menu: Add(0), item0 null(1), item1(2), item2(3)
-	press(im, "ctrl+j")      // Add → item1, skipping the null placeholder
+	press(im, "enter")  // items menu: Add(0), item0 null(1), item1(2), item2(3)
+	press(im, "ctrl+j") // Add → item1, skipping the null placeholder
 	if im.top().cursor != 2 {
 		t.Fatalf("ctrl+j must skip a null array item, cursor = %d", im.top().cursor)
 	}

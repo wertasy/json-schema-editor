@@ -52,6 +52,10 @@ func (m *listModel) keyList(msg tea.KeyMsg) tea.Cmd {
 		m.copyRowOrSelection(r) // marked pairs, else the cursor row's pair
 	case "Y":
 		m.copyRow(r, false) // the value itself
+	case "x":
+		m.cutRowOrSelection(r, true) // marked pairs / cursor row: copy + delete
+	case "X":
+		m.cutRowOrSelection(r, false)
 	case "m":
 		m.toggleSelect(r)
 	case "v":
@@ -727,36 +731,38 @@ func (m *listModel) deleteRow(r row) {
 // to the item-delete flow, optional and required fields remove their key
 // (the row stays unset; save-time validation flags a missing required key
 // until it is filled again), only rows merged in from an anchor refuse.
-func (m *listModel) deletePair(r row) {
+// It reports false when nothing was deleted (refusals set their notice).
+func (m *listModel) deletePair(r row) bool {
 	st := m.top()
 	if st == nil {
-		return
+		return false
 	}
 	if r.kind != rowField && r.kind != rowDrill && r.kind != rowUnknown {
-		return
+		return false
 	}
 	if len(r.path) == 0 {
-		return
+		return false
 	}
 	if _, isIdx := r.path[len(r.path)-1].(int); isIdx {
 		m.deleteItem(r) // array item rows (any menu they appear in)
-		return
+		return true
 	}
 	// a merged row deletes the anchor mapping's field, taking the key away
 	// from every mapping merging the anchor — required ones refuse here;
 	// jump to the anchor (ga) and delete there to remove the definition.
 	if r.fn != nil && r.fn.Required && r.merged != "" {
 		m.notice = r.fn.Title + " is required"
-		return
+		return false
 	}
 	// deleting the carrier of an anchor a merge key references would leave
 	// the merge dangling; the write-time alias check refuses such saves
 	if n, ok := m.doc.Get(r.path); ok && n != nil && n.Anchor != "" &&
 		m.countAnchorUses(n) <= 1 && m.mergeRefUses(n) > 0 {
 		m.notice = "delete the << merge key referencing &" + n.Anchor + " first"
-		return
+		return false
 	}
 	m.doc.Remove(r.path)
+	return true
 }
 
 // deleteItem removes an array entry row (no confirmation: the summary shows

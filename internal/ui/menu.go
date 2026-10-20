@@ -37,6 +37,7 @@ var helpEntries = []helpEntry{
 	{"up / down / j / k", "move (wraps at both ends; ctrl+j/k in search and issues)"},
 	{"n / N / ctrl+j / ctrl+k", "next / previous key with a non-null value"},
 	{"y / Y", "copy the \"key\": value pair / the value (JSON or YAML per document)"},
+	{"x / X", "cut the \"key\": value pair / the value — y/Y plus delete, batch on marked rows"},
 	{"m", "mark key-value rows: y copies, d deletes the marked ones (m toggles)"},
 	{"v", "visual select: j/k (or arrows) mark rows between start and cursor; v/esc stops"},
 	{"p / P", "smart paste clipboard JSON (YAML docs: YAML too) — p: this menu, P: the row (a single value replaces its value)"},
@@ -83,13 +84,13 @@ var (
 	mErr    = lipgloss.NewStyle().Foreground(lipgloss.Color("1"))
 	// mMark brightens the selection red: same hue family as mErr, one step
 	// brighter so marked rows never read as validation errors.
-	mMark   = lipgloss.NewStyle().Foreground(lipgloss.Color("9"))
+	mMark = lipgloss.NewStyle().Foreground(lipgloss.Color("9"))
 	// mBold marks the key of a row the cursor sits on when that row is
 	// selected: the tie to the selection without recoloring it.
-	mBold   = lipgloss.NewStyle().Bold(true)
-	mWarn   = lipgloss.NewStyle().Foreground(lipgloss.Color("3")) // unknown-key warnings: yellow, distinct from red errors
-	mTail   = lipgloss.NewStyle().Faint(true)
-	mHelp   = lipgloss.NewStyle().Foreground(lipgloss.AdaptiveColor{Light: "245", Dark: "248"})
+	mBold = lipgloss.NewStyle().Bold(true)
+	mWarn = lipgloss.NewStyle().Foreground(lipgloss.Color("3")) // unknown-key warnings: yellow, distinct from red errors
+	mTail = lipgloss.NewStyle().Faint(true)
+	mHelp = lipgloss.NewStyle().Foreground(lipgloss.AdaptiveColor{Light: "245", Dark: "248"})
 	// schema descriptions (the row comment above the hint bar) are metadata,
 	// not keys to press: violet-gray keeps them apart from the neutral gray
 	// hint bar without colliding with any value color
