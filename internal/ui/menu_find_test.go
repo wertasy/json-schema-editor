@@ -6,6 +6,31 @@ import (
 	tea "github.com/charmbracelet/bubbletea"
 )
 
+func TestRootHLeftDoNotExit(t *testing.T) {
+	m := newListModel(testModel(), testDoc(), Options{})
+	m.Update(tea.WindowSizeMsg{Width: 100, Height: 30})
+
+	// at the root h and left do nothing: no parent menu, no quit prompt
+	press(m, "h", "left")
+	if m.exiting || m.confirm != nil || len(m.stack) != 1 {
+		t.Fatalf("h/left at the root must stay: exiting=%v confirm=%v depth=%d",
+			m.exiting, m.confirm != nil, len(m.stack))
+	}
+
+	// inside a submenu h still goes back
+	press(m, "down", "down", "enter") // Server menu
+	press(m, "h")
+	if len(m.stack) != 1 {
+		t.Fatalf("h in a submenu must go back, depth = %d", len(m.stack))
+	}
+
+	// esc/q keep the root exit semantics (clean doc: exits directly)
+	press(m, "esc")
+	if !m.exiting {
+		t.Fatal("esc at the root must still exit")
+	}
+}
+
 func TestQuickMove(t *testing.T) {
 	m := newListModel(testModel(), testDoc(), Options{})
 	m.Update(tea.WindowSizeMsg{Width: 100, Height: 30})

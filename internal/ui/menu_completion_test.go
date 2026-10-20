@@ -220,6 +220,59 @@ func TestStringComboEditsAsTextWithTabOptions(t *testing.T) {
 // TestCompletionShiftTabReverses: shift+tab walks the candidates backward and
 // tab forward, both wrapping; a fresh cycle starts at the last candidate when
 // stepping back.
+func TestNumberCompletion(t *testing.T) {
+	// numeric fields complete from the numeric literals of the same key
+	// anywhere in the document
+	root := &smodel.FormNode{Key: "$", Title: "$", Kind: smodel.KObject, Children: []*smodel.FormNode{
+		{Key: "a", Title: "A", Kind: smodel.KObject, Children: []*smodel.FormNode{
+			{Key: "port", Title: "Port", Kind: smodel.KScalar, JSONType: "number"}}},
+		{Key: "b", Title: "B", Kind: smodel.KObject, Children: []*smodel.FormNode{
+			{Key: "port", Title: "Port", Kind: smodel.KScalar, JSONType: "number"}}},
+	}}
+	doc := tobj(
+		tmem("a", tobj(tmem("port", tnum("8080")))),
+		tmem("b", tobj(tmem("port", tnum("9090")))),
+	)
+	m := newListModel(root, doc, Options{})
+	m.Update(tea.WindowSizeMsg{Width: 100, Height: 30})
+
+	port := root.Children[1].Children[0]
+	if got := m.completions(port, []any{"b", "port"}); len(got) != 1 || got[0] != "8080" {
+		t.Fatalf("completions = %v, want [8080] (the path's own value is not offered)", got)
+	}
+
+	// UI: clear b.port, type 8, tab completes to the other field's number,
+	// enter applies it as a number
+	press(m, "down", "enter") // into B, cursor on its port field
+	press(m, "enter")         // in-place input prefilled with 9090
+	press(m, "ctrl+u")        // clear
+	press(m, "8", "tab")
+	if m.edit == nil || m.edit.ti.Value() != "8080" {
+		t.Fatalf("value = %q, want completed 8080", m.edit.ti.Value())
+	}
+	press(m, "enter")
+	if got := numAt(t, doc, "b", "port"); got != "8080" {
+		t.Fatalf("b.port = %s, want 8080", got)
+	}
+
+	// string fields keep string-only candidates: numbers are not offered
+	sroot := &smodel.FormNode{Key: "$", Title: "$", Kind: smodel.KObject, Children: []*smodel.FormNode{
+		{Key: "a", Title: "A", Kind: smodel.KObject, Children: []*smodel.FormNode{
+			{Key: "n", Title: "N", Kind: smodel.KScalar, JSONType: "string"}}},
+		{Key: "b", Title: "B", Kind: smodel.KObject, Children: []*smodel.FormNode{
+			{Key: "n", Title: "N", Kind: smodel.KScalar, JSONType: "string"}}},
+	}}
+	sdoc := tobj(
+		tmem("a", tobj(tmem("n", tnum("42")))),
+		tmem("b", tobj(tmem("n", tstr("x")))),
+	)
+	ms := newListModel(sroot, sdoc, Options{})
+	ms.Update(tea.WindowSizeMsg{Width: 100, Height: 30})
+	if got := ms.completions(sroot.Children[1].Children[0], []any{"b", "n"}); len(got) != 0 {
+		t.Fatalf("string field completions = %v, want none (42 is a number)", got)
+	}
+}
+
 func TestCompletionShiftTabReverses(t *testing.T) {
 	root := mustSchema(t, `{
   "type": "object",

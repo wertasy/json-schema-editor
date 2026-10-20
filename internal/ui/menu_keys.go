@@ -104,6 +104,9 @@ func (m *listModel) keyList(msg tea.KeyMsg) tea.Cmd {
 			m.cycleEnum(r, -1)
 			return nil
 		}
+		if len(m.stack) <= 1 {
+			return nil // the root menu has no parent: only esc/q leave it
+		}
 		return m.back()
 	case "esc":
 		if st.visual {
@@ -1388,17 +1391,41 @@ func (m *listModel) keyEdit(msg tea.KeyMsg) tea.Cmd {
 // --- value completion ------------------------------------------------------
 
 // completions collects the candidate values for fn at path: for
-// x-tag-reference fields the tag values of the referenced structures; for
-// other string scalars every non-empty string value anywhere in the document,
-// with values sharing the field's key ranked first. Each group keeps document
-// order and duplicates collapse, the same-key group winning. The value at
-// path itself is never offered.
+// x-tag-reference fields the tag values of the referenced structures; string
+// scalars every non-empty string value anywhere in the document, numeric
+// scalars (integer/number) every numeric literal — in both cases values
+// sharing the field's key ranked first. Each group keeps document order and
+// duplicates collapse, the same-key group winning. The value at path itself
+// is never offered.
 func (m *listModel) completions(fn *smodel.FormNode, path []any) []string {
 	if fn.Kind == smodel.KScalar && fn.TagRef != "" {
 		return m.tagRefCompletions(fn.TagRef)
 	}
-	if fn.Kind != smodel.KScalar || (fn.JSONType != "string" && fn.JSONType != "") {
+	var wantNum bool
+	switch fn.JSONType {
+	case "string", "":
+		wantNum = false
+	case "integer", "number":
+		wantNum = true
+	default:
 		return nil
+	}
+	// text extracts the value form the field accepts: strings for string
+	// fields, the numeric literal for numeric fields
+	text := func(n *jsondoc.Node) (string, bool) {
+		switch {
+		case n == nil:
+			return "", false
+		case wantNum:
+			if n.Num != nil {
+				return n.Num.String(), true
+			}
+		default:
+			if n.Str != nil {
+				return *n.Str, true
+			}
+		}
+		return "", false
 	}
 	var same, other []string
 	sameSeen, otherSeen := map[string]bool{}, map[string]bool{}
@@ -1420,12 +1447,12 @@ func (m *listModel) completions(fn *smodel.FormNode, path []any) []string {
 					continue // the editor's own schema pointer, not user data
 				}
 				mp := pathFor(p, mem.Key)
-				if mem.Val != nil && mem.Val.Str != nil {
+				if s, ok := text(mem.Val); ok {
 					if !pathEq(mp, path) {
 						if mem.Key == fn.Key {
-							add(&same, sameSeen, *mem.Val.Str)
+							add(&same, sameSeen, s)
 						} else {
-							add(&other, otherSeen, *mem.Val.Str)
+							add(&other, otherSeen, s)
 						}
 					}
 					continue
@@ -1435,23 +1462,25 @@ func (m *listModel) completions(fn *smodel.FormNode, path []any) []string {
 		case n.Array != nil:
 			for i, it := range *n.Array {
 				ip := pathIdx(p, i)
-				if it != nil && it.Str != nil {
+				if s, ok := text(it); ok {
 					if !pathEq(ip, path) {
 						if key == fn.Key {
-							add(&same, sameSeen, *it.Str)
+							add(&same, sameSeen, s)
 						} else {
-							add(&other, otherSeen, *it.Str)
+							add(&other, otherSeen, s)
 						}
 					}
 					continue
 				}
 				walk(it, ip, key)
 			}
-		case n.Str != nil && !pathEq(p, path):
-			if key == fn.Key {
-				add(&same, sameSeen, *n.Str)
-			} else {
-				add(&other, otherSeen, *n.Str)
+		default:
+			if s, ok := text(n); ok && !pathEq(p, path) {
+				if key == fn.Key {
+					add(&same, sameSeen, s)
+				} else {
+					add(&other, otherSeen, s)
+				}
 			}
 		}
 	}
