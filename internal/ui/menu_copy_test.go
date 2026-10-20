@@ -37,33 +37,33 @@ func TestCopyValueAndPair(t *testing.T) {
 	rec := &clipboardRecorder{}
 	m := newCopyModel(t, testModel(), doc, rec)
 
-	// Name: scalar string copies verbatim; Y uses the JSON literal.
+	// Name: y uses the JSON pair; Y copies the raw string.
 	press(m, "y")
-	if len(rec.texts) != 1 || rec.texts[0] != "webapp" {
-		t.Fatalf("y copied %q, want the raw string", rec.texts)
+	if len(rec.texts) != 1 || rec.texts[0] != `"name": "webapp"` {
+		t.Fatalf("y copied %q, want the JSON pair", rec.texts)
 	}
-	if m.notice != "Copied value" {
+	if m.notice != "Copied key-value pair" {
 		t.Fatalf("notice = %q", m.notice)
 	}
 	press(m, "Y")
-	if len(rec.texts) != 2 || rec.texts[1] != `"name": "webapp"` {
-		t.Fatalf("Y copied %q, want the JSON pair", rec.texts)
+	if len(rec.texts) != 2 || rec.texts[1] != "webapp" {
+		t.Fatalf("Y copied %q, want the raw string", rec.texts)
 	}
-	if m.notice != "Copied key-value pair" {
+	if m.notice != "Copied value" {
 		t.Fatalf("notice = %q", m.notice)
 	}
 
 	// Server: container keeps document order and the numeric literal.
 	press(m, "down", "down")
-	press(m, "y")
+	press(m, "Y")
 	want := `{"port":1.0,"host":"0.0.0.0","debug":true}`
 	if got := rec.texts[len(rec.texts)-1]; got != want {
-		t.Fatalf("container y = %q, want %q", got, want)
+		t.Fatalf("container Y = %q, want %q", got, want)
 	}
-	press(m, "Y")
+	press(m, "y")
 	want = `"server": ` + want
 	if got := rec.texts[len(rec.texts)-1]; got != want {
-		t.Fatalf("container Y = %q, want %q", got, want)
+		t.Fatalf("container y = %q, want %q", got, want)
 	}
 }
 
@@ -86,27 +86,24 @@ func TestCopyArrayElementAndNull(t *testing.T) {
 
 	press(m, "enter") // items menu: Add(0), item0(1)
 	press(m, "down")
-	press(m, "y")
-	if got := rec.texts[len(rec.texts)-1]; got != `{"x":"v"}` {
-		t.Fatalf("array element y = %q", got)
-	}
+	press(m, "y") // array elements have no object key
 	before := len(rec.texts)
-	press(m, "Y")
-	if len(rec.texts) != before {
-		t.Fatal("Y must refuse array elements")
+	if before != 0 || m.notice != "y copies object keys only" {
+		t.Fatalf("array element y: copied=%v notice=%q", rec.texts, m.notice)
 	}
-	if m.notice != "Y copies object keys only" {
-		t.Fatalf("notice = %q", m.notice)
+	press(m, "Y")
+	if len(rec.texts) != 1 || rec.texts[0] != `{"x":"v"}` {
+		t.Fatalf("array element Y = %q", rec.texts)
 	}
 
 	press(m, "esc") // back to the root menu
 	press(m, "down")
 	press(m, "y")
-	if got := rec.texts[len(rec.texts)-1]; got != "null" {
+	if got := rec.texts[len(rec.texts)-1]; got != `"nothing": null` {
 		t.Fatalf("explicit null y = %q", got)
 	}
 	press(m, "Y")
-	if got := rec.texts[len(rec.texts)-1]; got != `"nothing": null` {
+	if got := rec.texts[len(rec.texts)-1]; got != "null" {
 		t.Fatalf("explicit null Y = %q", got)
 	}
 }
@@ -144,12 +141,12 @@ func TestCopyUnknownKeyEscapesJSON(t *testing.T) {
 	m.top().cursor = rowIndexAtPath(m, `weird"key`)
 
 	press(m, "y")
-	if got := rec.texts[0]; got != "1" {
-		t.Fatalf("value = %q", got)
+	if got := rec.texts[0]; got != `"weird\"key": 1` {
+		t.Fatalf("escaped pair = %q", got)
 	}
 	press(m, "Y")
-	if got := rec.texts[1]; got != `"weird\"key": 1` {
-		t.Fatalf("escaped pair = %q", got)
+	if got := rec.texts[1]; got != "1" {
+		t.Fatalf("value = %q", got)
 	}
 }
 
@@ -182,7 +179,34 @@ func TestCopyDocumentedInHelp(t *testing.T) {
 	rec := &clipboardRecorder{}
 	m := newCopyModel(t, testModel(), testDoc(), rec)
 	press(m, "?")
-	if v := m.View(); !contains(v, `copy value / "key": value (JSON) to the clipboard`) {
+	if v := m.View(); !contains(v, `copy the "key": value pair / the value (JSON or YAML per document)`) {
 		t.Fatalf("help overlay must document y/Y:\n%s", v)
+	}
+}
+
+func TestCopyYAMLFormatFollowsDocument(t *testing.T) {
+	rec := &clipboardRecorder{}
+	m := newListModel(testModel(), testDoc(), Options{Copy: rec.write, Raw: yamlTestCodec()})
+	m.Update(tea.WindowSizeMsg{Width: 100, Height: 30})
+
+	// y: YAML pair; Y: the value (strings verbatim, scalars as literals)
+	press(m, "y")
+	if len(rec.texts) != 1 || rec.texts[0] != "name: webapp" {
+		t.Fatalf("y copied %q, want the YAML pair", rec.texts)
+	}
+	press(m, "Y")
+	if len(rec.texts) != 2 || rec.texts[1] != "webapp" {
+		t.Fatalf("Y copied %q, want the raw string", rec.texts)
+	}
+
+	// containers come out as YAML blocks; the pair indents under its key
+	press(m, "down", "down") // Server
+	press(m, "Y")
+	if got := rec.texts[2]; got != "port: 8080\nhost: 0.0.0.0\ndebug: true" {
+		t.Fatalf("container Y = %q", got)
+	}
+	press(m, "y")
+	if got := rec.texts[3]; got != "server:\n  port: 8080\n  host: 0.0.0.0\n  debug: true" {
+		t.Fatalf("container y = %q", got)
 	}
 }

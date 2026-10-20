@@ -630,30 +630,3 @@ func (m *listModel) anchorMergeUsePaths(n *jsondoc.Node) [][]any {
 	}
 	return paths
 }
-
-// mergeProvides reports whether the mapping at mapPath gets key from its
-// merge keys, regardless of whether the mapping also defines it. Deleting
-// the mapping's own (expanded) copy of such a key is safe: the merged value
-// takes over again, so required-key refusals do not apply.
-func (m *listModel) mergeProvides(mapPath []any, key string) bool {
-	if key == "" || m.doc == nil {
-		return false
-	}
-	n, ok := m.doc.Get(mapPath)
-	if !ok || n == nil || n.Object == nil {
-		return false
-	}
-	for _, ref := range n.MergeRefs() {
-		src, ok := m.mergeSourceFor(ref)
-		if !ok {
-			continue
-		}
-		// the anchor's own merge chain counts too: a key it inherits still
-		// shadows what the mapping merges, so deleting the mapping's own
-		// copy falls back to a provided value
-		if _, ok := m.mergeDefiningSource(src, key, map[*jsondoc.Node]bool{}); ok {
-			return true
-		}
-	}
-	return false
-}

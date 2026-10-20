@@ -38,7 +38,10 @@ type menuState struct {
 	path           []any
 	cursor, offset int
 	variantOf      *smodel.FormNode
-	oneOf          *smodel.FormNode // classic variant editor: ctrl+t type switch
+	oneOf          *smodel.FormNode  // classic variant editor: ctrl+t type switch
+	sel            map[string]bool   // rows marked with m for batch y / d
+	visual         bool              // v visual select: movement marks rows
+	vanchor        int               // row where visual select started
 }
 
 // rowKind classifies one rendered line inside a menu.
@@ -214,7 +217,7 @@ func menuRowsFor(lm *listModel, st *menuState) []row {
 		rows = lm.withoutEmptyKeys(rows)
 	}
 	if len(rows) == 0 {
-		rows = append(rows, row{kind: rowNoItems, idx: -1, label: "( nothing here )"})
+		rows = append(rows, row{kind: rowNoItems, idx: -1, label: "< Add Key >"})
 	}
 	if len(lm.stack) > 0 && lm.stack[0] == st && len(lm.issuesNow) > 0 {
 		errs, warns := 0, 0

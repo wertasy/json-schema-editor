@@ -47,6 +47,9 @@ type Options struct {
 	// Copy writes text to the system clipboard (menu y/Y). nil uses the
 	// platform helper (wl-copy, xclip/xsel, pbcopy, or clip.exe).
 	Copy func(string) error
+	// Paste reads the system clipboard (menu p/P). nil uses the platform
+	// helper (wl-paste, xclip/xsel, pbpaste, or clip.exe).
+	Paste func() (string, error)
 	// Status is a warning line shown on the root screen (e.g. compile
 	// failure).
 	Status string

@@ -753,17 +753,13 @@ func TestMenuDeleteKey(t *testing.T) {
 		t.Fatalf("optional delete must not raise a notice, got %q", m.notice)
 	}
 
-	// required scalar field: port refuses with a notice
+	// required scalar field: port deletes like any other field
 	press(m, "up", "delete") // cursor on Port
-	if _, ok := doc.Get([]any{"server", "port"}); !ok {
-		t.Fatal("required port must be kept")
+	if _, ok := doc.Get([]any{"server", "port"}); ok {
+		t.Fatal("delete must remove the required port pair")
 	}
-	if m.notice != "Port is required" {
-		t.Fatalf("notice = %q, want 'Port is required'", m.notice)
-	}
-	press(m, "down") // any key clears the notice
 	if m.notice != "" {
-		t.Fatalf("notice must clear on the next key, got %q", m.notice)
+		t.Fatalf("required delete must not raise a notice, got %q", m.notice)
 	}
 
 	// optional object field: logging on the root menu

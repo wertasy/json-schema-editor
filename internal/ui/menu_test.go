@@ -966,9 +966,9 @@ func TestMenuNextPrevNonNull(t *testing.T) {
 	if cursor() != 0 {
 		t.Fatalf("n from Mounts should wrap to Name (0), got %d", cursor())
 	}
-	press(m, "p") // wraps backwards to the last value
+	press(m, "N") // wraps backwards to the last value
 	if cursor() != 4 {
-		t.Fatalf("p from Name should wrap to Mounts (4), got %d", cursor())
+		t.Fatalf("N from Name should wrap to Mounts (4), got %d", cursor())
 	}
 
 	// explicit null and schema-less null keys are skipped; a set unknown key
@@ -981,25 +981,25 @@ func TestMenuNextPrevNonNull(t *testing.T) {
 	// the two unknown keys add a warning row at index 0:
 	// issues(0) Name(1) Mode(2,null) Server(3) Logging(4) Mounts(5)
 	// Auth(6) null_extra(7,null) extra(8) Save(9) Raw(10)
-	press(m, "n") // issues row → Name
+	press(m, "ctrl+j") // issues row → Name
 	if cursor() != 1 {
-		t.Fatalf("n from the issues row = %d, want Name (1)", cursor())
+		t.Fatalf("ctrl+j from the issues row = %d, want Name (1)", cursor())
 	}
-	press(m, "n") // Name → Server: Mode is explicit null
+	press(m, "ctrl+j") // Name → Server: Mode is explicit null
 	if cursor() != 3 {
-		t.Fatalf("n must skip an explicit null, cursor = %d", cursor())
+		t.Fatalf("ctrl+j must skip an explicit null, cursor = %d", cursor())
 	}
-	press(m, "n") // Server → Mounts: Logging/Auth are unset
+	press(m, "ctrl+j") // Server → Mounts: Logging/Auth are unset
 	if cursor() != 5 {
-		t.Fatalf("n from Server = %d, want Mounts (5)", cursor())
+		t.Fatalf("ctrl+j from Server = %d, want Mounts (5)", cursor())
 	}
-	press(m, "n") // Mounts → extra: null_extra is skipped
+	press(m, "ctrl+j") // Mounts → extra: null_extra is skipped
 	if r := rowAtCursor(m); r.kind != rowUnknown || !pathEq(r.path, []any{"extra"}) {
-		t.Fatalf("n from Mounts should land on the set unknown key, got %+v", r)
+		t.Fatalf("ctrl+j from Mounts should land on the set unknown key, got %+v", r)
 	}
-	press(m, "n") // wraps past the action rows to Name
+	press(m, "ctrl+j") // wraps past the action rows to Name
 	if cursor() != 1 {
-		t.Fatalf("n from the last value should wrap to Name, got %d", cursor())
+		t.Fatalf("ctrl+j from the last value should wrap to Name, got %d", cursor())
 	}
 
 	// no non-null key: n/p leave the cursor where it is
@@ -1014,9 +1014,9 @@ func TestMenuNextPrevNonNull(t *testing.T) {
 	if empty.top().cursor != 0 {
 		t.Fatalf("n without values moved the cursor to %d", empty.top().cursor)
 	}
-	press(empty, "p")
+	press(empty, "N")
 	if empty.top().cursor != 0 {
-		t.Fatalf("p without values moved the cursor to %d", empty.top().cursor)
+		t.Fatalf("N without values moved the cursor to %d", empty.top().cursor)
 	}
 
 	// array items are entries too: null placeholders are skipped
@@ -1028,51 +1028,18 @@ func TestMenuNextPrevNonNull(t *testing.T) {
 	im := newListModel(itemsRoot, tobj(tmem("items", tarr(tnull(),
 		tobj(tmem("x", tstr("v"))), tobj(tmem("x", tstr("w")))))), Options{})
 	im.Update(tea.WindowSizeMsg{Width: 100, Height: 30})
-	press(im, "enter") // items menu: Add(0), item0 null(1), item1(2), item2(3)
-	press(im, "n")     // Add → item1, skipping the null placeholder
+	press(im, "enter")       // items menu: Add(0), item0 null(1), item1(2), item2(3)
+	press(im, "ctrl+j")      // Add → item1, skipping the null placeholder
 	if im.top().cursor != 2 {
-		t.Fatalf("n must skip a null array item, cursor = %d", im.top().cursor)
+		t.Fatalf("ctrl+j must skip a null array item, cursor = %d", im.top().cursor)
 	}
-	press(im, "n")
+	press(im, "ctrl+j")
 	if im.top().cursor != 3 {
-		t.Fatalf("n from item1 = %d, want item2 (3)", im.top().cursor)
+		t.Fatalf("ctrl+j from item1 = %d, want item2 (3)", im.top().cursor)
 	}
-	press(im, "p")
+	press(im, "ctrl+k")
 	if im.top().cursor != 2 {
-		t.Fatalf("p from item2 = %d, want item1 (2)", im.top().cursor)
-	}
-}
-
-func TestMenuNextPrevCtrlJK(t *testing.T) {
-	m := newListModel(testModel(), testDoc(), Options{})
-	m.Update(tea.WindowSizeMsg{Width: 100, Height: 30})
-	cursor := func() int { return m.top().cursor }
-
-	// ctrl+j is the same as n: Name(0) → Server(2), skipping unset Mode(1).
-	press(m, "ctrl+j")
-	if cursor() != 2 {
-		t.Fatalf("ctrl+j from Name = %d, want Server (2)", cursor())
-	}
-	press(m, "ctrl+j")
-	if cursor() != 4 {
-		t.Fatalf("ctrl+j from Server = %d, want Mounts (4)", cursor())
-	}
-	// ctrl+k is the same as p.
-	press(m, "ctrl+k")
-	if cursor() != 2 {
-		t.Fatalf("ctrl+k from Mounts = %d, want Server (2)", cursor())
-	}
-
-	root := &smodel.FormNode{Key: "$", Title: "$", Kind: smodel.KObject,
-		Children: []*smodel.FormNode{
-			{Key: "a", Title: "A", Kind: smodel.KScalar, JSONType: "string"},
-			{Key: "b", Title: "B", Kind: smodel.KScalar, JSONType: "string"},
-		}}
-	empty := newListModel(root, tobj(), Options{})
-	empty.Update(tea.WindowSizeMsg{Width: 100, Height: 30})
-	press(empty, "ctrl+j", "ctrl+k")
-	if empty.top().cursor != 0 {
-		t.Fatalf("ctrl+j/k without values moved the cursor to %d", empty.top().cursor)
+		t.Fatalf("ctrl+k from item2 = %d, want item1 (2)", im.top().cursor)
 	}
 }
 

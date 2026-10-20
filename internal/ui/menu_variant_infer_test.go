@@ -999,7 +999,7 @@ func TestMapKeysKnownAndEditable(t *testing.T) {
 	if !contains(v, "Host") || strings.Contains(v, "(not in schema)") {
 		t.Fatalf("headers menu =\n%s", v)
 	}
-	if strings.Count(v, "( nothing here )") != 0 {
+	if strings.Count(v, "< Add Key >") != 0 {
 		t.Fatalf("headers menu empty:\n%s", v)
 	}
 

@@ -218,8 +218,13 @@ func TestEmptyFilterHidesMapMembers(t *testing.T) {
 	only, onlyDoc := nullKeyModel(t)
 	onlyDoc.Set([]any{"headers", "Host"}, tnull())
 	press(only, "z")
-	if v := only.View(); !contains(v, "( nothing here )") {
+	if v := only.View(); !contains(v, "< Add Key >") {
 		t.Fatalf("a map with only null members must show the empty placeholder:\n%s", v)
+	}
+	// the placeholder opens the add-key flow like a
+	press(only, "enter")
+	if only.add == nil {
+		t.Fatal("enter on < Add Key > must open the key input")
 	}
 }
 

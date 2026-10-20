@@ -158,18 +158,20 @@ func TestDeletePairWithD(t *testing.T) {
 		t.Fatal("d must remove the unknown key")
 	}
 
-	// d on a required field refuses and keeps the value
+	// d on a required field removes the key; the row stays unset and the
+	// value can be typed back in (delete → re-create loop)
 	for i, r := range menuRows(m) {
 		if r.kind == rowField && r.fn != nil && r.fn.Key == "name" {
 			m.top().cursor = i
 		}
 	}
 	press(m, "d")
-	if m.notice == "" || !contains(m.notice, "required") {
-		t.Fatalf("d on a required field must refuse, notice=%q", m.notice)
+	if _, ok := doc.Get([]any{"name"}); ok {
+		t.Fatal("d must remove the required key")
 	}
+	press(m, "enter", "w", "e", "b", "a", "p", "p", "enter")
 	if s := strAt(t, doc, "name"); s != "webapp" {
-		t.Fatalf("d must keep the required value, name = %q", s)
+		t.Fatalf("re-created name = %q, want webapp", s)
 	}
 
 	// d on an array item row deletes the item

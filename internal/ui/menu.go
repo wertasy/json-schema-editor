@@ -35,8 +35,11 @@ type helpEntry struct {
 // cell accounting used for clipping and the end-of-line erase.
 var helpEntries = []helpEntry{
 	{"up / down / j / k", "move (wraps at both ends; ctrl+j/k in search and issues)"},
-	{"n / p / ctrl+j / ctrl+k", "next / previous key with a non-null value"},
-	{"y / Y", "copy value / \"key\": value (JSON) to the clipboard"},
+	{"n / N / ctrl+j / ctrl+k", "next / previous key with a non-null value"},
+	{"y / Y", "copy the \"key\": value pair / the value (JSON or YAML per document)"},
+	{"m", "mark key-value rows: y copies, d deletes the marked ones (m toggles)"},
+	{"v", "visual select: j/k (or arrows) mark rows between start and cursor; v/esc stops"},
+	{"p / P", "smart paste clipboard JSON (YAML docs: YAML too) — p: this menu, P: the row (a single value replaces its value)"},
 	{"z", "show/hide fields with no value (null/unset)"},
 	{"gg / G", "jump to first / last row (Home/End too)"},
 	{"ctrl+o / ctrl+i (tab)", "back / forward in the navigation history (submenus, jumps; esc pops count too)"},
@@ -47,7 +50,7 @@ var helpEntries = []helpEntry{
 	{"esc / q", "cancel / back — q aliases esc outside inputs; a pending g combo clears first"},
 	{"", "at the root: quit, asking to save when the doc changed"},
 	{"space", "toggle boolean / enum member"},
-	{"d / delete", "delete the selected pair (required keys refused)"},
+	{"d / delete", "delete the selected pair (required merge keys refused)"},
 	{"a / A", "add a schema-less key before / after the cursor"},
 	{"e", "edit the row's value in $EDITOR (multiline strings always open here)"},
 	{"E", "expand: materialize the referenced value (cursor row or menu) into a copy"},
@@ -78,6 +81,12 @@ var (
 	mStatus = lipgloss.NewStyle().Foreground(lipgloss.Color("3"))
 	mStar   = lipgloss.NewStyle().Foreground(lipgloss.Color("1"))
 	mErr    = lipgloss.NewStyle().Foreground(lipgloss.Color("1"))
+	// mMark brightens the selection red: same hue family as mErr, one step
+	// brighter so marked rows never read as validation errors.
+	mMark   = lipgloss.NewStyle().Foreground(lipgloss.Color("9"))
+	// mBold marks the key of a row the cursor sits on when that row is
+	// selected: the tie to the selection without recoloring it.
+	mBold   = lipgloss.NewStyle().Bold(true)
 	mWarn   = lipgloss.NewStyle().Foreground(lipgloss.Color("3")) // unknown-key warnings: yellow, distinct from red errors
 	mTail   = lipgloss.NewStyle().Faint(true)
 	mHelp   = lipgloss.NewStyle().Foreground(lipgloss.AdaptiveColor{Light: "245", Dark: "248"})
@@ -1335,6 +1344,11 @@ func (m *listModel) rowLine(r row, cursor bool, titleWidth int) string {
 	if m.inlineEditRow(r) {
 		return m.editLines(m.titleCol(m.rowTitleText(r), titleWidth))
 	}
+	// selected rows carry the red > marker; the cursor row's > follows the
+	// visual select switch (red while it is on, white when off) and its
+	// key is bold bright red
+	sel := m.rowSelected(r)
+	visual := m.visualOn()
 	var left, right string
 	switch r.kind {
 	case rowVariant:
@@ -1368,7 +1382,14 @@ func (m *listModel) rowLine(r row, cursor bool, titleWidth int) string {
 		left = mDim.Render(r.label)
 	case rowUnknown:
 		// document key the schema does not define: edit as raw JSON or delete
-		left = mWarn.Render(r.label)
+		switch {
+		case sel && cursor:
+			left = mBold.Render(mMark.Render(r.label)) // cursor on selected: bold red key
+		case sel:
+			left = mMark.Render(r.label)
+		default:
+			left = mWarn.Render(r.label)
+		}
 		v, _ := m.doc.Get(r.path)
 		right = mergeBadge(r) + m.anchorBadge(r.path) + m.rawValueStyle(v).Render(m.rawValueSummary(r.path))
 	case rowIssues:
@@ -1379,6 +1400,12 @@ func (m *listModel) rowLine(r row, cursor bool, titleWidth int) string {
 			title += mStar.Render("*")
 		}
 		left = title
+		switch {
+		case sel && cursor:
+			left = mBold.Render(mMark.Render(title)) // cursor on selected: bold red key
+		case sel:
+			left = mMark.Render(title)
+		}
 		right = mergeBadge(r) + m.anchorBadge(r.path) + m.valueStyle(r.fn, r.path).Render(summary(m, r.fn, r.path))
 	}
 	var content string
@@ -1390,7 +1417,11 @@ func (m *listModel) rowLine(r row, cursor bool, titleWidth int) string {
 		// label whole instead of padding it to the title column.
 		content = left + right
 	}
-	line := cursorPrefix(cursor) + content
+	prefix := cursorPrefix(cursor)
+	if sel && (!cursor || visual) {
+		prefix = mMark.Render("> ") // selected rows carry a red > marker
+	}
+	line := prefix + content
 	if r.kind == rowUnknown {
 		line += " " + mDim.Render("(not in schema)")
 	}

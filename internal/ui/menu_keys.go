@@ -36,16 +36,33 @@ func (m *listModel) keyList(msg tea.KeyMsg) tea.Cmd {
 	switch msg.String() {
 	case "up", "k":
 		st.cursor = wrapCursor(st.cursor, -1, len(rows))
+		m.visualSync(st, rows)
 	case "down", "j":
 		st.cursor = wrapCursor(st.cursor, 1, len(rows))
-	case "n", "ctrl+j":
+		m.visualSync(st, rows)
+	case "ctrl+j", "n":
 		m.moveToValue(rows, 1)
-	case "p", "ctrl+k":
+	case "ctrl+k", "N":
 		m.moveToValue(rows, -1)
+	case "p":
+		m.pasteClipboard(r, false) // the container the current menu shows
+	case "P":
+		m.pasteClipboard(r, true) // the map/array under the cursor
 	case "y":
-		m.copyRow(r, false)
+		m.copyRowOrSelection(r) // marked pairs, else the cursor row's pair
 	case "Y":
-		m.copyRow(r, true)
+		m.copyRow(r, false) // the value itself
+	case "m":
+		m.toggleSelect(r)
+	case "v":
+		st.visual = !st.visual
+		if st.visual {
+			st.vanchor = st.cursor // the range grows and shrinks from here
+			m.visualSync(st, rows)
+			m.notice = "visual select on — j/k marks rows, v stops"
+		} else {
+			m.notice = "visual select off"
+		}
 	case "z":
 		m.toggleEmptyKeys()
 	case "e":
@@ -75,6 +92,11 @@ func (m *listModel) keyList(msg tea.KeyMsg) tea.Cmd {
 		}
 		return m.back()
 	case "esc":
+		if st.visual {
+			st.visual = false // esc leaves visual select before the menu
+			m.notice = "visual select off"
+			return nil
+		}
 		return m.back()
 	case "ctrl+o":
 		m.navGo(true) // back along the navigation trail
@@ -83,7 +105,7 @@ func (m *listModel) keyList(msg tea.KeyMsg) tea.Cmd {
 	case " ":
 		return m.space(r)
 	case "d":
-		m.deletePair(r)
+		m.deleteRow(r)
 	case "J":
 		m.moveItem(r, 1)
 	case "K":
@@ -95,7 +117,7 @@ func (m *listModel) keyList(msg tea.KeyMsg) tea.Cmd {
 			m.push(oneOf, path)
 		}
 	case "delete":
-		m.deletePair(r)
+		m.deleteRow(r)
 	case "a":
 		if st.kind == menuItems {
 			return m.insertItem(r, false)
@@ -212,6 +234,10 @@ func (m *listModel) activate(r row) tea.Cmd {
 		return m.activateUnknown(r.path)
 	case rowExpand:
 		m.expandAlias(r.path)
+	case rowNoItems:
+		// the "< Add Key >" placeholder of an empty menu opens the same
+		// add-key flow as a; non-object menus refuse with a notice
+		m.addKey(r, false)
 	case rowIssues:
 		m.openIssues()
 	}
@@ -258,6 +284,9 @@ func (m *listModel) back() tea.Cmd {
 	if len(m.stack) > 1 {
 		leaving := m.navSnapshot()
 		m.stack = m.stack[:len(m.stack)-1]
+		if st := m.top(); st != nil {
+			st.visual = false // navigation ends a visual select
+		}
 		m.navBackStep(leaving)
 		return nil
 	}
@@ -282,6 +311,9 @@ func (m *listModel) back() tea.Cmd {
 // row; unset values keep the first row.
 func (m *listModel) push(fn *smodel.FormNode, path []any) tea.Cmd {
 	m.navForward() // the menu drilled out of becomes a ctrl+o back step
+	if n := len(m.stack); n > 0 {
+		m.stack[n-1].visual = false // navigation ends a visual select
+	}
 	st := &menuState{kind: menuKindFor(fn), node: fn, path: path}
 	seedVariantCursor(st, m.doc)
 	m.stack = append(m.stack, st)
@@ -673,9 +705,28 @@ func (m *listModel) insertItemAt(idx int, splice bool) tea.Cmd {
 	}
 }
 
+// deleteRow batch-deletes the current selection (one keypress = one undo
+// snapshot covering the whole batch); without a selection it is the plain
+// cursor-row delete. Refused rows (required merged keys) surface their
+// notice; the selection always clears.
+func (m *listModel) deleteRow(r row) {
+	st := m.top()
+	if st == nil || len(st.sel) == 0 {
+		m.deletePair(r)
+		return
+	}
+	for _, sel := range menuRows(m) {
+		if st.sel[selKey(sel.path)] {
+			m.deletePair(sel)
+		}
+	}
+	st.sel = nil
+}
+
 // deletePair removes the selected key-value pair: array item rows fall back
-// to the item-delete flow, optional fields remove their key, required fields
-// refuse with a notice (mirroring the empty-input rule of in-place editing).
+// to the item-delete flow, optional and required fields remove their key
+// (the row stays unset; save-time validation flags a missing required key
+// until it is filled again), only rows merged in from an anchor refuse.
 func (m *listModel) deletePair(r row) {
 	st := m.top()
 	if st == nil {
@@ -691,16 +742,10 @@ func (m *listModel) deletePair(r row) {
 		m.deleteItem(r) // array item rows (any menu they appear in)
 		return
 	}
-	// a required key stays satisfied while a merge key provides it: removing
-	// the mapping's own (expanded) copy just falls back to the merged value.
-	// A merged row itself deletes the anchor mapping's field, so required
-	// still refuses it — the merge would lose the key everywhere.
-	key, _ := r.path[len(r.path)-1].(string)
-	required := r.fn != nil && r.fn.Required
-	if required && r.merged == "" && m.mergeProvides(st.path, key) {
-		required = false
-	}
-	if required {
+	// a merged row deletes the anchor mapping's field, taking the key away
+	// from every mapping merging the anchor — required ones refuse here;
+	// jump to the anchor (ga) and delete there to remove the definition.
+	if r.fn != nil && r.fn.Required && r.merged != "" {
 		m.notice = r.fn.Title + " is required"
 		return
 	}
