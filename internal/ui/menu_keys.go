@@ -26,6 +26,12 @@ func (m *listModel) keyList(msg tea.KeyMsg) tea.Cmd {
 	if len(rows) == 0 {
 		return nil
 	}
+	if m.find != nil {
+		if cmd, handled := m.findKey(msg); handled {
+			return cmd
+		}
+		m.find = nil // any other key cancels the find and works as usual
+	}
 	r := rows[st.cursor]
 	if m.gAnchorKeys(msg, r) {
 		return nil
@@ -67,6 +73,10 @@ func (m *listModel) keyList(msg tea.KeyMsg) tea.Cmd {
 		} else {
 			m.notice = "visual select off"
 		}
+	case "f":
+		m.startFind(false) // type a character: next key starting with it
+	case "F":
+		m.startFind(true)
 	case "z":
 		m.toggleEmptyKeys()
 	case "e":
@@ -363,15 +373,31 @@ func wrapCursor(cur, delta, n int) int {
 // the last row, gg/Home to the first. Multi-key commands follow vi: g parks
 // in the command buffer — shown bottom-right, never cleared by a timer —
 // and the next key either completes the combo or runs on its own after the
-// buffer clears. handled reports whether the key was consumed.
+// buffer clears. Array item menus accept a numeric count before gg
+// ("3gg" jumps to the item with index 3, clamped to the last item); digits
+// arm a count nowhere else. handled reports whether the key was consumed.
 func (m *listModel) jumpKeys(msg tea.KeyMsg, cursor *int, n int) bool {
 	key := msg.String()
-	if len(m.cmdBuf) > 0 { // a g-family combo is pending
+	if len(m.cmdBuf) > 0 { // a g-family combo or count is pending
+		// digits extend a pending count; the first g parks "3g" (half of
+		// 3gg), the second completes the jump
+		if isDigitKey(key) && isCountBuf(m.cmdBuf) {
+			m.cmdBuf = append(m.cmdBuf, key)
+			return true
+		}
+		if key == "g" && isCountBuf(m.cmdBuf) {
+			m.cmdBuf = append(m.cmdBuf, key)
+			return true
+		}
+		count, hasCount := bufCount(m.cmdBuf)
 		m.cmdBuf = nil
 		switch key {
 		case "g":
 			if m.listMode() { // the menu cursor moved; overlay lists stay put
 				m.navForward()
+			}
+			if hasCount && m.jumpItem(cursor, count) {
+				return true
 			}
 			*cursor = 0
 			return true
@@ -381,6 +407,10 @@ func (m *listModel) jumpKeys(msg tea.KeyMsg, cursor *int, n int) bool {
 			return true
 		}
 		return false // unrelated key: runs normally once the buffer clears
+	}
+	if isDigitKey(key) && m.countArmed() {
+		m.cmdBuf = append(m.cmdBuf, key) // start the count of N gg
+		return true
 	}
 	switch key {
 	case "g":
@@ -400,6 +430,69 @@ func (m *listModel) jumpKeys(msg tea.KeyMsg, cursor *int, n int) bool {
 		return true
 	}
 	return false
+}
+
+// isDigitKey reports whether key is a single decimal digit.
+func isDigitKey(key string) bool {
+	return len(key) == 1 && key[0] >= '0' && key[0] <= '9'
+}
+
+// isCountBuf reports whether the pending buffer is digits only — a count
+// for N gg. A buffer holding the armed g (or ga/gr remnants) is not.
+func isCountBuf(buf []string) bool {
+	if len(buf) == 0 {
+		return false
+	}
+	for _, k := range buf {
+		if !isDigitKey(k) {
+			return false
+		}
+	}
+	return true
+}
+
+// bufCount folds the digit prefix of a pending buffer (digits, optionally
+// followed by the half-typed g of N gg) into its number; ok reports whether
+// a count was typed at all.
+func bufCount(buf []string) (int, bool) {
+	n, digits := 0, 0
+	for _, k := range buf {
+		if !isDigitKey(k) {
+			break
+		}
+		n = n*10 + int(k[0]-'0')
+		digits++
+	}
+	return n, digits > 0
+}
+
+// countArmed reports whether a digit may start a count: the menu list of an
+// array (items below < Add item >). Overlays and other menus keep the old
+// behavior.
+func (m *listModel) countArmed() bool {
+	return m.listMode() && m.top() != nil && m.top().kind == menuItems
+}
+
+// jumpItem moves the cursor to the item row with the given array index,
+// clamped to the last item; false when the menu has no item rows.
+func (m *listModel) jumpItem(cursor *int, idx int) bool {
+	rows := menuRows(m)
+	last := -1
+	for i, r := range rows {
+		if r.idx < 0 || (r.kind != rowField && r.kind != rowDrill) {
+			continue
+		}
+		if r.idx == idx {
+			*cursor = i
+			return true
+		}
+		last = i
+	}
+	if last >= 0 {
+		*cursor = last // past-the-end counts clamp to the last item
+		return true
+	}
+	return false // empty array: only < Add item >
 }
 
 // --- macro recording / playback -------------------------------------------

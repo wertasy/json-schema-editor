@@ -103,6 +103,66 @@ func TestMenuDeleteItem(t *testing.T) {
 	}
 }
 
+func TestItemCountJump(t *testing.T) {
+	doc := tobj(tmem("logging", tobj(tmem("tags", tarr(tstr("a"), tstr("b"), tstr("c"))))))
+	m := newListModel(testModel(), doc, Options{})
+	m.Update(tea.WindowSizeMsg{Width: 100, Height: 30})
+	press(m, "down", "down", "down", "enter", "down", "enter") // Logging → Tags items menu
+	if m.top().kind != menuItems {
+		t.Fatalf("navigation must land on the items menu, got %v", m.top().kind)
+	}
+	// rows: < Add item >(0) a(1) b(2) c(3)
+	itemIdx := func() int { return rowAtCursor(m).idx }
+
+	// digits park in the command buffer, 3gg jumps to item index 3
+	press(m, "2")
+	if got := strings.Join(m.cmdBuf, ""); got != "2" {
+		t.Fatalf("pending buffer = %q, want 2", got)
+	}
+	press(m, "g")
+	if got := strings.Join(m.cmdBuf, ""); got != "2g" {
+		t.Fatalf("pending buffer = %q, want 2g", got)
+	}
+	press(m, "g")
+	if itemIdx() != 2 {
+		t.Fatalf("2gg landed on item %d, want 2", itemIdx())
+	}
+
+	// 0gg is the first item; past-the-end counts clamp to the last
+	press(m, "0", "g", "g")
+	if itemIdx() != 0 {
+		t.Fatalf("0gg landed on item %d, want 0", itemIdx())
+	}
+	press(m, "9", "g", "g")
+	if itemIdx() != 2 {
+		t.Fatalf("9gg landed on item %d, want clamped 2", itemIdx())
+	}
+
+	// multi-digit counts fold into one number (12 clamps to the last item)
+	press(m, "1", "2", "g", "g")
+	if itemIdx() != 2 {
+		t.Fatalf("12gg landed on item %d, want clamped 2", itemIdx())
+	}
+
+	// plain gg still jumps to the first row (< Add item >)
+	press(m, "g", "g")
+	if r := rowAtCursor(m); r.kind != rowAdd {
+		t.Fatalf("plain gg landed on %+v, want < Add item >", r)
+	}
+
+	// digits outside array menus do not arm a count: 3gg jumps first row
+	press(m, "esc", "esc") // back to the root menu
+	m.top().cursor = 5     // Auth
+	press(m, "3")
+	if len(m.cmdBuf) != 0 {
+		t.Fatalf("digits outside array menus must not arm a count: %v", m.cmdBuf)
+	}
+	press(m, "g", "g")
+	if cursor := m.top().cursor; cursor != 0 {
+		t.Fatalf("3gg at the root landed on %d, want first row (0)", cursor)
+	}
+}
+
 func TestMenuMoveItem(t *testing.T) {
 	doc := tobj(tmem("logging", tobj(tmem("tags", tarr(tstr("prod"), tstr("dev"), tstr("stage"))))))
 	m := newListModel(testModel(), doc, Options{})

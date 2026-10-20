@@ -40,9 +40,10 @@ var helpEntries = []helpEntry{
 	{"x / X", "cut the \"key\": value pair / the value — y/Y plus delete, batch on marked rows"},
 	{"m", "mark key-value rows: y copies, d deletes the marked ones (m toggles)"},
 	{"v", "visual select: j/k (or arrows) mark rows between start and cursor; v/esc stops"},
+	{"f / F", "quick move: type a character to jump to the next/previous key starting with it"},
 	{"p / P", "smart paste clipboard JSON (YAML docs: YAML too) — p: this menu, P: the row (a single value replaces its value)"},
 	{"z", "show/hide fields with no value (null/unset)"},
-	{"gg / G", "jump to first / last row (Home/End too)"},
+	{"[N] gg / G", "jump to first / last row; N gg in array menus: item N (Home/End too)"},
 	{"ctrl+o / ctrl+i (tab)", "back / forward in the navigation history (submenus, jumps; esc pops count too)"},
 	{"ga / gr", "jump to the row's anchor / its other uses — references and << merges (esc returns)"},
 	{"enter / right / l", "edit field · open submenu"},
@@ -241,7 +242,8 @@ type listModel struct {
 	aborted       bool
 	exiting       bool // the session ended cleanly (root quit or Save and exit)
 	edit          *editState
-	add           *addState // key-name input for a schema-less member (a)
+	add           *addState  // key-name input for a schema-less member (a)
+	find          *findState // f/F quick move: waiting for the character
 	anc           *anchorState
 	mrg           *mergeState // "<" merge-keys input for the current mapping
 	sel           *selState
@@ -941,8 +943,28 @@ func clipDisplay(s string, max int) string {
 	return ansi.TruncateWc(s, max, "") + "\x1b[0m"
 }
 
-// helpLine renders the bottom hint row via recHint.
+// helpLine renders the bottom hint row via recHint. Special modes replace
+// the standard hints with their own operation line, most specific first:
+// quick move waiting, visual select, then the marked-rows selection.
 func (m *listModel) helpLine() string {
+	if m.find != nil {
+		if m.find.backward {
+			return m.recHint("Quick move: type a character to move up · esc cancels")
+		}
+		return m.recHint("Quick move: type a character to move down · esc cancels")
+	}
+	if st := m.top(); st != nil {
+		if st.visual {
+			return m.recHint("Visual select: j/k or arrows mark rows · y copy · d delete · v/esc stop")
+		}
+		if n := len(st.sel); n > 0 {
+			rows := "rows"
+			if n == 1 {
+				rows = "row"
+			}
+			return m.recHint(fmt.Sprintf("Marked %d %s: y copy · d delete · m unmark", n, rows))
+		}
+	}
 	return m.recHint(menuHelp)
 }
 

@@ -24,6 +24,9 @@ func TestMultiSelectToggleRenderAndRefusals(t *testing.T) {
 	}
 	// cursor on a selected row: the > keeps the plain white cursor prefix
 	// and the key is bold bright red (the required * keeps its own red)
+	if v := m.View(); !contains(v, "Marked 1 row: y copy · d delete · m unmark") {
+		t.Fatalf("help bar must show the marked-rows hint:\n%s", v)
+	}
 	line := lineOf(t, m, "Name")
 	if strings.Contains(line, mMark.Render("> ")) {
 		t.Fatalf("cursor row must keep its white > prefix:\n%s", line)
@@ -192,6 +195,9 @@ func TestVisualSelectMarksPassedRows(t *testing.T) {
 	// in visual select the cursor row takes the mark colors too: the > is
 	// bright red and the key is bold bright red
 	press(m, "j")
+	if v := m.View(); !contains(v, "Visual select: j/k or arrows mark rows · y copy · d delete · v/esc stop") {
+		t.Fatalf("help bar must show the visual select hint:\n%s", v)
+	}
 	line := lineOf(t, m, "Mode")
 	if !strings.Contains(line, mMark.Render("> ")) {
 		t.Fatalf("cursor row must carry the red > marker in visual select:\n%s", line)
